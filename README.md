@@ -1,0 +1,228 @@
+# Zotero Notion (Notero) GitHub Stars Updater
+
+A Python script that automatically updates GitHub repository star counts in your Notion database. It fetches the latest star counts from GitHub API and updates your Notion pages with the current data.
+
+<p><img src=".assets/README/img/2026-03-01-16-02-06.png" alt="" width=100% style="display: block; margin: auto;"></p>
+
+## Features
+
+- **Automatic Star Count Updates**: Fetches the latest star counts for GitHub repositories stored in Notion
+- **Concurrent Processing**: Uses async/await for efficient parallel API requests
+- **Rate Limiting**: Built-in rate limiting to respect API quotas for both GitHub and Notion
+- **GitHub Token Support**: Optional GitHub authentication for higher rate limits (5000 vs 60 requests/hour)
+- **Smart URL Handling**: Validates and extracts owner/repo from various GitHub URL formats
+- **Detailed Reporting**: Shows updated counts with color-coded diff indicators (±changes)
+- **Error Handling**: Categorizes and displays skipped/failed items with clear reasons
+- **Progress Tracking**: Real-time progress updates during execution
+
+## Prerequisites
+
+- Python 3.12 or higher
+- A Notion Integration with API access to your database
+- (Optional) GitHub Personal Access Token for higher rate limits
+
+## Installation
+
+1. **Clone or download this project**
+
+2. **Install dependencies using UV** (recommended):
+   ```bash
+   uv sync
+   ```
+
+   Or using pip:
+   ```bash
+   pip install aiohttp notion-client requests
+   ```
+
+## Configuration
+
+### 1. Set up Notion Integration
+
+1. Go to [https://www.notion.so/my-integrations](https://www.notion.so/my-integrations)
+2. Create a new integration and copy your **Internal Integration Token**
+3. Share your database with this integration (click "..." on your database → "Add connections" → select your integration)
+
+### 2. Configure Your Database
+
+Your Notion database must have these properties:
+
+- **Name** (Title type): Page title
+- **Github** (URL or Rich Text type): GitHub repository URL
+- **Github stars** (Number type): Star count (will be updated by the script)
+
+### 3. Set Environment Variables (Optional)
+
+Create a `.env` file in the project root or set environment variables:
+
+```bash
+# Required: Your Notion Integration Token
+NOTION_TOKEN=your_notion_token_here
+
+# Optional: Your GitHub Personal Access Token (for higher rate limits)
+GITHUB_TOKEN=your_github_token_here
+```
+
+If `NOTION_TOKEN` is not set, the script will prompt you to enter it interactively.
+
+### 4. Set Your Database ID
+
+Edit `main.py` and set your `DATABASE_ID`:
+
+```python
+DATABASE_ID = "your_database_id_here"
+```
+
+To find your database ID:
+1. Open your database in Notion
+2. Copy the ID from the URL (32-character string after `/database/` or after `?v=`)
+3. Example: In `https://notion.so/workspace/database?v=abcd1234...`, the ID is the 32-char string
+
+## Usage
+
+Run the script:
+
+```bash
+python main.py
+```
+
+Or with UV:
+
+```bash
+uv run python main.py
+```
+
+### What Happens During Execution
+
+1. **Authentication Check**: Verifies GitHub Token status and rate limits
+2. **Database Query**: Fetches all pages with a non-empty `Github` field
+3. **Concurrent Processing**: For each page:
+   - Validates the GitHub URL
+   - Fetches star count from GitHub API
+   - Updates the `Github stars` field in Notion
+4. **Results Summary**: Displays updated count and skipped items with reasons
+
+### Example Output
+
+```
+✅ GitHub Token configured (5000 requests/hour)
+⚙️ Concurrency: GitHub=5, Notion=3
+⚙️ Request interval: 0.2s
+
+📊 GitHub API Rate Limit: 4999/5000 remaining
+
+📚 Data source ID: abcd1234...
+📝 Found 25 pages with Github field
+
+[1/25] awesome-project
+  📍 facebook/react | Current stars: 180000
+  ✅ Updated: 180000 → 182345 (+2345)
+
+[2/25] my-tool
+  📍 microsoft/vscode | Current stars: N/A
+  ✅ Updated: N/A → 145678
+
+============================================================
+✅ Updated: 23
+⏭️ Skipped: 2
+
+============================================================
+⏭️ Skipped rows (non-GitHub URLs, can be ignored):
+============================================================
+
+1. Local Project
+   Reason:     Invalid Github URL format
+   Github URL: http://localhost:3000
+   Notion URL: https://notion.so/...
+
+============================================================
+📊 GitHub API Rate Limit: 4976/5000 remaining
+```
+
+## Rate Limiting
+
+The script implements rate limiting to avoid hitting API quotas:
+
+### GitHub API
+- **Without token**: 60 requests/hour
+- **With token**: 5000 requests/hour
+- **Concurrent requests**: 5 (configurable via `GITHUB_CONCURRENT_LIMIT`)
+- **Request delay**: 0.2s (configurable via `REQUEST_DELAY`)
+
+### Notion API
+- **Concurrent requests**: 3 (configurable via `NOTION_CONCURRENT_LIMIT`)
+
+If you hit the GitHub rate limit, the script will automatically wait for it to reset before continuing.
+
+## Configuration Parameters
+
+You can adjust these constants in `main.py`:
+
+```python
+GITHUB_CONCURRENT_LIMIT = 5      # Max concurrent GitHub API requests
+NOTION_CONCURRENT_LIMIT = 3      # Max concurrent Notion API requests
+REQUEST_DELAY = 0.2              # Minimum delay between requests (seconds)
+```
+
+## Supported GitHub URL Formats
+
+The script handles various GitHub URL formats:
+
+- `https://github.com/owner/repo`
+- `http://github.com/owner/repo`
+- `www.github.com/owner/repo`
+- `github.com/owner/repo`
+- `https://github.com/owner/repo.git`
+- Any of the above with trailing slashes
+
+## Error Categories
+
+Skipped items are categorized into two types:
+
+### Minor (shown in gray)
+- No Github URL found
+- Invalid Github URL format
+- Cannot extract owner/repo
+
+These can typically be ignored (e.g., non-GitHub URLs in your database).
+
+### Major (shown in red)
+- Repository not found
+- Rate limit exceeded
+- Request timeout
+- API errors
+
+These may need attention to fix invalid URLs or API issues.
+
+## Troubleshooting
+
+**"Cannot get data_source_id" error**
+- Verify your `DATABASE_ID` is correct
+- Ensure your Notion integration has access to the database
+
+**"Repository not found" errors**
+- Check that the GitHub URL is correct and the repository exists
+- Private repositories require a GitHub token with access
+
+**Rate limit errors**
+- Set a `GITHUB_TOKEN` environment variable for higher limits
+- Consider reducing `GITHUB_CONCURRENT_LIMIT` if you still hit limits
+
+**Timeout errors**
+- Increase `REQUEST_DELAY` to reduce request frequency
+- Check your internet connection
+
+## Dependencies
+
+- **aiohttp**: Async HTTP client for API requests
+- **notion-client**: Official Notion API Python client
+- **requests**: Additional HTTP support (fallback)
+- **python-dotenv**: Optional, for loading environment variables from .env files
+
+## License
+
+This project is open source and available under the MIT License.
+
+## Contributing
+
+Contributions are welcome! Feel free to submit issues or pull requests.
