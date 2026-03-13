@@ -14,6 +14,9 @@ load_dotenv()
 GITHUB_CONCURRENT_LIMIT = 5  # GitHub API 最大并发数
 NOTION_CONCURRENT_LIMIT = 3  # Notion API 最大并发数
 REQUEST_DELAY = 0.2  # 每个请求之间的最小间隔（秒）
+HTTP_TOTAL_TIMEOUT = 20  # 外部 HTTP 请求总超时（秒）
+HTTP_CONNECT_TIMEOUT = 10  # 外部 HTTP 建连超时（秒）
+MAX_RETRIES = 2  # 对临时性错误的最大重试次数
 
 
 # ANSI 颜色代码
@@ -245,19 +248,20 @@ def normalize_title_for_matching(title: str):
 
 
 def extract_best_arxiv_id_from_feed(feed_xml: str, title_query: str):
-    """从 arXiv Atom feed 中按标题匹配提取最佳 arXiv ID"""
+    """从 arXiv Atom feed 中按标题匹配提取最佳 arXiv ID，并返回匹配来源"""
     if not feed_xml or not title_query:
-        return None
+        return None, None
 
     ns = {'a': 'http://www.w3.org/2005/Atom'}
     try:
         root = ET.fromstring(feed_xml)
     except ET.ParseError:
-        return None
+        return None, None
 
     title_query_norm = normalize_title_for_matching(title_query)
     best_id = None
     best_score = -1
+    best_source = None
 
     for entry in root.findall('a:entry', ns):
         title_el = entry.find('a:title', ns)
@@ -273,18 +277,23 @@ def extract_best_arxiv_id_from_feed(feed_xml: str, title_query: str):
 
         arxiv_id = match.group(1)
         score = 0
+        source = None
         if title == title_query_norm:
             score = 100
+            source = 'title_search_exact'
         elif title_query_norm in title:
             score = 80
+            source = 'title_search_contained'
         elif title in title_query_norm:
             score = 60
+            source = 'title_search_contains_entry'
 
         if score > best_score:
             best_score = score
             best_id = arxiv_id
+            best_source = source
 
-    return best_id
+    return best_id, best_source
 
 
 def get_page_url(page):
@@ -388,6 +397,36 @@ class GitHubClient:
         self.rate_limit_remaining = None
         self.rate_limit_reset = None
 
+    async def request_with_retry(self, method: str, url: str, *, headers=None, params=None, expect='json', retry_prefix='Request'):
+        """带超时与有限重试的通用 HTTP 请求"""
+        retriable_statuses = {429, 500, 502, 503, 504}
+
+        for attempt in range(MAX_RETRIES + 1):
+            async with self.semaphore:
+                await self.rate_limiter.acquire()
+                try:
+                    async with self.session.request(method, url, headers=headers, params=params) as response:
+                        if response.status == 200:
+                            if expect == 'json':
+                                return await response.json(), None
+                            return await response.text(), None
+
+                        if response.status in retriable_statuses and attempt < MAX_RETRIES:
+                            await asyncio.sleep(0.5 * (2**attempt))
+                            continue
+
+                        return None, f'{retry_prefix} error ({response.status})'
+                except asyncio.TimeoutError:
+                    if attempt < MAX_RETRIES:
+                        await asyncio.sleep(0.5 * (2**attempt))
+                        continue
+                    return None, f'{retry_prefix} timeout'
+                except Exception as e:
+                    if attempt < MAX_RETRIES:
+                        await asyncio.sleep(0.5 * (2**attempt))
+                        continue
+                    return None, f'{retry_prefix} request failed: {e}'
+
     async def get_arxiv_feed_by_title(self, title: str):
         """通过标题查询 arXiv Atom feed"""
         url = 'https://export.arxiv.org/api/query'
@@ -396,18 +435,13 @@ class GitHubClient:
             'start': '0',
             'max_results': '10',
         }
-
-        async with self.semaphore:
-            await self.rate_limiter.acquire()
-            try:
-                async with self.session.get(url, params=params) as response:
-                    if response.status == 200:
-                        return await response.text(), None
-                    return None, f'arXiv API error ({response.status})'
-            except asyncio.TimeoutError:
-                return None, 'arXiv API timeout'
-            except Exception as e:
-                return None, f'arXiv API request failed: {e}'
+        return await self.request_with_retry(
+            'GET',
+            url,
+            params=params,
+            expect='text',
+            retry_prefix='arXiv API',
+        )
 
     async def get_alphaxiv_paper_legacy(self, arxiv_id: str):
         """通过 AlphaXiv legacy API 获取论文 JSON 数据"""
@@ -416,21 +450,17 @@ class GitHubClient:
 
         url = f'https://api.alphaxiv.org/papers/v3/legacy/{arxiv_id}'
         headers = get_alphaxiv_headers(self.alphaxiv_api_key)
-
-        async with self.semaphore:
-            await self.rate_limiter.acquire()
-            try:
-                async with self.session.get(url, headers=headers) as response:
-                    if response.status == 200:
-                        return await response.json(), None
-                    return None, f'AlphaXiv API error ({response.status})'
-            except asyncio.TimeoutError:
-                return None, 'AlphaXiv API timeout'
-            except Exception as e:
-                return None, f'AlphaXiv API request failed: {e}'
+        return await self.request_with_retry(
+            'GET',
+            url,
+            headers=headers,
+            expect='json',
+            retry_prefix='AlphaXiv API',
+        )
 
     async def __aenter__(self):
-        self.session = aiohttp.ClientSession(headers=get_github_headers(self.github_token))
+        timeout = aiohttp.ClientTimeout(total=HTTP_TOTAL_TIMEOUT, connect=HTTP_CONNECT_TIMEOUT)
+        self.session = aiohttp.ClientSession(headers=get_github_headers(self.github_token), timeout=timeout)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -563,36 +593,51 @@ async def resolve_arxiv_id_for_page(page: dict, github_client: GitHubClient):
     """统一解析页面对应的 arXiv ID：优先 URL 字段，其次标题检索"""
     arxiv_id = get_arxiv_id_from_page(page)
     if arxiv_id:
-        return arxiv_id, None
+        return arxiv_id, 'url_field', None
 
     title = get_page_title(page)
     if not title:
-        return None, 'No arXiv ID found for AlphaXiv API lookup'
+        return None, None, 'No arXiv ID found for AlphaXiv API lookup'
 
     feed_xml, error = await github_client.get_arxiv_feed_by_title(title)
     if error:
-        return None, error
+        return None, None, error
 
-    arxiv_id = extract_best_arxiv_id_from_feed(feed_xml, title)
+    arxiv_id, source = extract_best_arxiv_id_from_feed(feed_xml, title)
     if arxiv_id:
-        return arxiv_id, None
-    return None, 'No arXiv ID found for AlphaXiv API lookup'
+        return arxiv_id, source, None
+    return None, None, 'No arXiv ID found for AlphaXiv API lookup'
+
+
+def format_resolution_source_label(source: str | None, arxiv_source: str | None = None):
+    """格式化日志中的来源标签"""
+    if source == 'existing':
+        return 'existing Github'
+    if source == 'alphaxiv_api':
+        mapping = {
+            'url_field': 'AlphaXiv API fallback (from URL field)',
+            'title_search_exact': 'AlphaXiv API fallback (from title search: exact match)',
+            'title_search_contained': 'AlphaXiv API fallback (from title search: contained match)',
+            'title_search_contains_entry': 'AlphaXiv API fallback (from title search: reverse contained match)',
+        }
+        return mapping.get(arxiv_source, 'AlphaXiv API fallback')
+    return 'unknown source'
 
 
 async def discover_github_url_from_alphaxiv_api(page: dict, github_client: GitHubClient):
     """从 AlphaXiv legacy API 中发现 GitHub 仓库链接"""
-    arxiv_id, error = await resolve_arxiv_id_for_page(page, github_client)
+    arxiv_id, arxiv_source, error = await resolve_arxiv_id_for_page(page, github_client)
     if not arxiv_id:
-        return None, error
+        return None, arxiv_source, error
 
     payload, error = await github_client.get_alphaxiv_paper_legacy(arxiv_id)
     if error:
-        return None, error
+        return None, arxiv_source, error
 
     github_url = find_github_url_in_alphaxiv_legacy_payload(payload)
     if github_url:
-        return github_url, None
-    return None, 'No Github URL found in AlphaXiv API'
+        return github_url, arxiv_source, None
+    return None, arxiv_source, 'No Github URL found in AlphaXiv API'
 
 
 async def resolve_repo_for_page(page: dict, github_client: GitHubClient):
@@ -616,11 +661,12 @@ async def resolve_repo_for_page(page: dict, github_client: GitHubClient):
             'reason': 'Unsupported Github field content',
         }
 
-    github_url, error = await discover_github_url_from_alphaxiv_api(page, github_client)
+    github_url, arxiv_source, error = await discover_github_url_from_alphaxiv_api(page, github_client)
     if github_url:
         return {
             'github_url': github_url,
             'source': 'alphaxiv_api',
+            'arxiv_source': arxiv_source,
             'needs_github_update': True,
             'reason': None,
         }
@@ -628,6 +674,7 @@ async def resolve_repo_for_page(page: dict, github_client: GitHubClient):
     return {
         'github_url': None,
         'source': None,
+        'arxiv_source': arxiv_source,
         'needs_github_update': False,
         'reason': error or 'No Github URL found',
     }
@@ -691,9 +738,7 @@ async def process_page(
     async with lock:
         print(f'[{index}/{total}] {title}')
         current_stars_display = current_stars if current_stars is not None else 'N/A'
-        source_label = {'existing': 'existing Github', 'alphaxiv_api': 'AlphaXiv API fallback'}.get(
-            resolution['source'], 'unknown source'
-        )
+        source_label = format_resolution_source_label(resolution['source'], resolution.get('arxiv_source'))
         print(f'  📍 {owner}/{repo} | Current stars: {current_stars_display}')
         print(f'  🔎 Source: {source_label}')
 

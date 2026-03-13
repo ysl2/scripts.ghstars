@@ -102,6 +102,7 @@ uv run python main.py
    - If the URL field is not an arXiv link, the script falls back to searching arXiv by the paper title to recover the best-matching arXiv ID
    - Once an arXiv ID is available, it queries `https://api.alphaxiv.org/papers/v3/legacy/{arxiv_id}`
    - The script looks for GitHub links in legacy fields like `paper.implementation`, `paper.marimo_implementation`, `paper.paper_group.resources`, `paper.resources`, then falls back to recursive scanning of the returned JSON
+   - External HTTP requests use explicit timeouts and limited retries for transient failures like `429` / `502` / `503` / `504`
    - If AlphaXiv API discovery succeeds, updates both `Github` and `Github stars`
    - If `Github` contains any other non-empty value, leaves the row unchanged
 4. **Results Summary**: Displays updated count and skipped items with reasons

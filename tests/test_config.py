@@ -70,6 +70,7 @@ class TestGithubFallbackHelpers(unittest.TestCase):
     def test_minor_skip_reason_includes_unsupported_and_alphaxiv_failures(self):
         self.assertTrue(main.is_minor_skip_reason("Unsupported Github field content"))
         self.assertTrue(main.is_minor_skip_reason("AlphaXiv API error (500)"))
+        self.assertTrue(main.is_minor_skip_reason("arXiv API error (429)"))
 
     def test_extract_arxiv_id_from_url(self):
         self.assertEqual(main.extract_arxiv_id_from_url("https://arxiv.org/abs/2601.22135"), "2601.22135")
@@ -92,13 +93,12 @@ class TestGithubFallbackHelpers(unittest.TestCase):
             </feed>
             """
         ).strip()
-        self.assertEqual(
-            main.extract_best_arxiv_id_from_feed(
-                feed,
-                "MoRe: Motion-aware Feed-forward 4D Reconstruction Transformer",
-            ),
-            "2603.05078",
+        arxiv_id, source = main.extract_best_arxiv_id_from_feed(
+            feed,
+            "MoRe: Motion-aware Feed-forward 4D Reconstruction Transformer",
         )
+        self.assertEqual(arxiv_id, "2603.05078")
+        self.assertEqual(source, "title_search_exact")
 
     def test_get_text_from_property(self):
         rich_text_property = {
