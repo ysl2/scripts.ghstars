@@ -266,6 +266,20 @@ class GitHubClient:
         self.rate_limit_remaining = None
         self.rate_limit_reset = None
 
+    async def get_text(self, url: str):
+        """获取文本页面内容（用于摘要/AlphaXiv 等回退发现）"""
+        async with self.semaphore:
+            await self.rate_limiter.acquire()
+            try:
+                async with self.session.get(url) as response:
+                    if response.status == 200:
+                        return await response.text(), None
+                    return None, f'HTTP error ({response.status})'
+            except asyncio.TimeoutError:
+                return None, 'Request timeout'
+            except Exception as e:
+                return None, f'Request failed: {e}'
+
     async def __aenter__(self):
         self.session = aiohttp.ClientSession(headers=get_github_headers(self.github_token))
         return self
@@ -347,6 +361,19 @@ class NotionClient:
         self.client = AsyncClient(auth=token)
         self.semaphore = asyncio.Semaphore(max_concurrent)
 
+    async def update_page_properties(self, page_id: str, *, github_url: str | None = None, stars_count: int | None = None):
+        """通用页面属性更新，按需更新 Github / Github stars"""
+        properties = {}
+        if github_url is not None:
+            properties['Github'] = {'url': github_url}
+        if stars_count is not None:
+            properties['Github stars'] = {'number': stars_count}
+        if not properties:
+            return
+
+        async with self.semaphore:
+            await self.client.pages.update(page_id=page_id, properties=properties)
+
     async def __aenter__(self):
         return self
 
@@ -363,13 +390,11 @@ class NotionClient:
             return None
 
     async def query_pages(self, data_source_id: str):
-        """查询所有符合条件的页面"""
+        """查询所有页面，后续在本地决定是否处理"""
         pages = []
 
         async with self.semaphore:
-            results = await self.client.data_sources.query(
-                data_source_id=data_source_id, filter={'property': 'Github', 'url': {'is_not_empty': True}}
-            )
+            results = await self.client.data_sources.query(data_source_id=data_source_id)
 
         pages.extend(results.get('results', []))
 
@@ -377,17 +402,88 @@ class NotionClient:
             async with self.semaphore:
                 results = await self.client.data_sources.query(
                     data_source_id=data_source_id,
-                    filter={'property': 'Github', 'url': {'is_not_empty': True}},
                     start_cursor=results.get('next_cursor'),
                 )
             pages.extend(results.get('results', []))
 
         return pages
 
-    async def update_github_stars(self, page_id: str, stars_count: int):
-        """更新 page 的 Github stars 字段"""
-        async with self.semaphore:
-            await self.client.pages.update(page_id=page_id, properties={'Github stars': {'number': stars_count}})
+
+
+async def discover_github_url_from_abstract(page: dict):
+    """从页面摘要中发现 GitHub 仓库链接"""
+    abstract_text = get_abstract_text_from_page(page)
+    if not abstract_text:
+        return None, 'No abstract text found'
+
+    github_url = find_github_url_in_text(abstract_text)
+    if github_url:
+        return github_url, None
+    return None, 'No Github URL found in abstract'
+
+
+async def discover_github_url_from_alphaxiv(page: dict, github_client: GitHubClient):
+    """从 AlphaXiv resources 页面中发现 GitHub 仓库链接"""
+    arxiv_id = get_arxiv_id_from_page(page)
+    if not arxiv_id:
+        return None, 'No arXiv ID found for AlphaXiv lookup'
+
+    alphaxiv_url = f'https://www.alphaxiv.org/resources/{arxiv_id}'
+    body, error = await github_client.get_text(alphaxiv_url)
+    if error:
+        return None, f'AlphaXiv lookup failed: {error}'
+
+    github_url = find_github_url_in_text(body)
+    if github_url:
+        return github_url, None
+    return None, 'No Github URL found in AlphaXiv'
+
+
+async def resolve_repo_for_page(page: dict, github_client: GitHubClient):
+    """统一解析页面最终应使用的 GitHub 仓库 URL"""
+    github_value = get_github_url_from_page(page)
+    github_state = classify_github_value(github_value)
+
+    if github_state == 'valid_github':
+        return {
+            'github_url': normalize_github_url(github_value),
+            'source': 'existing',
+            'needs_github_update': False,
+            'reason': None,
+        }
+
+    if github_state == 'other':
+        return {
+            'github_url': None,
+            'source': None,
+            'needs_github_update': False,
+            'reason': 'Unsupported Github field content',
+        }
+
+    github_url, error = await discover_github_url_from_abstract(page)
+    if github_url:
+        return {
+            'github_url': github_url,
+            'source': 'abstract',
+            'needs_github_update': True,
+            'reason': None,
+        }
+
+    github_url, alphaxiv_error = await discover_github_url_from_alphaxiv(page, github_client)
+    if github_url:
+        return {
+            'github_url': github_url,
+            'source': 'alphaxiv',
+            'needs_github_update': True,
+            'reason': None,
+        }
+
+    return {
+        'github_url': None,
+        'source': None,
+        'needs_github_update': False,
+        'reason': alphaxiv_error or error or 'No Github URL found',
+    }
 
 
 async def process_page(
@@ -401,33 +497,23 @@ async def process_page(
 ):
     """处理单个页面"""
     page_id = page['id']
-    github_url = get_github_url_from_page(page)
     current_stars = get_current_stars_from_page(page)
     title = get_page_title(page) or page_id
     notion_url = get_page_url(page)
 
-    # 验证 URL
+    resolution = await resolve_repo_for_page(page, github_client)
+    github_url = resolution['github_url']
     if not github_url:
-        reason = 'No Github URL found'
+        reason = resolution['reason']
         async with lock:
             print(colored(f'[{index}/{total}] {title}', Colors.GRAY))
             print(colored(f'  ⏭️ Skipped: {reason}', Colors.GRAY))
             results['skipped'].append({'title': title, 'github_url': None, 'notion_url': notion_url, 'reason': reason})
         return
 
-    if not is_valid_github_repo_url(github_url):
-        reason = 'Invalid Github URL format'
-        async with lock:
-            print(colored(f'[{index}/{total}] {title}', Colors.GRAY))
-            print(colored(f'  ⏭️ Skipped: {reason} ({github_url})', Colors.GRAY))
-            results['skipped'].append(
-                {'title': title, 'github_url': github_url, 'notion_url': notion_url, 'reason': reason}
-            )
-        return
-
     result = extract_owner_repo(github_url)
     if not result:
-        reason = 'Cannot extract owner/repo'
+        reason = 'Discovered URL is not a valid GitHub repository'
         async with lock:
             print(colored(f'[{index}/{total}] {title}', Colors.GRAY))
             print(colored(f'  ⏭️ Skipped: {reason}', Colors.GRAY))
@@ -438,9 +524,7 @@ async def process_page(
 
     owner, repo = result
 
-    # 获取 star 数量
     new_stars, error = await github_client.get_star_count(owner, repo)
-
     if error:
         async with lock:
             print(colored(f'[{index}/{total}] {title}', Colors.RED))
@@ -451,14 +535,23 @@ async def process_page(
             )
         return
 
-    # 更新 Notion
-    await notion_client.update_github_stars(page_id, new_stars)
+    await notion_client.update_page_properties(
+        page_id,
+        github_url=github_url if resolution['needs_github_update'] else None,
+        stars_count=new_stars,
+    )
 
-    # 输出结果
     async with lock:
         print(f'[{index}/{total}] {title}')
         current_stars_display = current_stars if current_stars is not None else 'N/A'
+        source_label = {'existing': 'existing Github', 'abstract': 'abstract fallback', 'alphaxiv': 'AlphaXiv fallback'}.get(
+            resolution['source'], 'unknown source'
+        )
         print(f'  📍 {owner}/{repo} | Current stars: {current_stars_display}')
+        print(f'  🔎 Source: {source_label}')
+
+        if resolution['needs_github_update']:
+            print(f'  🔗 Github set to: {github_url}')
 
         if current_stars is not None:
             diff = new_stars - current_stars
