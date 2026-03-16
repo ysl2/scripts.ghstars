@@ -4,6 +4,7 @@ import tempfile
 import textwrap
 import types
 import unittest
+from unittest.mock import AsyncMock
 
 
 # Stub third-party modules so tests can import main.py without installing deps.
@@ -198,6 +199,43 @@ class TestGithubFallbackHelpers(unittest.TestCase):
             main.find_github_url_in_alphaxiv_legacy_payload(payload),
             "https://github.com/baz/qux",
         )
+
+
+class TestNotionResilience(unittest.IsolatedAsyncioTestCase):
+    async def test_update_page_properties_retries_after_connect_error(self):
+        client = main.NotionClient("token", 1)
+        client.client = types.SimpleNamespace(
+            pages=types.SimpleNamespace(
+                update=AsyncMock(side_effect=[Exception("boom"), {"ok": True}])
+            )
+        )
+
+        await client.update_page_properties("page-1", stars_count=42)
+
+        self.assertEqual(client.client.pages.update.await_count, 2)
+
+    async def test_process_page_records_notion_update_failure_without_crashing_batch(self):
+        page = {
+            "id": "page-1",
+            "url": "https://notion.so/page-1",
+            "properties": {
+                "Name": {"type": "title", "title": [{"plain_text": "Test Paper"}]},
+                "Github": {"type": "url", "url": "https://github.com/foo/bar"},
+                "Github stars": {"type": "number", "number": 10},
+            },
+        }
+        github_client = types.SimpleNamespace(get_star_count=AsyncMock(return_value=(12, None)))
+        notion_client = types.SimpleNamespace(
+            update_page_properties=AsyncMock(side_effect=Exception("network down"))
+        )
+        results = {"updated": 0, "skipped": []}
+        lock = main.asyncio.Lock()
+
+        await main.process_page(page, 1, 1, github_client, notion_client, results, lock)
+
+        self.assertEqual(results["updated"], 0)
+        self.assertEqual(len(results["skipped"]), 1)
+        self.assertEqual(results["skipped"][0]["reason"], "Notion update failed: network down")
 
 
 if __name__ == "__main__":

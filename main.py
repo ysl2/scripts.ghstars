@@ -17,6 +17,7 @@ REQUEST_DELAY = 0.2  # 每个请求之间的最小间隔（秒）
 HTTP_TOTAL_TIMEOUT = 20  # 外部 HTTP 请求总超时（秒）
 HTTP_CONNECT_TIMEOUT = 10  # 外部 HTTP 建连超时（秒）
 MAX_RETRIES = 2  # 对临时性错误的最大重试次数
+NOTION_MAX_RETRIES = 2  # Notion 写入失败时的最大重试次数
 
 
 # ANSI 颜色代码
@@ -541,7 +542,7 @@ class NotionClient:
         self.semaphore = asyncio.Semaphore(max_concurrent)
 
     async def update_page_properties(self, page_id: str, *, github_url: str | None = None, stars_count: int | None = None):
-        """通用页面属性更新，按需更新 Github / Github stars"""
+        """通用页面属性更新，按需更新 Github / Github stars，并在临时网络错误时有限重试"""
         properties = {}
         if github_url is not None:
             properties['Github'] = {'url': github_url}
@@ -550,8 +551,20 @@ class NotionClient:
         if not properties:
             return
 
-        async with self.semaphore:
-            await self.client.pages.update(page_id=page_id, properties=properties)
+        last_error = None
+        for attempt in range(NOTION_MAX_RETRIES + 1):
+            try:
+                async with self.semaphore:
+                    await self.client.pages.update(page_id=page_id, properties=properties)
+                return
+            except Exception as exc:
+                last_error = exc
+                if attempt >= NOTION_MAX_RETRIES:
+                    raise
+                await asyncio.sleep(0.5 * (2**attempt))
+
+        if last_error:
+            raise last_error
 
     async def __aenter__(self):
         return self
@@ -729,11 +742,22 @@ async def process_page(
             )
         return
 
-    await notion_client.update_page_properties(
-        page_id,
-        github_url=github_url if resolution['needs_github_update'] else None,
-        stars_count=new_stars,
-    )
+    try:
+        await notion_client.update_page_properties(
+            page_id,
+            github_url=github_url if resolution['needs_github_update'] else None,
+            stars_count=new_stars,
+        )
+    except Exception as exc:
+        reason = f'Notion update failed: {exc}'
+        async with lock:
+            print(colored(f'[{index}/{total}] {title}', Colors.RED))
+            print(colored(f'  📍 {owner}/{repo}', Colors.RED))
+            print(colored(f'  ⏭️ Skipped: {reason}', Colors.RED))
+            results['skipped'].append(
+                {'title': title, 'github_url': github_url, 'notion_url': notion_url, 'reason': reason}
+            )
+        return
 
     async with lock:
         print(f'[{index}/{total}] {title}')
