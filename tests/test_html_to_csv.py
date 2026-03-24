@@ -6,7 +6,7 @@ import pytest
 from html_to_csv.csv_writer import output_csv_path_for_html
 from html_to_csv.html_parser import normalize_arxiv_url, parse_paper_seeds_from_html
 from html_to_csv.models import PaperRecord, PaperSeed, sort_records
-from html_to_csv.pipeline import convert_html_to_csv
+from html_to_csv.pipeline import build_paper_outcome, convert_html_to_csv
 
 
 def test_normalize_arxiv_url_strips_versions_from_abs_and_pdf_urls():
@@ -189,3 +189,29 @@ async def test_convert_html_to_csv_tracks_skipped_rows_when_github_resolution_fa
     assert len(result.skipped) == 1
     assert result.skipped[0]["title"] == "Paper A"
     assert result.skipped[0]["reason"] == "No Github URL found from discovery"
+
+
+@pytest.mark.anyio
+async def test_build_paper_outcome_does_not_create_nested_asyncio_task(monkeypatch):
+    def fail_create_task(*args, **kwargs):
+        raise AssertionError("nested create_task should not be used here")
+
+    monkeypatch.setattr("html_to_csv.pipeline.asyncio.create_task", fail_create_task)
+
+    class FakeDiscoveryClient:
+        async def resolve_github_url(self, seed):
+            return "https://github.com/foo/bar"
+
+    class FakeGitHubClient:
+        async def get_star_count(self, owner, repo):
+            return 42, None
+
+    outcome = await build_paper_outcome(
+        1,
+        PaperSeed(name="Test Paper", url="https://arxiv.org/abs/2603.20000"),
+        discovery_client=FakeDiscoveryClient(),
+        github_client=FakeGitHubClient(),
+    )
+
+    assert outcome.record.github == "https://github.com/foo/bar"
+    assert outcome.record.stars == 42

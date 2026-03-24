@@ -15,9 +15,7 @@ async def build_paper_outcome(
     discovery_client,
     github_client,
 ) -> PaperOutcome:
-    github_task = asyncio.create_task(_resolve_github(seed, discovery_client))
-
-    github_url = await github_task
+    github_url = await _resolve_github(seed, discovery_client)
 
     reason = None
     stars = ""

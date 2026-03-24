@@ -10,11 +10,11 @@ from shared.discovery import DiscoveryClient
 from shared.github import GitHubClient, extract_owner_repo
 from shared.http import build_timeout
 from shared.progress import print_item_skip, print_item_success, print_summary
+from shared.settings import DEFAULT_CONCURRENT_LIMIT
 from shared.skip_reasons import is_minor_skip_reason
 
 
-DISCOVERY_CONCURRENT_LIMIT = 5
-GITHUB_CONCURRENT_LIMIT = 5
+CONCURRENT_LIMIT = DEFAULT_CONCURRENT_LIMIT
 REQUEST_DELAY = 0.2
 
 
@@ -80,14 +80,14 @@ async def run_html_mode(
             session,
             huggingface_token=config["huggingface_token"],
             alphaxiv_token=config["alphaxiv_token"],
-            max_concurrent=DISCOVERY_CONCURRENT_LIMIT,
+            max_concurrent=CONCURRENT_LIMIT,
             min_interval=REQUEST_DELAY,
         )
         github_client = build_client(
             github_client_cls,
             session,
             github_token=config["github_token"],
-            max_concurrent=GITHUB_CONCURRENT_LIMIT,
+            max_concurrent=CONCURRENT_LIMIT,
             min_interval=REQUEST_DELAY,
         )
 

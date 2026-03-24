@@ -11,13 +11,15 @@ from shared.discovery import DiscoveryClient
 from shared.github import GitHubClient
 from shared.http import build_timeout
 from shared.progress import Colors, colored, print_summary
+from shared.settings import DEFAULT_CONCURRENT_LIMIT
 from shared.skip_reasons import is_minor_skip_reason
 
 
-GITHUB_CONCURRENT_LIMIT = 5
-NOTION_CONCURRENT_LIMIT = 3
-DISCOVERY_CONCURRENT_LIMIT = 5
-ARXIV_CONCURRENT_LIMIT = 5
+CONCURRENT_LIMIT = DEFAULT_CONCURRENT_LIMIT
+GITHUB_CONCURRENT_LIMIT = CONCURRENT_LIMIT
+NOTION_CONCURRENT_LIMIT = CONCURRENT_LIMIT
+DISCOVERY_CONCURRENT_LIMIT = CONCURRENT_LIMIT
+ARXIV_CONCURRENT_LIMIT = CONCURRENT_LIMIT
 REQUEST_DELAY = 0.2
 
 
