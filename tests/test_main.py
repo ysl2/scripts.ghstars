@@ -49,13 +49,6 @@ async def test_run_html_mode_runs_pipeline_and_writes_same_name_csv(tmp_path: Pa
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-    class FakeArxivClient:
-        def __init__(self, session):
-            self.session = session
-
-        async def get_published_date(self, url):
-            return "2026-03-24", None
-
     class FakeDiscoveryClient:
         def __init__(self, session, *, huggingface_token="", alphaxiv_token="", max_concurrent=0, min_interval=0):
             self.session = session
@@ -76,7 +69,6 @@ async def test_run_html_mode_runs_pipeline_and_writes_same_name_csv(tmp_path: Pa
     exit_code = await run_html_mode(
         html_path,
         session_factory=lambda **kwargs: FakeSession(),
-        arxiv_client_cls=FakeArxivClient,
         discovery_client_cls=FakeDiscoveryClient,
         github_client_cls=FakeGitHubClient,
     )
@@ -105,12 +97,57 @@ async def test_run_html_mode_prints_progress_before_completion(tmp_path: Path, c
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-    class FakeArxivClient:
-        def __init__(self, session):
+    class FakeDiscoveryClient:
+        def __init__(self, session, *, huggingface_token="", alphaxiv_token="", max_concurrent=0, min_interval=0):
             self.session = session
+            self.huggingface_token = huggingface_token
+            self.alphaxiv_token = alphaxiv_token
 
-        async def get_published_date(self, url):
-            return "2026-03-24", None
+        async def resolve_github_url(self, seed):
+            return "https://github.com/foo/bar"
+
+    class FakeGitHubClient:
+        def __init__(self, session, github_token="", max_concurrent=0, min_interval=0):
+            self.session = session
+            self.github_token = github_token
+
+        async def get_star_count(self, owner, repo):
+            return 0, None
+
+    exit_code = await run_html_mode(
+        html_path,
+        session_factory=lambda **kwargs: FakeSession(),
+        discovery_client_cls=FakeDiscoveryClient,
+        github_client_cls=FakeGitHubClient,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Found 1 papers" in captured.out
+    assert "[1/1] Test Paper" in captured.out
+    assert "foo/bar" in captured.out
+    assert "Updated: N/A → 0" in captured.out
+
+
+@pytest.mark.anyio
+async def test_run_html_mode_prints_skip_progress_for_unresolved_rows(tmp_path: Path, capsys):
+    html_path = tmp_path / "papers.html"
+    html_path.write_text(
+        """
+        <div class="chakra-card__root">
+          <h2 class="chakra-heading">Test Paper</h2>
+          <a href="https://arxiv.org/abs/2603.20000v2">View</a>
+        </div>
+        """,
+        encoding="utf-8",
+    )
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
 
     class FakeDiscoveryClient:
         def __init__(self, session, *, huggingface_token="", alphaxiv_token="", max_concurrent=0, min_interval=0):
@@ -127,19 +164,20 @@ async def test_run_html_mode_prints_progress_before_completion(tmp_path: Path, c
             self.github_token = github_token
 
         async def get_star_count(self, owner, repo):
-            return 0, None
+            raise AssertionError("star lookup should not be reached")
 
     exit_code = await run_html_mode(
         html_path,
         session_factory=lambda **kwargs: FakeSession(),
-        arxiv_client_cls=FakeArxivClient,
         discovery_client_cls=FakeDiscoveryClient,
         github_client_cls=FakeGitHubClient,
     )
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert "Processed 1/1" in captured.out
+    assert "[1/1] Test Paper" in captured.out
+    assert "Skipped: No Github URL found from discovery" in captured.out
+    assert "Resolved: 0" in captured.out
 
 
 @pytest.mark.anyio

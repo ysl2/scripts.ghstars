@@ -5,14 +5,14 @@ from pathlib import Path
 
 import aiohttp
 
-from html_to_csv.arxiv import ArxivClient
 from html_to_csv.pipeline import convert_html_to_csv
 from shared.discovery import DiscoveryClient
-from shared.github import GitHubClient
+from shared.github import GitHubClient, extract_owner_repo
 from shared.http import build_timeout
+from shared.progress import print_item_skip, print_item_success, print_summary
+from shared.skip_reasons import is_minor_skip_reason
 
 
-ARXIV_CONCURRENT_LIMIT = 5
 DISCOVERY_CONCURRENT_LIMIT = 5
 GITHUB_CONCURRENT_LIMIT = 5
 REQUEST_DELAY = 0.2
@@ -37,15 +37,33 @@ def build_client(factory, session, **kwargs):
     return factory(session, **accepted_kwargs)
 
 
-def print_progress(completed: int, total: int, record) -> None:
-    print(f"Processed {completed}/{total}: {record.name}", flush=True)
+def print_progress(outcome, total: int) -> None:
+    owner_repo = extract_owner_repo(outcome.record.github) if outcome.record.github else None
+    if outcome.reason is None:
+        print_item_success(
+            outcome.index,
+            total,
+            outcome.record.name,
+            owner_repo=owner_repo,
+            current_stars=None,
+            new_stars=outcome.record.stars if isinstance(outcome.record.stars, int) else None,
+        )
+        return
+
+    print_item_skip(
+        outcome.index,
+        total,
+        outcome.record.name,
+        outcome.reason,
+        owner_repo=owner_repo,
+        minor=is_minor_skip_reason(outcome.reason),
+    )
 
 
 async def run_html_mode(
     html_path: Path | str,
     *,
     session_factory=aiohttp.ClientSession,
-    arxiv_client_cls=ArxivClient,
     discovery_client_cls=DiscoveryClient,
     github_client_cls=GitHubClient,
 ) -> int:
@@ -57,12 +75,6 @@ async def run_html_mode(
     config = load_runtime_config(dict(os.environ))
 
     async with session_factory(timeout=build_timeout()) as session:
-        arxiv_client = build_client(
-            arxiv_client_cls,
-            session,
-            max_concurrent=ARXIV_CONCURRENT_LIMIT,
-            min_interval=REQUEST_DELAY,
-        )
         discovery_client = build_client(
             discovery_client_cls,
             session,
@@ -79,14 +91,21 @@ async def run_html_mode(
             min_interval=REQUEST_DELAY,
         )
 
-        csv_path = await convert_html_to_csv(
+        result = await convert_html_to_csv(
             html_path,
-            arxiv_client=arxiv_client,
             discovery_client=discovery_client,
             github_client=github_client,
             status_callback=lambda message: print(message, flush=True),
             progress_callback=print_progress,
         )
 
-    print(f"Wrote CSV: {csv_path}", flush=True)
+    print_summary(
+        "Resolved",
+        result.resolved,
+        result.skipped,
+        is_minor_reason=is_minor_skip_reason,
+        detail_label="Paper URL",
+        minor_header="Skipped rows (CSV rows still written):",
+    )
+    print(f"Wrote CSV: {result.csv_path}", flush=True)
     return 0

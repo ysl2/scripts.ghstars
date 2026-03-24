@@ -6,10 +6,12 @@ import aiohttp
 from html_to_csv.arxiv import ArxivClient
 from notion_sync.config import load_config_from_env
 from notion_sync.notion_client import NotionClient
-from notion_sync.pipeline import is_minor_skip_reason, process_page
+from notion_sync.pipeline import process_page
 from shared.discovery import DiscoveryClient
 from shared.github import GitHubClient
 from shared.http import build_timeout
+from shared.progress import Colors, colored, print_summary
+from shared.skip_reasons import is_minor_skip_reason
 
 
 GITHUB_CONCURRENT_LIMIT = 5
@@ -17,18 +19,6 @@ NOTION_CONCURRENT_LIMIT = 3
 DISCOVERY_CONCURRENT_LIMIT = 5
 ARXIV_CONCURRENT_LIMIT = 5
 REQUEST_DELAY = 0.2
-
-
-class Colors:
-    RED = "\033[91m"
-    GREEN = "\033[92m"
-    YELLOW = "\033[93m"
-    GRAY = "\033[90m"
-    RESET = "\033[0m"
-
-
-def colored(text: str, color: str) -> str:
-    return f"{color}{text}{Colors.RESET}"
 
 
 async def run_notion_mode(
@@ -101,33 +91,13 @@ async def run_notion_mode(
             ]
             await asyncio.gather(*tasks)
 
-    print(f'\n{"=" * 60}')
-    print(colored(f'✅ Updated: {results["updated"]}', Colors.GREEN))
-    print(f'⏭️ Skipped: {len(results["skipped"])}')
-
-    minor_skipped = [s for s in results["skipped"] if is_minor_skip_reason(s["reason"])]
-    major_skipped = [s for s in results["skipped"] if not is_minor_skip_reason(s["reason"])]
-
-    if major_skipped:
-        print(f'\n{"=" * 60}')
-        print(colored("❌ Failed rows (need attention):", Colors.RED))
-        print(f'{"=" * 60}')
-        for i, item in enumerate(major_skipped, 1):
-            print(colored(f'\n{i}. {item["title"]}', Colors.RED))
-            print(colored(f'   Reason:     {item["reason"]}', Colors.RED))
-            if item["github_url"]:
-                print(colored(f'   Github URL: {item["github_url"]}', Colors.RED))
-            print(colored(f'   Notion URL: {item["notion_url"]}', Colors.RED))
-
-    if minor_skipped:
-        print(f'\n{"=" * 60}')
-        print(colored("⏭️ Skipped rows (non-GitHub URLs, can be ignored):", Colors.GRAY))
-        print(colored(f'{"=" * 60}', Colors.GRAY))
-        for i, item in enumerate(minor_skipped, 1):
-            print(colored(f'\n{i}. {item["title"]}', Colors.GRAY))
-            print(colored(f'   Reason:     {item["reason"]}', Colors.GRAY))
-            if item["github_url"]:
-                print(colored(f'   Github URL: {item["github_url"]}', Colors.GRAY))
-            print(colored(f'   Notion URL: {item["notion_url"]}', Colors.GRAY))
+    print_summary(
+        "Updated",
+        results["updated"],
+        results["skipped"],
+        is_minor_reason=is_minor_skip_reason,
+        detail_label="Notion URL",
+        minor_header="Skipped rows (non-GitHub URLs, can be ignored):",
+    )
 
     return 0

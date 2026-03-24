@@ -66,17 +66,16 @@ Output:
 CSV columns:
 
 - `Name`
-- `Date`
+- `Url`
 - `Github`
 - `Stars`
-- `Url`
 
 HTML mode behavior:
 
 - arXiv URLs are canonicalized to versionless `https://arxiv.org/abs/<id>`
-- `Date` is the precise original arXiv submission date from the arXiv abs page
-- rows are sorted by `Date` descending
+- rows are sorted by canonical arXiv `Url` descending
 - missing GitHub or stars values are left blank
+- progress is printed incrementally in the terminal during processing
 - writes use a temp file and atomic replace
 
 ## HTML expectations
@@ -116,6 +115,7 @@ When `Github` is empty or `WIP`, the sync flow tries to discover the repo from t
 - Invalid file path does not fall back to Notion mode
 - More than one positional argument is treated as a usage error
 - Concurrency and rate limiting remain enabled in both modes
+- `*.html` and `*.csv` are gitignored globally; use `git add -f` only if you intentionally want to track one
 
 ## Tests
 

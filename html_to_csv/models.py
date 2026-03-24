@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+from pathlib import Path
+import re
 
 
 @dataclass(frozen=True)
@@ -10,18 +12,32 @@ class PaperSeed:
 @dataclass(frozen=True)
 class PaperRecord:
     name: str
-    date: str
+    url: str
     github: str
     stars: int | str | None
-    url: str
+
+
+@dataclass(frozen=True)
+class PaperOutcome:
+    index: int
+    record: PaperRecord
+    reason: str | None
+
+
+@dataclass(frozen=True)
+class ConversionResult:
+    csv_path: Path
+    resolved: int
+    skipped: list[dict]
 
 
 def sort_records(records: list[PaperRecord]) -> list[PaperRecord]:
-    """Sort by date descending, then URL ascending, with empty dates last."""
+    """Sort by canonical arXiv URL descending."""
 
     def sort_key(record: PaperRecord) -> tuple[int, int, str]:
-        if record.date:
-            return (0, -int(record.date.replace("-", "")), record.url)
-        return (1, 0, record.url)
+        match = re.search(r"/abs/([0-9]{4})\.([0-9]{4,5})$", record.url)
+        if not match:
+            return (-1, -1, record.url)
+        return (int(match.group(1)), int(match.group(2)), record.url)
 
-    return sorted(records, key=sort_key)
+    return sorted(records, key=sort_key, reverse=True)

@@ -3,36 +3,14 @@ import re
 from types import SimpleNamespace
 
 from shared.github import extract_owner_repo, is_valid_github_repo_url, normalize_github_url
+from shared.progress import print_item_skip, print_item_success
+from shared.skip_reasons import is_minor_skip_reason
 
 
 GITHUB_PROPERTY_NAME = "Github"
 GITHUB_STARS_PROPERTY_NAME = "Stars"
 ABSTRACT_PROPERTY_CANDIDATES = ("Abstract", "Summary", "TL;DR", "Notes")
 ARXIV_PROPERTY_CANDIDATES = ("URL", "Arxiv", "arXiv", "Paper URL", "Link")
-
-MINOR_SKIP_REASONS = {
-    "Invalid Github URL format",
-    "No Github URL found",
-    "Cannot extract owner/repo",
-    "Unsupported Github field content",
-    "No fallback discovery token configured",
-    "No arXiv ID found for discovery lookup",
-    "No arXiv ID found from title search",
-    "No Github URL found from discovery",
-    "Discovered URL is not a valid GitHub repository",
-}
-MINOR_SKIP_REASON_PREFIXES = (
-    "Hugging Face Papers error",
-    "Hugging Face Papers timeout",
-    "Hugging Face Papers request failed:",
-    "AlphaXiv API error",
-    "AlphaXiv API timeout",
-    "AlphaXiv API request failed:",
-    "arXiv API error",
-    "arXiv API timeout",
-    "arXiv API request failed:",
-)
-
 
 def get_github_url_from_page(page: dict) -> str | None:
     github_property = page.get("properties", {}).get(GITHUB_PROPERTY_NAME, {})
@@ -126,11 +104,6 @@ def get_arxiv_id_from_page(page: dict) -> str | None:
             return arxiv_id
     return None
 
-
-def is_minor_skip_reason(reason: str) -> bool:
-    return reason in MINOR_SKIP_REASONS or any(reason.startswith(prefix) for prefix in MINOR_SKIP_REASON_PREFIXES)
-
-
 async def resolve_arxiv_id_for_page(page: dict, arxiv_client=None) -> tuple[str | None, str | None, str | None]:
     arxiv_id = get_arxiv_id_from_page(page)
     if arxiv_id:
@@ -212,6 +185,14 @@ async def resolve_repo_for_page(page: dict, discovery_client, arxiv_client=None)
     }
 
 
+def format_resolution_source_label(source: str | None) -> str | None:
+    if source == "existing":
+        return "existing Github"
+    if source == "discovered":
+        return "Discovered Github"
+    return None
+
+
 async def process_page(
     page: dict,
     index: int,
@@ -234,8 +215,15 @@ async def process_page(
     if not github_url:
         reason = resolution["reason"]
         async with lock:
+            print_item_skip(
+                index,
+                total,
+                title,
+                reason,
+                minor=is_minor_skip_reason(reason),
+            )
             results["skipped"].append(
-                {"title": title, "github_url": None, "notion_url": notion_url, "reason": reason}
+                {"title": title, "github_url": None, "detail_url": notion_url, "reason": reason}
             )
         return
 
@@ -243,8 +231,15 @@ async def process_page(
     if not owner_repo:
         reason = "Discovered URL is not a valid GitHub repository"
         async with lock:
+            print_item_skip(
+                index,
+                total,
+                title,
+                reason,
+                minor=is_minor_skip_reason(reason),
+            )
             results["skipped"].append(
-                {"title": title, "github_url": github_url, "notion_url": notion_url, "reason": reason}
+                {"title": title, "github_url": github_url, "detail_url": notion_url, "reason": reason}
             )
         return
 
@@ -252,8 +247,16 @@ async def process_page(
     new_stars, error = await github_client.get_star_count(owner, repo)
     if error:
         async with lock:
+            print_item_skip(
+                index,
+                total,
+                title,
+                error,
+                owner_repo=owner_repo,
+                minor=is_minor_skip_reason(error),
+            )
             results["skipped"].append(
-                {"title": title, "github_url": github_url, "notion_url": notion_url, "reason": error}
+                {"title": title, "github_url": github_url, "detail_url": notion_url, "reason": error}
             )
         return
 
@@ -266,11 +269,28 @@ async def process_page(
     except Exception as exc:
         reason = f"Notion update failed: {exc}"
         async with lock:
+            print_item_skip(
+                index,
+                total,
+                title,
+                reason,
+                owner_repo=owner_repo,
+                minor=is_minor_skip_reason(reason),
+            )
             results["skipped"].append(
-                {"title": title, "github_url": github_url, "notion_url": notion_url, "reason": reason}
+                {"title": title, "github_url": github_url, "detail_url": notion_url, "reason": reason}
             )
         return
 
     async with lock:
-        _ = current_stars  # keep parity with legacy behavior without logging in tests
+        print_item_success(
+            index,
+            total,
+            title,
+            owner_repo=owner_repo,
+            current_stars=current_stars,
+            new_stars=new_stars,
+            source_label=format_resolution_source_label(resolution["source"]),
+            github_url_set=github_url if resolution["needs_github_update"] else None,
+        )
         results["updated"] += 1

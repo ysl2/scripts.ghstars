@@ -168,3 +168,37 @@ async def test_process_page_records_notion_update_failure_without_crashing_batch
     assert results["updated"] == 0
     assert len(results["skipped"]) == 1
     assert results["skipped"][0]["reason"] == "Notion update failed: network down"
+
+
+@pytest.mark.anyio
+async def test_process_page_prints_progress_for_successful_update(capsys):
+    page = {
+        "id": "page-1",
+        "url": "https://notion.so/page-1",
+        "properties": {
+            "Name": {"type": "title", "title": [{"plain_text": "Test Paper"}]},
+            "Github": {"type": "url", "url": "https://github.com/foo/bar"},
+            "Stars": {"type": "number", "number": 10},
+        },
+    }
+    discovery_client = types.SimpleNamespace(resolve_github_url=AsyncMock())
+    github_client = types.SimpleNamespace(get_star_count=AsyncMock(return_value=(12, None)))
+    notion_client = types.SimpleNamespace(update_page_properties=AsyncMock(return_value=None))
+    results = {"updated": 0, "skipped": []}
+    lock = asyncio.Lock()
+
+    await process_page(
+        page,
+        index=1,
+        total=1,
+        discovery_client=discovery_client,
+        github_client=github_client,
+        notion_client=notion_client,
+        results=results,
+        lock=lock,
+    )
+
+    captured = capsys.readouterr()
+    assert "[1/1] Test Paper" in captured.out
+    assert "foo/bar" in captured.out
+    assert "Updated: 10 → 12" in captured.out

@@ -5,7 +5,7 @@ from pathlib import Path
 from html_to_csv.models import PaperRecord, sort_records
 
 
-CSV_HEADERS = ["Name", "Date", "Github", "Stars", "Url"]
+CSV_HEADERS = ["Name", "Url", "Github", "Stars"]
 
 
 def output_csv_path_for_html(html_path: Path) -> Path:
@@ -23,10 +23,9 @@ def write_records_to_csv(records: list[PaperRecord], html_path: Path) -> Path:
             writer.writerow(
                 {
                     "Name": record.name,
-                    "Date": record.date,
+                    "Url": record.url,
                     "Github": record.github,
                     "Stars": "" if record.stars in (None, "") else str(record.stars),
-                    "Url": record.url,
                 }
             )
         temp_path = Path(handle.name)
