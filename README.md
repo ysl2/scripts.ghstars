@@ -1,254 +1,124 @@
-# Zotero Notion (Notero) Stars Updater
+# Zotero Notion And HTML GitHub Stars
 
-A Python script that automatically updates GitHub repository star counts in your Notion database. It fetches the latest star counts from GitHub API and updates your Notion pages with the current data.
+One CLI, two modes:
 
-<p><img src=".assets/README/img/2026-03-01-16-02-06.png" alt="" width=100% style="display: block; margin: auto;"></p>
+- No positional argument: sync GitHub links and star counts into Notion
+- One existing `.html` file path: convert paper cards in that HTML file into a same-name CSV
 
-## Features
+The HTML mode keeps the existing repository discovery policy:
 
-- **Automatic Star Count Updates**: Fetches the latest star counts for GitHub repositories stored in Notion
-- **Fallback GitHub Discovery**: For rows whose `Github` field is empty or `WIP`, tries Hugging Face Papers first when `HUGGINGFACE_TOKEN` is configured, then falls back to the AlphaXiv legacy API when `ALPHAXIV_TOKEN` is also configured
-- **Concurrent Processing**: Uses async/await for efficient parallel API requests
-- **Rate Limiting**: Built-in rate limiting to respect API quotas for both GitHub and Notion
-- **GitHub Token Support**: Optional GitHub authentication for higher rate limits (5000 vs 60 requests/hour)
-- **Smart URL Handling**: Validates and extracts owner/repo from various GitHub URL formats
-- **Detailed Reporting**: Shows updated counts with color-coded diff indicators (±changes)
-- **Error Handling**: Categorizes and displays skipped/failed items with clear reasons
-- **Progress Tracking**: Real-time progress updates during execution
+- Hugging Face first
+- AlphaXiv second
 
-## Prerequisites
+GitHub and star lookup use normalized, versionless arXiv URLs as the paper identity.
 
-- Python 3.12 or higher
-- A Notion Integration with API access to your database
-- (Optional) GitHub Personal Access Token for higher rate limits
-
-## Installation
-
-1. **Clone or download this project**
-
-2. **Install dependencies using UV** (recommended):
-   ```bash
-   uv sync
-   ```
-
-   Or using pip:
-   ```bash
-   pip install aiohttp notion-client requests
-   ```
-
-## Configuration
-
-### 1. Set up Notion Integration
-
-1. Go to [https://www.notion.so/my-integrations](https://www.notion.so/my-integrations)
-2. Create a new integration and copy your **Internal Integration Token**
-3. Share your database with this integration (click "..." on your database → "Add connections" → select your integration)
-
-### 2. Configure Your Database
-
-Your Notion database must have these properties:
-
-- **Name** (Title type): Page title
-- **Github** (URL or Rich Text type): GitHub repository URL or `WIP`
-- **Stars** (Number type): Star count (will be updated by the script)
-
-Optional but recommended properties for fallback discovery:
-- **URL** (preferred), or **Arxiv** / **arXiv** / **Paper URL** / **Link**: a field containing the arXiv URL, used for Hugging Face / AlphaXiv fallback discovery
-
-### 3. Set Environment Variables
-
-Copy `.env.example` to `.env`, then fill in your values (or set environment variables directly):
+## Install
 
 ```bash
-# Required: Your Notion Integration Token
-NOTION_TOKEN=your_notion_token_here
+uv sync
+```
 
-# Required: Your Notion Database ID
-DATABASE_ID=your_database_id_here
+## Environment
 
-# Optional: Your GitHub Personal Access Token (for higher rate limits)
+Copy `.env.example` to `.env` and fill in the variables you need.
+
+### Used by both modes
+
+```bash
 GITHUB_TOKEN=your_github_token_here
-
-# Optional: Enable Hugging Face Papers discovery for empty/WIP Github fields
 HUGGINGFACE_TOKEN=your_huggingface_token_here
-
-# Optional: Enable AlphaXiv fallback after Hugging Face misses
 ALPHAXIV_TOKEN=your_alphaxiv_token_here
 ```
 
-### 4. Fallback Discovery Policy
+### Required only for Notion mode
 
-When the `Github` field is empty or marked as `WIP`, the script enables fallback discovery based on which optional tokens are available.
-
-- If `HUGGINGFACE_TOKEN` is configured, Hugging Face Papers is always attempted first.
-- If `ALPHAXIV_TOKEN` is configured, AlphaXiv is available as an additional fallback source.
-- If both tokens are configured, the script tries Hugging Face first and only queries AlphaXiv when Hugging Face does not produce a usable GitHub repository URL.
-- If neither token is configured, fallback discovery is skipped entirely and the row is left unchanged.
-
-This means the discovery pipeline is driven by configuration rather than by hardcoded source assumptions: each source is used only when its corresponding token is present, while Hugging Face remains the preferred first lookup whenever it is enabled.
-
-To find your database ID:
-1. Open your database in Notion
-2. Copy the ID from the URL (32-character string after `/database/` or after `?v=`)
-3. Example: In `https://notion.so/workspace/database?v=abcd1234...`, the ID is the 32-char string
+```bash
+NOTION_TOKEN=your_notion_token_here
+DATABASE_ID=your_database_id_here
+```
 
 ## Usage
 
-Run the script:
+### Notion mode
+
+Runs the original Notion sync flow.
 
 ```bash
-python main.py
+uv run main.py
 ```
 
-Or with UV:
+### HTML to CSV mode
+
+Reads one HTML file and writes a CSV with the same basename in the same directory.
 
 ```bash
-uv run python main.py
+uv run main.py /path/to/papers.html
 ```
 
-### What Happens During Execution
+Input:
 
-1. **Authentication Check**: Verifies GitHub Token status and rate limits
-2. **Database Query**: Fetches pages from the data source
-3. **Concurrent Processing**: For each page:
-   - If `Github` is a valid GitHub repo URL, fetches star count and updates `Stars`
-   - If `Github` is empty or `WIP`, the script checks which fallback tokens are configured
-   - When `HUGGINGFACE_TOKEN` is present, the script first tries `https://huggingface.co/papers/{arxiv_id}` and then `https://huggingface.co/papers?q=<title>` to discover the paper page and extract its GitHub repo link
-   - If Hugging Face does not yield a GitHub repo and `ALPHAXIV_TOKEN` is present, the script falls back to `https://api.alphaxiv.org/papers/v3/legacy/{arxiv_id}`
-   - The AlphaXiv fallback looks for GitHub links in legacy fields like `paper.implementation`, `paper.marimo_implementation`, `paper.paper_group.resources`, `paper.resources`, then falls back to recursive scanning of the returned JSON
-   - External HTTP requests use explicit timeouts and limited retries for transient failures like `429` / `502` / `503` / `504`
-   - If fallback discovery succeeds, updates both `Github` and `Stars`
-   - If `Github` contains any other non-empty value, leaves the row unchanged
-4. **Results Summary**: Displays updated count and skipped items with reasons
+- one `.html` file
 
-### Example Output
+Output:
 
+- `/path/to/papers.csv`
+
+CSV columns:
+
+- `Name`
+- `Date`
+- `Github`
+- `Stars`
+- `Url`
+
+HTML mode behavior:
+
+- arXiv URLs are canonicalized to versionless `https://arxiv.org/abs/<id>`
+- `Date` is the precise original arXiv submission date from the arXiv abs page
+- rows are sorted by `Date` descending
+- missing GitHub or stars values are left blank
+- writes use a temp file and atomic replace
+
+## HTML expectations
+
+The HTML parser currently targets card-style markup like:
+
+- `div.chakra-card__root`
+- title inside `h2`
+- arXiv link inside `a[href]`
+
+Duplicate papers are deduplicated by canonical arXiv URL, not by title.
+
+## Notion expectations
+
+Your Notion database should have:
+
+- `Name` or `Title` as title property
+- `Github` as URL or rich text
+- `Stars` as number
+
+Optional arXiv source fields for fallback discovery:
+
+- `URL`
+- `Arxiv`
+- `arXiv`
+- `Paper URL`
+- `Link`
+
+When `Github` is empty or `WIP`, the sync flow tries to discover the repo from the paper:
+
+1. Hugging Face paper page
+2. Hugging Face paper search
+3. AlphaXiv legacy API
+
+## Notes
+
+- Invalid file path does not fall back to Notion mode
+- More than one positional argument is treated as a usage error
+- Concurrency and rate limiting remain enabled in both modes
+
+## Tests
+
+```bash
+uv run pytest
 ```
-✅ GitHub Token configured (5000 requests/hour)
-⚙️ Concurrency: GitHub=5, Notion=3
-⚙️ Request interval: 0.2s
-
-📊 GitHub API Rate Limit: 4999/5000 remaining
-
-📚 Data source ID: abcd1234...
-📝 Found 25 pages with Github field
-
-[1/25] awesome-project
-  📍 facebook/react | Current stars: 180000
-  ✅ Updated: 180000 → 182345 (+2345)
-
-[2/25] my-tool
-  📍 microsoft/vscode | Current stars: N/A
-  ✅ Updated: N/A → 145678
-
-============================================================
-✅ Updated: 23
-⏭️ Skipped: 2
-
-============================================================
-⏭️ Skipped rows (non-GitHub URLs, can be ignored):
-============================================================
-
-1. Local Project
-   Reason:     Invalid Github URL format
-   Github URL: http://localhost:3000
-   Notion URL: https://notion.so/...
-
-============================================================
-📊 GitHub API Rate Limit: 4976/5000 remaining
-```
-
-## Rate Limiting
-
-The script implements rate limiting to avoid hitting API quotas:
-
-### GitHub API
-- **Without token**: 60 requests/hour
-- **With token**: 5000 requests/hour
-- **Concurrent requests**: 5 (configurable via `GITHUB_CONCURRENT_LIMIT`)
-- **Request delay**: 0.2s (configurable via `REQUEST_DELAY`)
-
-### Notion API
-- **Concurrent requests**: 3 (configurable via `NOTION_CONCURRENT_LIMIT`)
-
-If you hit the GitHub rate limit, the script will automatically wait for it to reset before continuing.
-
-## Configuration Parameters
-
-You can adjust these constants in `main.py`:
-
-```python
-GITHUB_CONCURRENT_LIMIT = 5      # Max concurrent GitHub API requests
-NOTION_CONCURRENT_LIMIT = 3      # Max concurrent Notion API requests
-REQUEST_DELAY = 0.2              # Minimum delay between requests (seconds)
-```
-
-## Supported GitHub URL Formats
-
-The script handles various GitHub URL formats:
-
-- `https://github.com/owner/repo`
-- `http://github.com/owner/repo`
-- `www.github.com/owner/repo`
-- `github.com/owner/repo`
-- `https://github.com/owner/repo.git`
-- Any of the above with trailing slashes
-
-## Error Categories
-
-Skipped items are categorized into two types:
-
-### Minor (shown in gray)
-- Unsupported Github field content
-- No fallback discovery token configured
-- No Github URL found in Hugging Face Papers
-- Missing ALPHAXIV_TOKEN
-- No arXiv ID found for AlphaXiv API lookup
-- No Github URL found in AlphaXiv API
-- Discovered URL is not a valid GitHub repository
-
-These can typically be ignored (e.g., rows intentionally left without code links, or non-GitHub values you want to preserve).
-
-### Major (shown in red)
-- Repository not found
-- Rate limit exceeded
-- Request timeout
-- API errors
-
-These may need attention to fix invalid URLs or API issues.
-
-## Troubleshooting
-
-**"Missing required environment variables" error**
-- Ensure `NOTION_TOKEN` and `DATABASE_ID` are set in `.env` or shell environment
-
-**"Cannot get data_source_id" error**
-- Verify your `DATABASE_ID` is correct
-- Ensure your Notion integration has access to the database
-
-**"Repository not found" errors**
-- Check that the GitHub URL is correct and the repository exists
-- Private repositories require a GitHub token with access
-
-**Rate limit errors**
-- Set a `GITHUB_TOKEN` environment variable for higher limits
-- Consider reducing `GITHUB_CONCURRENT_LIMIT` if you still hit limits
-
-**Timeout errors**
-- Increase `REQUEST_DELAY` to reduce request frequency
-- Check your internet connection
-
-## Dependencies
-
-- **aiohttp**: Async HTTP client for API requests
-- **notion-client**: Official Notion API Python client
-- **requests**: Additional HTTP support (fallback)
-- **python-dotenv**: Optional, for loading environment variables from .env files
-
-## License
-
-This project is open source and available under the MIT License.
-
-## Contributing
-
-Contributions are welcome! Feel free to submit issues or pull requests.
