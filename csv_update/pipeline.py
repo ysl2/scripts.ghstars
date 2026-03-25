@@ -4,8 +4,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from html_to_csv.models import PaperRecord
 from shared.paper_enrichment import enrich_paper
+from shared.papers import PaperRecord
 
 
 NAME_COLUMN = "Name"

@@ -3,10 +3,10 @@ import os
 
 import aiohttp
 
-from html_to_csv.arxiv import ArxivClient
 from notion_sync.config import load_config_from_env
 from notion_sync.notion_client import NotionClient
 from notion_sync.pipeline import process_page
+from shared.arxiv import ArxivClient
 from shared.discovery import DiscoveryClient
 from shared.github import GitHubClient
 from shared.http import build_timeout

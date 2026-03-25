@@ -33,5 +33,4 @@ class ConversionResult:
 
 
 def sort_records(records: list[PaperRecord]) -> list[PaperRecord]:
-    """Sort by canonical arXiv URL descending."""
     return sorted(records, key=lambda record: arxiv_url_sort_key(record.url), reverse=True)

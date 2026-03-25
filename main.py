@@ -6,7 +6,6 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 from csv_update.runner import run_csv_mode
-from html_to_csv.runner import run_html_mode
 from notion_sync.runner import run_notion_mode
 from url_to_csv.runner import run_url_mode
 from url_to_csv.arxivxplorer import is_supported_arxivxplorer_url
@@ -23,7 +22,7 @@ def _normalize_argv(argv: list[str] | None) -> list[str]:
 
 def _validate_input_path(raw_path: str) -> Path | None:
     path = Path(raw_path).expanduser()
-    if path.suffix.lower() not in {".html", ".csv"} or not path.exists() or not path.is_file():
+    if path.suffix.lower() != ".csv" or not path.exists() or not path.is_file():
         return None
     return path
 
@@ -55,8 +54,6 @@ async def async_main(argv: list[str] | None = None) -> int:
         print(f"Input file not found or invalid: {Path(raw_input).expanduser()}", file=sys.stderr)
         return 1
 
-    if input_path.suffix.lower() == ".html":
-        return await run_html_mode(input_path)
     return await run_csv_mode(input_path)
 
 

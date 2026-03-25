@@ -5,7 +5,7 @@ import xml.etree.ElementTree as ET
 
 import aiohttp
 
-from shared.http import MAX_RETRIES, RateLimiter, build_timeout
+from shared.http import MAX_RETRIES, RateLimiter
 from shared.paper_identity import extract_arxiv_id
 
 

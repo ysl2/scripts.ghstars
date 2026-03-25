@@ -6,9 +6,9 @@ from urllib.parse import parse_qs, urlparse
 
 import aiohttp
 
-from html_to_csv.models import PaperSeed
 from shared.http import MAX_RETRIES, RateLimiter
 from shared.paper_identity import normalize_arxiv_url
+from shared.papers import PaperSeed
 
 
 ARXIVXPLORER_HOSTS = {"arxivxplorer.com", "www.arxivxplorer.com"}

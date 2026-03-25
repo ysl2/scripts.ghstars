@@ -2,14 +2,10 @@ import csv
 import tempfile
 from pathlib import Path
 
-from html_to_csv.models import PaperRecord, sort_records
+from shared.papers import PaperRecord, sort_records
 
 
 CSV_HEADERS = ["Name", "Url", "Github", "Stars"]
-
-
-def output_csv_path_for_html(html_path: Path) -> Path:
-    return html_path.with_suffix(".csv")
 
 
 def write_records_to_csv_path(records: list[PaperRecord], csv_path: Path) -> Path:
@@ -31,7 +27,3 @@ def write_records_to_csv_path(records: list[PaperRecord], csv_path: Path) -> Pat
 
     temp_path.replace(csv_path)
     return csv_path
-
-
-def write_records_to_csv(records: list[PaperRecord], html_path: Path) -> Path:
-    return write_records_to_csv_path(records, output_csv_path_for_html(html_path))

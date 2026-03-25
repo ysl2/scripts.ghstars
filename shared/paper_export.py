@@ -1,9 +1,9 @@
 import asyncio
 from pathlib import Path
 
-from html_to_csv.csv_writer import write_records_to_csv_path
-from html_to_csv.models import ConversionResult, PaperOutcome, PaperRecord, PaperSeed
+from shared.csv_io import write_records_to_csv_path
 from shared.paper_enrichment import enrich_paper
+from shared.papers import ConversionResult, PaperOutcome, PaperRecord, PaperSeed
 from shared.settings import DEFAULT_CONCURRENT_LIMIT
 
 
