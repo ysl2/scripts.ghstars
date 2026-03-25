@@ -1,4 +1,4 @@
-# Zotero Notion, CSV, And URL GitHub Stars
+# scripts.ghstars
 
 One CLI, three modes:
 
@@ -75,6 +75,7 @@ Currently supported sources:
 - `https://huggingface.co/papers/trending?q=...`
 - `https://huggingface.co/papers/month/YYYY-MM`
 - `https://huggingface.co/papers/month/YYYY-MM?q=...`
+- `https://www.semanticscholar.org/search?...`
 
 ```bash
 uv run main.py 'https://arxivxplorer.com/?q=streaming+semantic+3d+reconstruction&cats=cs.CV&year=2026&year=2025&year=2024'
@@ -84,17 +85,24 @@ uv run main.py 'https://arxivxplorer.com/?q=streaming+semantic+3d+reconstruction
 uv run main.py 'https://huggingface.co/papers/trending?q=semantic'
 ```
 
+```bash
+uv run main.py 'https://www.semanticscholar.org/search?year%5B0%5D=2025&year%5B1%5D=2026&fos%5B0%5D=computer-science&venue%5B0%5D=Computer%20Vision%20and%20Pattern%20Recognition&q=semantic%203d%20reconstruction&sort=pub-date'
+```
+
 Output example:
 
 - `./arxivxplorer-streaming-semantic-3d-reconstruction-cs.CV-2026-2025-2024.csv`
 - `./huggingface-papers-trending-semantic.csv`
+- `./semanticscholar-semantic-3d-reconstruction-2025-2026-computer-science-Computer-Vision-and-Pattern-Recognition.csv`
 
 URL mode behavior:
 
 - source-specific fetching is kept in separate adapters under `url_to_csv/`
 - arXiv Xplorer uses the site’s paging API instead of trying to click `Show More` in a browser
 - Hugging Face Papers parses the collection page’s embedded papers payload from the frontend response
-- only arXiv papers are converted into downstream rows
+- Semantic Scholar crawls the search result pages, then keeps only rows that can be normalized to canonical arXiv URLs
+- all URL modes normalize rows to canonical, versionless arXiv URLs before downstream enrichment
+- rows that cannot be mapped to arXiv are dropped from the final CSV
 - downstream repository discovery, star lookup, sorting, progress printing, and CSV writing reuse the same shared export logic as CSV update mode where applicable
 
 ## Notion expectations
