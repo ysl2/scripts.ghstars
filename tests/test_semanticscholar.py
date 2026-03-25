@@ -92,7 +92,7 @@ def test_extract_paper_seeds_from_semanticscholar_html_reads_title_links():
 
 
 @pytest.mark.anyio
-async def test_fetch_paper_seeds_from_semanticscholar_url_resolves_titles_to_arxiv_urls(tmp_path: Path):
+async def test_fetch_paper_seeds_from_semanticscholar_url_fetches_raw_candidates(tmp_path: Path):
     class FakeSemanticScholarClient:
         def __init__(self):
             self.calls = []
@@ -117,20 +117,7 @@ async def test_fetch_paper_seeds_from_semanticscholar_url_resolves_titles_to_arx
             </a>
             """
 
-    class FakeArxivClient:
-        def __init__(self):
-            self.calls = []
-
-        async def get_arxiv_id_by_title(self, title: str):
-            self.calls.append(title)
-            mapping = {
-                "Paper A": ("2501.00001", "title_search_exact", None),
-                "Paper B": ("2501.00002", "title_search_exact", None),
-            }
-            return mapping[title]
-
     client = FakeSemanticScholarClient()
-    arxiv_client = FakeArxivClient()
     messages = []
     result = await fetch_paper_seeds_from_semanticscholar_url(
         "https://www.semanticscholar.org/search"
@@ -141,16 +128,14 @@ async def test_fetch_paper_seeds_from_semanticscholar_url_resolves_titles_to_arx
         "&q=semantic%203d%20reconstruction"
         "&sort=pub-date",
         semanticscholar_client=client,
-        arxiv_client=arxiv_client,
         output_dir=tmp_path,
         status_callback=messages.append,
     )
 
     assert [(seed.name, seed.url) for seed in result.seeds] == [
-        ("Paper A", "https://arxiv.org/abs/2501.00001"),
-        ("Paper B", "https://arxiv.org/abs/2501.00002"),
+        ("Paper A", "https://www.semanticscholar.org/paper/Paper-A/abc123"),
+        ("Paper B", "https://www.semanticscholar.org/paper/Paper-B/def456"),
     ]
-    assert arxiv_client.calls == ["Paper A", "Paper B"]
     assert client.calls[0] == (
         "https://www.semanticscholar.org/search"
         "?year%5B0%5D=2025"
@@ -167,89 +152,3 @@ async def test_fetch_paper_seeds_from_semanticscholar_url_resolves_titles_to_arx
     )
     assert any("Fetching Semantic Scholar search results page 1" in message for message in messages)
     assert any("Fetched page 2: 2 results" in message for message in messages)
-    assert any("Resolving arXiv URLs from Semantic Scholar titles" in message for message in messages)
-
-
-@pytest.mark.anyio
-async def test_fetch_paper_seeds_from_semanticscholar_url_leaves_url_blank_when_title_search_fails(tmp_path: Path):
-    class FakeSemanticScholarClient:
-        async def fetch_search_page_html(self, url: str):
-            return """
-            <div class="cl-pager" data-total-pages="1" data-test-id="result-page-pagination"></div>
-            <a data-test-id="title-link" href="/paper/Found/abc123">
-              <h2 class="cl-paper-title">Found Paper</h2>
-            </a>
-            <a data-test-id="title-link" href="/paper/Missing/def456">
-              <h2 class="cl-paper-title">Missing Paper</h2>
-            </a>
-            """
-
-    class FakeArxivClient:
-        async def get_arxiv_id_by_title(self, title: str):
-            if title == "Found Paper":
-                return "2501.00001", "title_search_exact", None
-            return None, None, "No arXiv ID found from title search"
-
-    result = await fetch_paper_seeds_from_semanticscholar_url(
-        "https://www.semanticscholar.org/search?q=semantic%203d%20reconstruction&sort=pub-date",
-        semanticscholar_client=FakeSemanticScholarClient(),
-        arxiv_client=FakeArxivClient(),
-        output_dir=tmp_path,
-    )
-
-    assert [(seed.name, seed.url) for seed in result.seeds] == [
-        ("Found Paper", "https://arxiv.org/abs/2501.00001"),
-        ("Missing Paper", ""),
-    ]
-
-
-@pytest.mark.anyio
-async def test_fetch_paper_seeds_from_semanticscholar_url_prefers_huggingface_title_resolution(tmp_path: Path):
-    class FakeSemanticScholarClient:
-        async def fetch_search_page_html(self, url: str):
-            return """
-            <div class="cl-pager" data-total-pages="1" data-test-id="result-page-pagination"></div>
-            <a data-test-id="title-link" href="/paper/Fast3R/abc123">
-              <h2 class="cl-paper-title">Fast3R: Towards 3D Reconstruction of 1000+ Images in One Forward Pass</h2>
-            </a>
-            """
-
-    class FakeDiscoveryClient:
-        def __init__(self):
-            self.huggingface_token = "hf_token"
-
-        async def get_huggingface_search_html(self, title: str):
-            assert title == "Fast3R: Towards 3D Reconstruction of 1000+ Images in One Forward Pass"
-            return (
-                """
-                <div
-                  data-target="DailyPapers"
-                  data-props="{
-                    &quot;query&quot;:{&quot;q&quot;:&quot;Fast3R: Towards 3D Reconstruction of 1000+ Images in One Forward Pass&quot;},
-                    &quot;searchResults&quot;:[
-                      {
-                        &quot;title&quot;:&quot;Fast3R: Towards 3D Reconstruction of 1000+ Images in One Forward Pass&quot;,
-                        &quot;paper&quot;:{&quot;id&quot;:&quot;2501.13928&quot;,&quot;title&quot;:&quot;Fast3R: Towards 3D Reconstruction of 1000+ Images in One Forward Pass&quot;}
-                      }
-                    ]
-                  }">
-                </div>
-                """,
-                None,
-            )
-
-    class FakeArxivClient:
-        async def get_arxiv_id_by_title(self, title: str):
-            raise AssertionError("arXiv fallback should not be used when Hugging Face already matched")
-
-    result = await fetch_paper_seeds_from_semanticscholar_url(
-        "https://www.semanticscholar.org/search?q=semantic%203d%20reconstruction&sort=pub-date",
-        semanticscholar_client=FakeSemanticScholarClient(),
-        discovery_client=FakeDiscoveryClient(),
-        arxiv_client=FakeArxivClient(),
-        output_dir=tmp_path,
-    )
-
-    assert [(seed.name, seed.url) for seed in result.seeds] == [
-        ("Fast3R: Towards 3D Reconstruction of 1000+ Images in One Forward Pass", "https://arxiv.org/abs/2501.13928"),
-    ]

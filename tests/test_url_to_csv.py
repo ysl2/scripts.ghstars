@@ -134,12 +134,16 @@ async def test_fetch_paper_seeds_from_url_reads_semanticscholar_search_results()
             <a data-test-id="title-link" href="/paper/Search-Match/abc123">
               <h2 class="cl-paper-title">Search Match</h2>
             </a>
+            <a data-test-id="title-link" href="/paper/Missing/def456">
+              <h2 class="cl-paper-title">Missing</h2>
+            </a>
             """
 
     class FakeArxivClient:
         async def get_arxiv_id_by_title(self, title: str):
-            assert title == "Search Match"
-            return "2502.00002", "title_search_exact", None
+            if title == "Search Match":
+                return "2502.00002", "title_search_exact", None
+            return None, None, "No arXiv ID found from title search"
 
     messages = []
     result = await fetch_paper_seeds_from_url(
@@ -152,6 +156,8 @@ async def test_fetch_paper_seeds_from_url_reads_semanticscholar_search_results()
     assert [seed.name for seed in result.seeds] == ["Search Match"]
     assert [seed.url for seed in result.seeds] == ["https://arxiv.org/abs/2502.00002"]
     assert any("Fetching Semantic Scholar search results page 1" in message for message in messages)
+    assert any("Normalizing to arXiv-backed papers" in message for message in messages)
+    assert any("Kept 1/2 arXiv-backed papers" in message for message in messages)
 
 
 @pytest.mark.anyio
@@ -345,12 +351,6 @@ async def test_export_url_to_csv_writes_semanticscholar_results_in_output_dir(tm
             "Url": "https://arxiv.org/abs/2501.00001",
             "Github": "https://github.com/foo/old",
             "Stars": "10",
-        },
-        {
-            "Name": "Missing",
-            "Url": "",
-            "Github": "",
-            "Stars": "",
         },
     ]
 
@@ -565,7 +565,7 @@ async def test_run_url_mode_supports_semanticscholar_url(tmp_path: Path, capsys)
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "Fetching Semantic Scholar search results page 1" in captured.out
-    assert "Resolving arXiv URLs from Semantic Scholar titles" in captured.out
+    assert "Normalizing to arXiv-backed papers" in captured.out
     assert "Found 1 papers" in captured.out
     assert "[1/1] Paper A" in captured.out
     assert "foo/bar" in captured.out
