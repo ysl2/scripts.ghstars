@@ -1,5 +1,5 @@
 [project]
-name = "ghstars"
+name = "scripts.ghstars"
 version = "0.1.0"
 description = "Update GitHub links and star counts for papers from Notion, CSV, and URL sources"
 readme = "README.md"

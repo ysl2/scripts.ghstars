@@ -46,7 +46,7 @@ class GitHubClient:
         self.rate_limiter = RateLimiter(min_interval)
 
     async def get_star_count(self, owner: str, repo: str) -> tuple[int | None, str | None]:
-        headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "ghstars"}
+        headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "scripts.ghstars"}
         if self.github_token:
             headers["Authorization"] = f"Bearer {self.github_token}"
 

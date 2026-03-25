@@ -1,1 +1,1 @@
-"""Runtime package for ghstars."""
+"""Runtime package for scripts.ghstars."""

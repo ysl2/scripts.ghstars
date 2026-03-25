@@ -135,7 +135,7 @@ class HuggingFacePapersClient:
             async with self.semaphore:
                 await self.rate_limiter.acquire()
                 try:
-                    async with self.session.get(url, headers={"User-Agent": "ghstars"}) as response:
+                    async with self.session.get(url, headers={"User-Agent": "scripts.ghstars"}) as response:
                         if response.status == 200:
                             return await response.text()
                         if response.status in {429, 500, 502, 503, 504} and attempt < MAX_RETRIES:

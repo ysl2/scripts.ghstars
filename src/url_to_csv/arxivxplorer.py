@@ -151,7 +151,7 @@ class ArxivXplorerSearchClient:
             async with self.semaphore:
                 await self.rate_limiter.acquire()
                 try:
-                    async with self.session.get(url, params=params, headers={"User-Agent": "ghstars"}) as response:
+                    async with self.session.get(url, params=params, headers={"User-Agent": "scripts.ghstars"}) as response:
                         if response.status == 200:
                             payload = await response.json()
                             return payload if isinstance(payload, list) else []
