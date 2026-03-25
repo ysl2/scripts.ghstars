@@ -28,6 +28,7 @@ async def build_paper_outcome(
             url=enrichment.url,
             github=enrichment.github_url or "",
             stars=enrichment.stars if enrichment.reason is None else "",
+            sort_index=index,
         ),
         reason=enrichment.reason,
     )

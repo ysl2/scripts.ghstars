@@ -5,8 +5,9 @@ import re
 import aiohttp
 
 from src.shared.github import normalize_github_url
+from src.shared.headless_browser import dump_rendered_html
 from src.shared.http import MAX_RETRIES, RateLimiter
-from src.shared.paper_identity import extract_arxiv_id
+from src.shared.paper_identity import extract_arxiv_id, normalize_semanticscholar_paper_url
 
 
 def find_github_url_in_text(text: str) -> str | None:
@@ -66,6 +67,29 @@ def find_github_url_in_huggingface_paper_html(html: str) -> str | None:
                     return github_url
 
     return None
+
+
+def find_github_url_in_semanticscholar_paper_html(html: str) -> str | None:
+    if not html or not isinstance(html, str):
+        return None
+
+    description_patterns = (
+        r'<meta[^>]*name="description"[^>]*content="([^"]+)"',
+        r'<meta[^>]*name="twitter:description"[^>]*content="([^"]+)"',
+        r'<meta[^>]*property="og:description"[^>]*content="([^"]+)"',
+    )
+    for pattern in description_patterns:
+        for match in re.findall(pattern, html, flags=re.IGNORECASE):
+            github_url = find_github_url_in_text(html_lib.unescape(match))
+            if github_url:
+                return github_url
+
+    for match in re.findall(r'<script[^>]*class="schema-data"[^>]*>(.*?)</script>', html, flags=re.IGNORECASE | re.S):
+        github_url = find_github_url_in_text(match)
+        if github_url:
+            return github_url
+
+    return find_github_url_in_text(html)
 
 
 def find_huggingface_paper_id_in_search_html(html: str) -> str | None:
@@ -176,14 +200,45 @@ class DiscoveryClient:
             retry_prefix="AlphaXiv API",
         )
 
+    async def get_semanticscholar_paper_html(self, url: str):
+        normalized_url = normalize_semanticscholar_paper_url(url)
+        if not normalized_url:
+            return None, "Unsupported Semantic Scholar paper URL"
+
+        async with self.semaphore:
+            await self.rate_limiter.acquire()
+            try:
+                html = await dump_rendered_html(
+                    normalized_url,
+                    virtual_time_budget_ms=3000,
+                    timeout_seconds=8.0,
+                )
+                return html, None
+            except asyncio.TimeoutError:
+                return None, "Semantic Scholar paper timeout"
+            except Exception as exc:
+                return None, f"Semantic Scholar paper request failed: {exc}"
+
     async def resolve_github_url(self, seed) -> str | None:
         return await resolve_github_url(seed, self)
 
 
 async def resolve_github_url(seed, client) -> str | None:
-    arxiv_id = extract_arxiv_id(getattr(seed, "url", ""))
+    url = getattr(seed, "url", "")
+    arxiv_id = extract_arxiv_id(url)
     if not arxiv_id:
-        return None
+        normalized_semanticscholar_url = normalize_semanticscholar_paper_url(url)
+        if not normalized_semanticscholar_url:
+            return None
+
+        fetcher = getattr(client, "get_semanticscholar_paper_html", None)
+        if not callable(fetcher):
+            return None
+
+        html, error = await fetcher(normalized_semanticscholar_url)
+        if error:
+            return None
+        return find_github_url_in_semanticscholar_paper_html(html)
 
     if getattr(client, "huggingface_token", ""):
         html, error = await client.get_huggingface_paper_html_by_arxiv_id(arxiv_id)

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 from src.shared.discovery import resolve_github_url
 from src.shared.github import extract_owner_repo, normalize_github_url
-from src.shared.paper_identity import normalize_arxiv_url
+from src.shared.paper_identity import normalize_arxiv_url, normalize_semanticscholar_paper_url
 
 
 @dataclass(frozen=True)
@@ -24,8 +24,8 @@ async def enrich_paper(
     github_client,
     existing_github: str | None = None,
 ) -> EnrichedPaper:
-    normalized_url = normalize_arxiv_url(url)
-    if not normalized_url:
+    normalized_url = normalize_arxiv_url(url) or normalize_semanticscholar_paper_url(url)
+    if normalized_url is None:
         return EnrichedPaper(
             name=name,
             url=url or "",

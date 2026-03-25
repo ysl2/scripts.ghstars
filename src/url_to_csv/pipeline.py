@@ -8,13 +8,18 @@ from src.url_to_csv.huggingface_papers import (
     fetch_paper_seeds_from_huggingface_papers_url,
 )
 from src.url_to_csv.models import FetchedSeedsResult
+from src.url_to_csv.semanticscholar import (
+    fetch_paper_seeds_from_semanticscholar_url,
+)
 from src.url_to_csv.sources import UrlSource, detect_url_source
+
 
 async def fetch_paper_seeds_from_url(
     input_url: str,
     *,
     search_client=None,
     huggingface_papers_client=None,
+    semanticscholar_client=None,
     output_dir: Path | None = None,
     status_callback=None,
 ) -> FetchedSeedsResult:
@@ -39,6 +44,16 @@ async def fetch_paper_seeds_from_url(
             status_callback=status_callback,
         )
 
+    if source == UrlSource.SEMANTIC_SCHOLAR:
+        if semanticscholar_client is None:
+            raise ValueError("Missing Semantic Scholar client")
+        return await fetch_paper_seeds_from_semanticscholar_url(
+            input_url,
+            semanticscholar_client=semanticscholar_client,
+            output_dir=output_dir,
+            status_callback=status_callback,
+        )
+
     raise ValueError(f"Unsupported URL: {input_url}")
 
 
@@ -47,6 +62,7 @@ async def export_url_to_csv(
     *,
     search_client=None,
     huggingface_papers_client=None,
+    semanticscholar_client=None,
     discovery_client,
     github_client,
     output_dir: Path | None = None,
@@ -57,6 +73,7 @@ async def export_url_to_csv(
         input_url,
         search_client=search_client,
         huggingface_papers_client=huggingface_papers_client,
+        semanticscholar_client=semanticscholar_client,
         output_dir=output_dir,
         status_callback=status_callback,
     )

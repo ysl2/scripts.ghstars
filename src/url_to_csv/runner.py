@@ -14,6 +14,7 @@ from src.shared.skip_reasons import is_minor_skip_reason
 from src.url_to_csv.arxivxplorer import ArxivXplorerSearchClient
 from src.url_to_csv.huggingface_papers import HuggingFacePapersClient
 from src.url_to_csv.pipeline import export_url_to_csv
+from src.url_to_csv.semanticscholar import SemanticScholarSearchClient
 from src.url_to_csv.sources import is_supported_url_source
 
 
@@ -28,6 +29,7 @@ async def run_url_mode(
     session_factory=aiohttp.ClientSession,
     search_client_cls=ArxivXplorerSearchClient,
     huggingface_papers_client_cls=HuggingFacePapersClient,
+    semanticscholar_client_cls=SemanticScholarSearchClient,
     discovery_client_cls=DiscoveryClient,
     github_client_cls=GitHubClient,
 ) -> int:
@@ -46,6 +48,12 @@ async def run_url_mode(
         )
         huggingface_papers_client = build_client(
             huggingface_papers_client_cls,
+            session,
+            max_concurrent=CONCURRENT_LIMIT,
+            min_interval=REQUEST_DELAY,
+        )
+        semanticscholar_client = build_client(
+            semanticscholar_client_cls,
             session,
             max_concurrent=CONCURRENT_LIMIT,
             min_interval=REQUEST_DELAY,
@@ -71,6 +79,7 @@ async def run_url_mode(
             output_dir=output_dir,
             search_client=search_client,
             huggingface_papers_client=huggingface_papers_client,
+            semanticscholar_client=semanticscholar_client,
             discovery_client=discovery_client,
             github_client=github_client,
             status_callback=lambda message: print(message, flush=True),

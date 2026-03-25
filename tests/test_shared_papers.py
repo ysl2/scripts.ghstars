@@ -44,3 +44,27 @@ def test_write_records_to_csv_path_sorts_and_serializes_stars(tmp_path):
             "Stars": "10",
         },
     ]
+
+
+def test_sort_records_preserves_source_order_for_non_arxiv_urls():
+    records = [
+        PaperRecord(
+            name="First",
+            github="",
+            stars="",
+            url="https://www.semanticscholar.org/paper/first/1",
+            sort_index=1,
+        ),
+        PaperRecord(
+            name="Second",
+            github="",
+            stars="",
+            url="https://www.semanticscholar.org/paper/second/2",
+            sort_index=2,
+        ),
+    ]
+
+    assert [record.url for record in sort_records(records)] == [
+        "https://www.semanticscholar.org/paper/first/1",
+        "https://www.semanticscholar.org/paper/second/2",
+    ]

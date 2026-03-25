@@ -125,6 +125,30 @@ async def test_fetch_paper_seeds_from_url_reads_huggingface_collection_payload()
 
 
 @pytest.mark.anyio
+async def test_fetch_paper_seeds_from_url_reads_semanticscholar_search_results():
+    class FakeSemanticScholarClient:
+        async def fetch_search_page_html(self, url: str):
+            assert "q=semantic%203d%20reconstruction" in url
+            return """
+            <div class="cl-pager" data-total-pages="1" data-test-id="result-page-pagination"></div>
+            <a data-test-id="title-link" href="/paper/Search-Match/abc123">
+              <h2 class="cl-paper-title">Search Match</h2>
+            </a>
+            """
+
+    messages = []
+    result = await fetch_paper_seeds_from_url(
+        "https://www.semanticscholar.org/search?q=semantic%203d%20reconstruction&sort=pub-date",
+        semanticscholar_client=FakeSemanticScholarClient(),
+        status_callback=messages.append,
+    )
+
+    assert [seed.name for seed in result.seeds] == ["Search Match"]
+    assert [seed.url for seed in result.seeds] == ["https://www.semanticscholar.org/paper/Search-Match/abc123"]
+    assert any("Fetching Semantic Scholar search results page 1" in message for message in messages)
+
+
+@pytest.mark.anyio
 async def test_export_url_to_csv_writes_sorted_csv_in_output_dir(tmp_path: Path):
     class FakeSearchClient:
         async def search(self, query, page: int):
@@ -242,6 +266,64 @@ async def test_export_url_to_csv_writes_huggingface_results_in_output_dir(tmp_pa
         {
             "Name": "Older",
             "Url": "https://arxiv.org/abs/2501.00001",
+            "Github": "https://github.com/foo/old",
+            "Stars": "10",
+        },
+    ]
+
+
+@pytest.mark.anyio
+async def test_export_url_to_csv_writes_semanticscholar_results_in_output_dir(tmp_path: Path):
+    class FakeSemanticScholarClient:
+        async def fetch_search_page_html(self, url: str):
+            return """
+            <div class="cl-pager" data-total-pages="1" data-test-id="result-page-pagination"></div>
+            <a data-test-id="title-link" href="/paper/Newer/def456">
+              <h2 class="cl-paper-title">Newer</h2>
+            </a>
+            <a data-test-id="title-link" href="/paper/Older/abc123">
+              <h2 class="cl-paper-title">Older</h2>
+            </a>
+            """
+
+    class FakeDiscoveryClient:
+        async def resolve_github_url(self, seed):
+            mapping = {
+                "https://www.semanticscholar.org/paper/Older/abc123": "https://github.com/foo/old",
+                "https://www.semanticscholar.org/paper/Newer/def456": "https://github.com/foo/new",
+            }
+            return mapping[seed.url]
+
+    class FakeGitHubClient:
+        async def get_star_count(self, owner, repo):
+            mapping = {
+                ("foo", "old"): (10, None),
+                ("foo", "new"): (20, None),
+            }
+            return mapping[(owner, repo)]
+
+    result = await export_url_to_csv(
+        "https://www.semanticscholar.org/search?q=semantic%203d%20reconstruction&sort=pub-date",
+        output_dir=tmp_path,
+        semanticscholar_client=FakeSemanticScholarClient(),
+        discovery_client=FakeDiscoveryClient(),
+        github_client=FakeGitHubClient(),
+    )
+
+    with result.csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert result.csv_path == tmp_path / "semanticscholar-semantic-3d-reconstruction.csv"
+    assert rows == [
+        {
+            "Name": "Newer",
+            "Url": "https://www.semanticscholar.org/paper/Newer/def456",
+            "Github": "https://github.com/foo/new",
+            "Stars": "20",
+        },
+        {
+            "Name": "Older",
+            "Url": "https://www.semanticscholar.org/paper/Older/abc123",
             "Github": "https://github.com/foo/old",
             "Stars": "10",
         },
@@ -375,6 +457,80 @@ async def test_run_url_mode_supports_huggingface_papers_collection_url(tmp_path:
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "Fetching Hugging Face Papers collection" in captured.out
+    assert "Found 1 papers" in captured.out
+    assert "[1/1] Paper A" in captured.out
+    assert "foo/bar" in captured.out
+    assert "Wrote CSV:" in captured.out
+
+
+@pytest.mark.anyio
+async def test_run_url_mode_supports_semanticscholar_url(tmp_path: Path, capsys):
+    input_url = "https://www.semanticscholar.org/search?q=semantic%203d%20reconstruction&sort=pub-date"
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeSearchClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+
+        async def search(self, query, page: int):
+            raise AssertionError("arXiv Xplorer client should not be used for Semantic Scholar URLs")
+
+    class FakeHuggingFacePapersClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+
+        async def fetch_collection_html(self, url: str):
+            raise AssertionError("Hugging Face client should not be used for Semantic Scholar URLs")
+
+    class FakeSemanticScholarClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+
+        async def fetch_search_page_html(self, url: str):
+            return """
+            <div class="cl-pager" data-total-pages="1" data-test-id="result-page-pagination"></div>
+            <a data-test-id="title-link" href="/paper/Paper-A/abc123">
+              <h2 class="cl-paper-title">Paper A</h2>
+            </a>
+            """
+
+    class FakeDiscoveryClient:
+        def __init__(self, session, *, huggingface_token="", alphaxiv_token="", max_concurrent=0, min_interval=0):
+            self.session = session
+            self.huggingface_token = huggingface_token
+            self.alphaxiv_token = alphaxiv_token
+
+        async def resolve_github_url(self, seed):
+            return "https://github.com/foo/bar"
+
+    class FakeGitHubClient:
+        def __init__(self, session, github_token="", max_concurrent=0, min_interval=0):
+            self.session = session
+            self.github_token = github_token
+
+        async def get_star_count(self, owner, repo):
+            return 11, None
+
+    exit_code = await run_url_mode(
+        input_url,
+        output_dir=tmp_path,
+        session_factory=lambda **kwargs: FakeSession(),
+        search_client_cls=FakeSearchClient,
+        huggingface_papers_client_cls=FakeHuggingFacePapersClient,
+        semanticscholar_client_cls=FakeSemanticScholarClient,
+        discovery_client_cls=FakeDiscoveryClient,
+        github_client_cls=FakeGitHubClient,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Fetching Semantic Scholar search results page 1" in captured.out
     assert "Found 1 papers" in captured.out
     assert "[1/1] Paper A" in captured.out
     assert "foo/bar" in captured.out

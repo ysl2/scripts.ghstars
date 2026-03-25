@@ -89,3 +89,29 @@ async def test_resolve_github_url_falls_back_from_huggingface_to_alphaxiv():
         ("hf_search", "Paper Title"),
         ("alphaxiv", "2603.18493"),
     ]
+
+
+@pytest.mark.anyio
+async def test_resolve_github_url_reads_semanticscholar_detail_pages():
+    class FakeDiscoveryClient:
+        def __init__(self):
+            self.huggingface_token = ""
+            self.alphaxiv_token = ""
+            self.calls = []
+
+        async def get_semanticscholar_paper_html(self, url):
+            self.calls.append(url)
+            return (
+                '<meta name="description" '
+                'content="Code available at https://github.com/foo/bar.">',
+                None,
+            )
+
+    client = FakeDiscoveryClient()
+    github_url = await resolve_github_url(
+        FakeSeed(name="Paper Title", url="https://www.semanticscholar.org/paper/Foo/abc123"),
+        client,
+    )
+
+    assert github_url == "https://github.com/foo/bar"
+    assert client.calls == ["https://www.semanticscholar.org/paper/Foo/abc123"]

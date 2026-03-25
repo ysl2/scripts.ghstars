@@ -104,6 +104,25 @@ async def test_async_main_runs_url_mode_when_given_supported_huggingface_papers_
 
 
 @pytest.mark.anyio
+async def test_async_main_runs_url_mode_when_given_supported_semanticscholar_url(monkeypatch):
+    input_url = "https://www.semanticscholar.org/search?q=semantic%203d%20reconstruction&sort=pub-date"
+
+    notion_runner = AsyncMock(return_value=0)
+    csv_runner = AsyncMock(return_value=0)
+    url_runner = AsyncMock(return_value=0)
+    monkeypatch.setattr(app, "run_notion_mode", notion_runner)
+    monkeypatch.setattr(app, "run_csv_mode", csv_runner)
+    monkeypatch.setattr(app, "run_url_mode", url_runner, raising=False)
+
+    exit_code = await app.async_main([input_url])
+
+    assert exit_code == 0
+    notion_runner.assert_not_awaited()
+    csv_runner.assert_not_awaited()
+    url_runner.assert_awaited_once_with(input_url)
+
+
+@pytest.mark.anyio
 async def test_async_main_returns_error_when_given_missing_html_path(tmp_path: Path, capsys, monkeypatch):
     html_path = tmp_path / "missing.html"
 
