@@ -130,16 +130,56 @@ def _extract_daily_papers_payload(html_text: str) -> dict:
 
 
 def _select_paper_items(payload: dict) -> list[dict]:
-    query = payload.get("query")
-    if isinstance(query, dict) and (query.get("q") or "").strip():
-        search_results = payload.get("searchResults")
-        if isinstance(search_results, list):
-            return [item for item in search_results if isinstance(item, dict)]
+    if _has_search_query(payload):
+        search_results = _filter_paper_items(payload.get("searchResults"))
+        if _is_month_payload(payload):
+            return _intersect_paper_items(search_results, _filter_paper_items(payload.get("dailyPapers")))
+        if search_results:
+            return search_results
 
-    daily_papers = payload.get("dailyPapers")
-    if isinstance(daily_papers, list):
-        return [item for item in daily_papers if isinstance(item, dict)]
-    return []
+    return _filter_paper_items(payload.get("dailyPapers"))
+
+
+def _has_search_query(payload: dict) -> bool:
+    query = payload.get("query")
+    return isinstance(query, dict) and bool((query.get("q") or "").strip())
+
+
+def _is_month_payload(payload: dict) -> bool:
+    return str(payload.get("periodType") or "").strip().lower() == "month"
+
+
+def _filter_paper_items(items) -> list[dict]:
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _intersect_paper_items(search_results: list[dict], daily_papers: list[dict]) -> list[dict]:
+    if not search_results or not daily_papers:
+        return []
+
+    daily_ids = {
+        paper_id
+        for item in daily_papers
+        if (paper_id := _extract_paper_id(item)) is not None
+    }
+    return [
+        item
+        for item in search_results
+        if (paper_id := _extract_paper_id(item)) is not None and paper_id in daily_ids
+    ]
+
+
+def _extract_paper_id(item: dict) -> str | None:
+    paper = item.get("paper")
+    if not isinstance(paper, dict):
+        return None
+
+    paper_id = str(paper.get("id", "")).strip()
+    if not ARXIV_ID_PATTERN.match(paper_id):
+        return None
+    return paper_id
 
 
 def _paper_seed_from_huggingface_item(item: dict) -> PaperSeed | None:

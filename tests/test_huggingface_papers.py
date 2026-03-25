@@ -65,6 +65,44 @@ def test_extract_paper_seeds_from_huggingface_html_prefers_search_results_for_qu
     ]
 
 
+def test_extract_paper_seeds_from_huggingface_html_limits_month_query_pages_to_month_results():
+    payload = {
+        "periodType": "month",
+        "dateString": "2026-03-01",
+        "query": {"q": "semantic"},
+        "dailyPapers": [
+            {
+                "paper": {"id": "2603.00001", "title": "March Match"},
+                "title": "March Match",
+            },
+            {
+                "paper": {"id": "2603.00002", "title": "March Other"},
+                "title": "March Other",
+            },
+        ],
+        "searchResults": [
+            {
+                "paper": {"id": "2603.00001", "title": "March Match"},
+                "title": "March Match",
+            },
+            {
+                "paper": {"id": "2502.00003", "title": "Global Match Outside Month"},
+                "title": "Global Match Outside Month",
+            },
+        ],
+    }
+    html_text = (
+        '<div class="SVELTE_HYDRATER contents" '
+        f'data-target="DailyPapers" data-props="{html.escape(json.dumps(payload))}"></div>'
+    )
+
+    seeds = extract_paper_seeds_from_huggingface_html(html_text)
+
+    assert [(seed.name, seed.url) for seed in seeds] == [
+        ("March Match", "https://arxiv.org/abs/2603.00001"),
+    ]
+
+
 def test_extract_paper_seeds_from_huggingface_html_falls_back_to_daily_papers_without_query():
     payload = {
         "query": {},
