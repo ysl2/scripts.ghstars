@@ -13,6 +13,7 @@ from src.shared.paper_identity import extract_arxiv_id, normalize_arxiv_url, nor
 
 
 HUGGINGFACE_PAPER_ID_PATTERN = re.compile(r"^[0-9]{4}\.[0-9]{4,5}$")
+HUGGINGFACE_DIRECT_FETCH_ATTEMPTS = 3
 
 
 class _DiscoveryRequestGate:
@@ -369,20 +370,23 @@ async def resolve_github_url(seed, client) -> str | None:
         return find_github_url_in_semanticscholar_paper_html(html)
 
     if getattr(client, "huggingface_token", ""):
-        github_url, error = await _get_huggingface_github_url_by_arxiv_id(client, arxiv_id)
+        github_url, error = await _get_huggingface_github_url_by_arxiv_id(
+            client,
+            arxiv_id,
+            attempts=HUGGINGFACE_DIRECT_FETCH_ATTEMPTS,
+        )
         if github_url:
             return github_url
-        if not error:
-            github_url, retry_error = await _get_huggingface_github_url_by_arxiv_id(client, arxiv_id)
-            if github_url:
-                return github_url
-            error = retry_error
         if error:
             search_html, search_error = await client.get_huggingface_search_html(getattr(seed, "name", ""))
             if not search_error:
                 paper_id = find_huggingface_paper_id_in_search_html(search_html, getattr(seed, "name", ""))
                 if paper_id and paper_id == arxiv_id:
-                    github_url, page_error = await _get_huggingface_github_url_by_arxiv_id(client, paper_id)
+                    github_url, page_error = await _get_huggingface_github_url_by_arxiv_id(
+                        client,
+                        paper_id,
+                        attempts=HUGGINGFACE_DIRECT_FETCH_ATTEMPTS,
+                    )
                     if github_url:
                         return github_url
 
@@ -394,12 +398,22 @@ async def resolve_github_url(seed, client) -> str | None:
     return None
 
 
-async def _get_huggingface_github_url_by_arxiv_id(client, arxiv_id: str) -> tuple[str | None, str | None]:
-    html, error = await client.get_huggingface_paper_html_by_arxiv_id(arxiv_id)
-    if error:
-        return None, error
+async def _get_huggingface_github_url_by_arxiv_id(
+    client,
+    arxiv_id: str,
+    *,
+    attempts: int = 1,
+) -> tuple[str | None, str | None]:
+    for _ in range(max(1, attempts)):
+        html, error = await client.get_huggingface_paper_html_by_arxiv_id(arxiv_id)
+        if error:
+            return None, error
 
-    return find_github_url_in_huggingface_paper_html(html), None
+        github_url = find_github_url_in_huggingface_paper_html(html)
+        if github_url:
+            return github_url, None
+
+    return None, None
 
 
 async def resolve_arxiv_id_by_title(
