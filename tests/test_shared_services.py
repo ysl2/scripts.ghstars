@@ -156,6 +156,7 @@ async def test_resolve_github_url_falls_back_from_huggingface_to_alphaxiv():
     assert github_url == "https://github.com/foo/bar"
     assert client.calls == [
         ("hf_paper", "2603.18493"),
+        ("hf_paper", "2603.18493"),
         ("alphaxiv", "2603.18493"),
     ]
 
@@ -252,6 +253,67 @@ async def test_discovery_client_caches_concurrent_github_resolution_for_same_pap
 
 
 @pytest.mark.anyio
+async def test_discovery_client_does_not_serialize_different_upstreams_under_one_shared_semaphore():
+    from src.shared.discovery import DiscoveryClient
+
+    release_response = asyncio.Event()
+
+    class FakeResponse:
+        def __init__(self, payload, *, status=200):
+            self.payload = payload
+            self.status = status
+
+        async def __aenter__(self):
+            await release_response.wait()
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def text(self):
+            return self.payload
+
+        async def json(self):
+            return self.payload
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, headers=None, params=None):
+            self.calls.append(url)
+            if "api.alphaxiv.org" in url:
+                return FakeResponse({"paper": {"implementation": "https://github.com/foo/bar"}})
+            return FakeResponse('<script>window.__DATA__={"githubRepo":"https://github.com/foo/bar"}</script>')
+
+    session = FakeSession()
+    client = DiscoveryClient(
+        session=session,
+        huggingface_token="hf_token",
+        alphaxiv_token="ax_token",
+        max_concurrent=1,
+        min_interval=0,
+    )
+
+    hf_task = asyncio.create_task(client.get_huggingface_paper_html_by_arxiv_id("2603.18493"))
+    alphaxiv_task = asyncio.create_task(client.get_alphaxiv_paper_legacy("2603.18493"))
+
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert session.calls == [
+        "https://huggingface.co/papers/2603.18493",
+        "https://api.alphaxiv.org/papers/v3/legacy/2603.18493",
+    ]
+
+    release_response.set()
+    hf_result, alphaxiv_result = await asyncio.gather(hf_task, alphaxiv_task)
+
+    assert hf_result == ('<script>window.__DATA__={"githubRepo":"https://github.com/foo/bar"}</script>', None)
+    assert alphaxiv_result == ({"paper": {"implementation": "https://github.com/foo/bar"}}, None)
+
+
+@pytest.mark.anyio
 async def test_github_client_caches_concurrent_star_lookup_for_same_repo():
     class FakeResponse:
         status = 200
@@ -315,7 +377,7 @@ async def test_rate_limiter_allows_multiple_waiters_to_sleep_without_holding_loc
 
 
 @pytest.mark.anyio
-async def test_resolve_github_url_does_not_refetch_same_huggingface_page_after_successful_no_repo_result():
+async def test_resolve_github_url_retries_same_huggingface_page_once_after_successful_no_repo_result():
     class FakeDiscoveryClient:
         def __init__(self):
             self.huggingface_token = "hf_token"
@@ -324,20 +386,17 @@ async def test_resolve_github_url_does_not_refetch_same_huggingface_page_after_s
 
         async def get_huggingface_paper_html_by_arxiv_id(self, arxiv_id):
             self.calls.append(("hf_paper", arxiv_id))
-            return "<html><body>No repo here</body></html>", None
+            if self.calls == [("hf_paper", "2603.18493")]:
+                return "<html><body>No repo here</body></html>", None
+            return '<script>window.__DATA__={"githubRepo":"https://github.com/foo/bar"}</script>', None
 
         async def get_huggingface_search_html(self, title):
             self.calls.append(("hf_search", title))
-            return (
-                """
-                <a href="/papers/2603.18493">Paper Title</a>
-                """,
-                None,
-            )
+            raise AssertionError("title search should not run when a second direct paper fetch already recovers the repo")
 
         async def get_alphaxiv_paper_legacy(self, arxiv_id):
             self.calls.append(("alphaxiv", arxiv_id))
-            return {"paper": {"implementation": "https://github.com/foo/bar"}}, None
+            raise AssertionError("AlphaXiv fallback should not run when the second direct paper fetch recovers the repo")
 
     client = FakeDiscoveryClient()
     github_url = await resolve_github_url(
@@ -348,5 +407,5 @@ async def test_resolve_github_url_does_not_refetch_same_huggingface_page_after_s
     assert github_url == "https://github.com/foo/bar"
     assert client.calls == [
         ("hf_paper", "2603.18493"),
-        ("alphaxiv", "2603.18493"),
+        ("hf_paper", "2603.18493"),
     ]

@@ -14,6 +14,13 @@ from src.shared.paper_identity import extract_arxiv_id, normalize_arxiv_url, nor
 
 HUGGINGFACE_PAPER_ID_PATTERN = re.compile(r"^[0-9]{4}\.[0-9]{4,5}$")
 
+
+class _DiscoveryRequestGate:
+    def __init__(self, max_concurrent: int, min_interval: float):
+        self.semaphore = asyncio.Semaphore(max_concurrent)
+        self.rate_limiter = RateLimiter(min_interval)
+
+
 def find_github_url_in_text(text: str) -> str | None:
     if not text or not isinstance(text, str):
         return None
@@ -215,16 +222,28 @@ class DiscoveryClient:
         self.session = session
         self.huggingface_token = huggingface_token
         self.alphaxiv_token = alphaxiv_token
-        self.semaphore = asyncio.Semaphore(max_concurrent)
-        self.rate_limiter = RateLimiter(min_interval)
+        self._huggingface_gate = _DiscoveryRequestGate(max_concurrent, min_interval)
+        self._alphaxiv_gate = _DiscoveryRequestGate(max_concurrent, min_interval)
+        self._semanticscholar_gate = _DiscoveryRequestGate(max_concurrent, min_interval)
+        self.semaphore = self._huggingface_gate.semaphore
+        self.rate_limiter = self._huggingface_gate.rate_limiter
         self._github_resolution_cache: dict[str, str] = {}
         self._github_resolution_tasks: dict[str, asyncio.Task[str | None]] = {}
         self._github_resolution_lock = asyncio.Lock()
 
-    async def _request(self, url: str, *, headers=None, params=None, expect: str = "text", retry_prefix: str = "Request"):
+    async def _request(
+        self,
+        url: str,
+        *,
+        headers=None,
+        params=None,
+        expect: str = "text",
+        retry_prefix: str = "Request",
+        gate: _DiscoveryRequestGate,
+    ):
         for attempt in range(MAX_RETRIES + 1):
-            async with self.semaphore:
-                await self.rate_limiter.acquire()
+            async with gate.semaphore:
+                await gate.rate_limiter.acquire()
                 try:
                     async with self.session.get(url, headers=headers, params=params) as response:
                         if response.status == 200:
@@ -256,6 +275,7 @@ class DiscoveryClient:
             headers=headers,
             expect="text",
             retry_prefix="Hugging Face Papers",
+            gate=self._huggingface_gate,
         )
 
     async def get_huggingface_search_html(self, title: str):
@@ -268,6 +288,7 @@ class DiscoveryClient:
             params={"q": title},
             expect="text",
             retry_prefix="Hugging Face Papers",
+            gate=self._huggingface_gate,
         )
 
     async def get_alphaxiv_paper_legacy(self, arxiv_id: str):
@@ -279,6 +300,7 @@ class DiscoveryClient:
             headers=headers,
             expect="json",
             retry_prefix="AlphaXiv API",
+            gate=self._alphaxiv_gate,
         )
 
     async def get_semanticscholar_paper_html(self, url: str):
@@ -286,8 +308,8 @@ class DiscoveryClient:
         if not normalized_url:
             return None, "Unsupported Semantic Scholar paper URL"
 
-        async with self.semaphore:
-            await self.rate_limiter.acquire()
+        async with self._semanticscholar_gate.semaphore:
+            await self._semanticscholar_gate.rate_limiter.acquire()
             try:
                 html = await dump_rendered_html(
                     normalized_url,
@@ -347,21 +369,22 @@ async def resolve_github_url(seed, client) -> str | None:
         return find_github_url_in_semanticscholar_paper_html(html)
 
     if getattr(client, "huggingface_token", ""):
-        html, error = await client.get_huggingface_paper_html_by_arxiv_id(arxiv_id)
+        github_url, error = await _get_huggingface_github_url_by_arxiv_id(client, arxiv_id)
+        if github_url:
+            return github_url
         if not error:
-            github_url = find_github_url_in_huggingface_paper_html(html)
+            github_url, retry_error = await _get_huggingface_github_url_by_arxiv_id(client, arxiv_id)
             if github_url:
                 return github_url
+            error = retry_error
         if error:
             search_html, search_error = await client.get_huggingface_search_html(getattr(seed, "name", ""))
             if not search_error:
                 paper_id = find_huggingface_paper_id_in_search_html(search_html)
                 if paper_id and paper_id == arxiv_id:
-                    html, page_error = await client.get_huggingface_paper_html_by_arxiv_id(paper_id)
-                    if not page_error:
-                        github_url = find_github_url_in_huggingface_paper_html(html)
-                        if github_url:
-                            return github_url
+                    github_url, page_error = await _get_huggingface_github_url_by_arxiv_id(client, paper_id)
+                    if github_url:
+                        return github_url
 
     if getattr(client, "alphaxiv_token", ""):
         payload, error = await client.get_alphaxiv_paper_legacy(arxiv_id)
@@ -369,6 +392,14 @@ async def resolve_github_url(seed, client) -> str | None:
             return find_github_url_in_alphaxiv_legacy_payload(payload)
 
     return None
+
+
+async def _get_huggingface_github_url_by_arxiv_id(client, arxiv_id: str) -> tuple[str | None, str | None]:
+    html, error = await client.get_huggingface_paper_html_by_arxiv_id(arxiv_id)
+    if error:
+        return None, error
+
+    return find_github_url_in_huggingface_paper_html(html), None
 
 
 async def resolve_arxiv_id_by_title(
