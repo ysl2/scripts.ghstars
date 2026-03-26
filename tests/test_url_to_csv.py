@@ -156,6 +156,59 @@ async def test_fetch_paper_seeds_from_url_reads_arxiv_org_collection_results():
 
 
 @pytest.mark.anyio
+async def test_fetch_paper_seeds_from_url_reads_arxiv_org_catchup_results():
+    class FakeArxivOrgClient:
+        async def fetch_page_html(self, url: str):
+            assert url == "https://arxiv.org/catchup/cs.CV/2026-03-26"
+            return """
+            <div class='paging'>Total of 2 entries for Thu, 26 Mar 2026</div>
+            <dl id="articles">
+              <dt><a href="/abs/2502.00002">arXiv:2502.00002</a></dt>
+              <dd><div class="list-title mathjax"><span class="descriptor">Title:</span> Catchup Match</div></dd>
+              <dt><a href="/abs/2502.00001">arXiv:2502.00001</a></dt>
+              <dd><div class="list-title mathjax"><span class="descriptor">Title:</span> Older Catchup Match</div></dd>
+            </dl>
+            """
+
+    messages = []
+    result = await fetch_paper_seeds_from_url(
+        "https://arxiv.org/catchup/cs.CV/2026-03-26",
+        arxiv_org_client=FakeArxivOrgClient(),
+        status_callback=messages.append,
+    )
+
+    assert [seed.name for seed in result.seeds] == ["Catchup Match", "Older Catchup Match"]
+    assert [seed.url for seed in result.seeds] == [
+        "https://arxiv.org/abs/2502.00002",
+        "https://arxiv.org/abs/2502.00001",
+    ]
+    assert result.csv_path.name == "arxiv-cs.CV-catchup-2026-03-26-20260326113045.csv"
+    assert any("Fetching arXiv.org list page 1" in message for message in messages)
+
+
+@pytest.mark.anyio
+async def test_fetch_paper_seeds_from_url_fails_for_incomplete_arxiv_org_catchup_results():
+    class FakeArxivOrgClient:
+        async def fetch_page_html(self, url: str):
+            assert url == "https://arxiv.org/catchup/cs.CV/2026-03-26"
+            return """
+            <div class='paging'>Total of 3 entries for Thu, 26 Mar 2026</div>
+            <dl id="articles">
+              <dt><a href="/abs/2502.00002">arXiv:2502.00002</a></dt>
+              <dd><div class="list-title mathjax"><span class="descriptor">Title:</span> Catchup Match</div></dd>
+              <dt><a href="/abs/2502.00001">arXiv:2502.00001</a></dt>
+              <dd><div class="list-title mathjax"><span class="descriptor">Title:</span> Older Catchup Match</div></dd>
+            </dl>
+            """
+
+    with pytest.raises(ValueError, match="Cannot guarantee complete export for this arXiv catchup collection"):
+        await fetch_paper_seeds_from_url(
+            "https://arxiv.org/catchup/cs.CV/2026-03-26",
+            arxiv_org_client=FakeArxivOrgClient(),
+        )
+
+
+@pytest.mark.anyio
 async def test_fetch_paper_seeds_from_url_reads_semanticscholar_search_results():
     class FakeSemanticScholarClient:
         async def fetch_search_page_html(self, url: str):

@@ -8,6 +8,12 @@
 
 **Tech Stack:** Python 3.12, asyncio, aiohttp, pytest, regex-based HTML parsing, uv
 
+## Support Boundary
+
+- Supported arXiv.org collection shapes are `/list/<category>/recent`, `/list/<category>/new`, archive-style `/list/<category>/YYYY-MM`, exact-shape `/catchup/<category>/YYYY-MM-DD`, and `/search/?...`.
+- `list-like` pages, including archive pages, reuse the shared `dt/dd` extraction and `skip/show` pagination path.
+- `catchup` pages reuse list extraction but must fail when the reported total exceeds the rows visible on the page, because partial export is not acceptable.
+
 ---
 
 ### Task 1: Expand URL detection and filename coverage for new arXiv collection shapes

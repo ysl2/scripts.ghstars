@@ -76,7 +76,7 @@ def output_csv_path_for_arxiv_org_url(raw_url: str, *, output_dir: Path | None =
 
     if path.startswith("/catchup/"):
         parts = [part for part in path.split("/") if part]
-        if len(parts) == 3:
+        if len(parts) == 3 and re.fullmatch(r"\d{4}-\d{2}-\d{2}", parts[2]):
             category = _sanitize_filename_part(parts[1])
             date_part = _sanitize_filename_part(parts[2])
             return build_url_export_csv_path(["arxiv", category, "catchup", date_part], output_dir=output_dir)
@@ -239,13 +239,26 @@ async def _fetch_list_seeds(
     seeds = list(first_page_seeds)
     seen_urls = {seed.url for seed in seeds}
     if not allow_pagination:
-        if total_entries > len(first_page_seeds):
-            raise ValueError("Cannot guarantee complete export for this arXiv catchup collection")
+        _ensure_complete_collection(
+            label="catchup collection",
+            noun="entries",
+            expected=total_entries,
+            actual=len(first_page_seeds),
+        )
         return seeds
 
-    if total_entries <= len(first_page_seeds):
+    if total_entries < len(first_page_seeds):
+        _ensure_complete_collection(
+            label="list collection",
+            noun="entries",
+            expected=total_entries,
+            actual=len(first_page_seeds),
+        )
+
+    if total_entries == len(first_page_seeds):
         return seeds
 
+    extracted_entries = len(first_page_seeds)
     tasks = [
         asyncio.create_task(
             _fetch_list_page(
@@ -260,8 +273,15 @@ async def _fetch_list_seeds(
 
     for task in asyncio.as_completed(tasks):
         page_seeds = await task
+        extracted_entries += len(page_seeds)
         _append_unique_seeds(seeds, seen_urls, page_seeds)
 
+    _ensure_complete_collection(
+        label="list collection",
+        noun="entries",
+        expected=total_entries,
+        actual=extracted_entries,
+    )
     return seeds
 
 
@@ -284,9 +304,18 @@ async def _fetch_search_seeds(input_url: str, *, arxiv_org_client, status_callba
 
     seeds = list(first_page_seeds)
     seen_urls = {seed.url for seed in seeds}
-    if total_results <= len(first_page_seeds):
+    if total_results < len(first_page_seeds):
+        _ensure_complete_collection(
+            label="search collection",
+            noun="results",
+            expected=total_results,
+            actual=len(first_page_seeds),
+        )
+
+    if total_results == len(first_page_seeds):
         return seeds
 
+    extracted_results = len(first_page_seeds)
     tasks = [
         asyncio.create_task(
             _fetch_search_page(
@@ -301,8 +330,15 @@ async def _fetch_search_seeds(input_url: str, *, arxiv_org_client, status_callba
 
     for task in asyncio.as_completed(tasks):
         page_seeds = await task
+        extracted_results += len(page_seeds)
         _append_unique_seeds(seeds, seen_urls, page_seeds)
 
+    _ensure_complete_collection(
+        label="search collection",
+        noun="results",
+        expected=total_results,
+        actual=extracted_results,
+    )
     return seeds
 
 
@@ -365,6 +401,11 @@ def _append_unique_seeds(target: list[PaperSeed], seen_urls: set[str], page_seed
             continue
         target.append(seed)
         seen_urls.add(seed.url)
+
+
+def _ensure_complete_collection(*, label: str, noun: str, expected: int, actual: int) -> None:
+    if actual != expected:
+        raise ValueError(f"Cannot guarantee complete export for this arXiv {label}: expected {expected} {noun}, got {actual}")
 
 
 def _extract_list_total_entries(html_text: str) -> int | None:

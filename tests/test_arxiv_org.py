@@ -69,6 +69,15 @@ def test_output_csv_path_for_arxiv_org_catchup_url_uses_category_and_date(tmp_pa
     assert csv_path == tmp_path / "arxiv-cs.CV-catchup-2026-03-26-20260326113045.csv"
 
 
+def test_output_csv_path_for_arxiv_org_malformed_catchup_url_falls_back_to_generic_collection(tmp_path: Path):
+    csv_path = output_csv_path_for_arxiv_org_url(
+        "https://arxiv.org/catchup/cs.CV/not-a-date",
+        output_dir=tmp_path,
+    )
+
+    assert csv_path == tmp_path / "arxiv-collection-20260326113045.csv"
+
+
 def test_output_csv_path_for_arxiv_org_list_archive_url_uses_category_and_month(tmp_path: Path):
     csv_path = output_csv_path_for_arxiv_org_url(
         "https://arxiv.org/list/cs.CV/2026-03",
@@ -266,6 +275,37 @@ async def test_fetch_paper_seeds_from_arxiv_org_url_pages_list_results_until_tot
 
 
 @pytest.mark.anyio
+async def test_fetch_paper_seeds_from_arxiv_org_url_fails_when_list_pagination_underfetches(tmp_path: Path):
+    class FakeArxivOrgClient:
+        async def fetch_page_html(self, url: str):
+            if url == "https://arxiv.org/list/cs.CV/recent":
+                return """
+                <div class='paging'>Total of 3 entries : <span>1-2</span></div>
+                <div class='morefewer'>Showing up to 2 entries per page:</div>
+                <dl id="articles">
+                  <dt><a href="/abs/2603.23502">arXiv:2603.23502</a></dt>
+                  <dd><div class="list-title mathjax"><span class="descriptor">Title:</span> Page 1 A</div></dd>
+                  <dt><a href="/abs/2603.23501">arXiv:2603.23501</a></dt>
+                  <dd><div class="list-title mathjax"><span class="descriptor">Title:</span> Page 1 B</div></dd>
+                </dl>
+                """
+            if url == "https://arxiv.org/list/cs.CV/recent?skip=2&show=2":
+                return """
+                <div class='paging'>Total of 3 entries : <a href="/list/cs.CV/recent?skip=0&amp;show=2">1-2</a> <span>3-3</span></div>
+                <div class='morefewer'>Showing up to 2 entries per page:</div>
+                <dl id="articles"></dl>
+                """
+            raise AssertionError(f"unexpected url: {url}")
+
+    with pytest.raises(ValueError, match="Cannot guarantee complete export for this arXiv list collection"):
+        await fetch_paper_seeds_from_arxiv_org_url(
+            "https://arxiv.org/list/cs.CV/recent",
+            arxiv_org_client=FakeArxivOrgClient(),
+            output_dir=tmp_path,
+        )
+
+
+@pytest.mark.anyio
 async def test_fetch_paper_seeds_from_arxiv_org_url_accepts_catchup_urls(tmp_path: Path):
     class FakeArxivOrgClient:
         async def fetch_page_html(self, url: str):
@@ -363,6 +403,39 @@ async def test_fetch_paper_seeds_from_arxiv_org_url_pages_search_results_until_t
         "https://arxiv.org/search/?searchtype=all&query=reconstruction&abstracts=show&size=2&order=-submitted_date&start=2",
     ]
     assert result.csv_path == tmp_path / "arxiv-search-reconstruction-all-submitted-date-20260326113045.csv"
+
+
+@pytest.mark.anyio
+async def test_fetch_paper_seeds_from_arxiv_org_url_fails_when_search_pagination_underfetches(tmp_path: Path):
+    class FakeArxivOrgClient:
+        async def fetch_page_html(self, url: str):
+            if url == "https://arxiv.org/search/?searchtype=all&query=reconstruction&abstracts=show&size=2&order=-submitted_date":
+                return """
+                <h1 class="title is-clearfix">Showing 1&ndash;2 of 3 results for all: reconstruction</h1>
+                <ol class="breathe-horizontal" start="1">
+                  <li class="arxiv-result">
+                    <p class="list-title is-inline-block"><a href="https://arxiv.org/abs/2603.24355">arXiv:2603.24355</a></p>
+                    <p class="title is-5 mathjax">Search Result A</p>
+                  </li>
+                  <li class="arxiv-result">
+                    <p class="list-title is-inline-block"><a href="https://arxiv.org/abs/2603.24354">arXiv:2603.24354</a></p>
+                    <p class="title is-5 mathjax">Search Result B</p>
+                  </li>
+                </ol>
+                """
+            if url == "https://arxiv.org/search/?searchtype=all&query=reconstruction&abstracts=show&size=2&order=-submitted_date&start=2":
+                return """
+                <h1 class="title is-clearfix">Showing 3&ndash;3 of 3 results for all: reconstruction</h1>
+                <ol class="breathe-horizontal" start="3"></ol>
+                """
+            raise AssertionError(f"unexpected url: {url}")
+
+    with pytest.raises(ValueError, match="Cannot guarantee complete export for this arXiv search collection"):
+        await fetch_paper_seeds_from_arxiv_org_url(
+            "https://arxiv.org/search/?searchtype=all&query=reconstruction&abstracts=show&size=2&order=-submitted_date",
+            arxiv_org_client=FakeArxivOrgClient(),
+            output_dir=tmp_path,
+        )
 
 
 @pytest.mark.anyio

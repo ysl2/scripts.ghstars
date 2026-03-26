@@ -73,6 +73,8 @@ Currently supported sources:
 - `https://arxivxplorer.com/?...`
 - `https://arxiv.org/list/<category>/recent`
 - `https://arxiv.org/list/<category>/new`
+- `https://arxiv.org/list/<category>/YYYY-MM`
+- `https://arxiv.org/catchup/<category>/YYYY-MM-DD`
 - `https://arxiv.org/search/?...`
 - `https://huggingface.co/papers/trending`
 - `https://huggingface.co/papers/trending?q=...`
@@ -93,6 +95,14 @@ uv run main.py 'https://arxiv.org/list/cs.CV/recent'
 ```
 
 ```bash
+uv run main.py 'https://arxiv.org/list/cs.CV/2026-03'
+```
+
+```bash
+uv run main.py 'https://arxiv.org/catchup/cs.CV/2026-03-26'
+```
+
+```bash
 uv run main.py 'https://arxiv.org/search/?searchtype=all&query=reconstruction&abstracts=show&size=50&order=-submitted_date'
 ```
 
@@ -104,6 +114,8 @@ Output example:
 
 - `./arxivxplorer-streaming-semantic-3d-reconstruction-cs.CV-2026-2025-2024-20260326113045.csv`
 - `./arxiv-cs.CV-recent-20260326113045.csv`
+- `./arxiv-cs.CV-2026-03-20260326113045.csv`
+- `./arxiv-cs.CV-catchup-2026-03-26-20260326113045.csv`
 - `./arxiv-search-reconstruction-all-submitted-date-20260326113045.csv`
 - `./huggingface-papers-trending-semantic-20260326113045.csv`
 - `./semanticscholar-semantic-3d-reconstruction-2025-2026-computer-science-Computer-Vision-and-Pattern-Recognition-20260326113045.csv`
@@ -113,7 +125,10 @@ URL mode behavior:
 - source-specific fetching is kept in separate adapters under `url_to_csv/`
 - every URL export appends a run timestamp in `YYYYMMDDHHMMSS` form before `.csv`
 - standard arXiv `list/...` and `search/...` collection pages are crawled across all pages, not just the first page
+- archive-style arXiv `list/<category>/YYYY-MM` pages reuse the same multi-page `list/...` crawling path
 - arXiv `new` pages include all visible sections, including new submissions, cross-lists, and replacements
+- arXiv `catchup/<category>/YYYY-MM-DD` is supported only for that exact path shape
+- arXiv catchup exports fail explicitly when the page reports more entries than are present on the page, rather than guessing pagination and writing a partial CSV
 - arXiv Xplorer uses the site’s paging API instead of trying to click `Show More` in a browser
 - Hugging Face Papers parses the collection page’s embedded papers payload from the frontend response
 - Semantic Scholar crawls the search result pages, then keeps only rows that can be normalized to canonical arXiv URLs
