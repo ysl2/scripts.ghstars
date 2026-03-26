@@ -91,6 +91,31 @@ def test_extract_paper_seeds_from_arxiv_list_html_reads_article_pairs():
     ]
 
 
+def test_extract_paper_seeds_from_arxiv_list_html_accepts_href_with_surrounding_whitespace():
+    html_text = """
+    <dl id="articles">
+      <dt>
+        <a href ="/abs/2603.23502">arXiv:2603.23502</a>
+      </dt>
+      <dd>
+        <div class="meta">
+          <div class="list-title mathjax">
+            <span class="descriptor">Title:</span>
+            Whitespace Around Href Equals
+          </div>
+        </div>
+      </dd>
+    </dl>
+    """
+
+    assert extract_paper_seeds_from_arxiv_list_html(html_text) == [
+        PaperSeed(
+            name="Whitespace Around Href Equals",
+            url="https://arxiv.org/abs/2603.23502",
+        )
+    ]
+
+
 def test_extract_paper_seeds_from_arxiv_list_html_keeps_entries_from_all_new_page_sections():
     html_text = """
     <h3>New submissions (showing 1 of 1 entries)</h3>

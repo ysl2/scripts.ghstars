@@ -14,7 +14,7 @@ from src.url_to_csv.models import FetchedSeedsResult
 
 ARXIV_ORG_HOSTS = {"arxiv.org", "www.arxiv.org"}
 LIST_ENTRY_PATTERN = re.compile(
-    r"<dt\b.*?>.*?href=[\"'](?:https?://(?:www\.)?arxiv\.org)?/abs/([^\"']+)[\"'].*?</dt>\s*<dd\b.*?>(.*?)</dd>",
+    r"<dt\b.*?>.*?href\s*=\s*[\"'](?:https?://(?:www\.)?arxiv\.org)?/abs/([^\"']+)[\"'].*?</dt>\s*<dd\b.*?>(.*?)</dd>",
     re.IGNORECASE | re.S,
 )
 LIST_TITLE_PATTERN = re.compile(
