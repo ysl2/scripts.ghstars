@@ -243,7 +243,8 @@ async def _fetch_list_seeds(
             label="catchup collection",
             noun="entries",
             expected=total_entries,
-            actual=len(first_page_seeds),
+            extracted=len(first_page_seeds),
+            exported=len(seeds),
         )
         return seeds
 
@@ -252,7 +253,8 @@ async def _fetch_list_seeds(
             label="list collection",
             noun="entries",
             expected=total_entries,
-            actual=len(first_page_seeds),
+            extracted=len(first_page_seeds),
+            exported=len(seeds),
         )
 
     if total_entries == len(first_page_seeds):
@@ -280,7 +282,8 @@ async def _fetch_list_seeds(
         label="list collection",
         noun="entries",
         expected=total_entries,
-        actual=extracted_entries,
+        extracted=extracted_entries,
+        exported=len(seeds),
     )
     return seeds
 
@@ -309,7 +312,8 @@ async def _fetch_search_seeds(input_url: str, *, arxiv_org_client, status_callba
             label="search collection",
             noun="results",
             expected=total_results,
-            actual=len(first_page_seeds),
+            extracted=len(first_page_seeds),
+            exported=len(seeds),
         )
 
     if total_results == len(first_page_seeds):
@@ -337,7 +341,8 @@ async def _fetch_search_seeds(input_url: str, *, arxiv_org_client, status_callba
         label="search collection",
         noun="results",
         expected=total_results,
-        actual=extracted_results,
+        extracted=extracted_results,
+        exported=len(seeds),
     )
     return seeds
 
@@ -403,9 +408,20 @@ def _append_unique_seeds(target: list[PaperSeed], seen_urls: set[str], page_seed
         seen_urls.add(seed.url)
 
 
-def _ensure_complete_collection(*, label: str, noun: str, expected: int, actual: int) -> None:
-    if actual != expected:
-        raise ValueError(f"Cannot guarantee complete export for this arXiv {label}: expected {expected} {noun}, got {actual}")
+def _ensure_complete_collection(
+    *,
+    label: str,
+    noun: str,
+    expected: int,
+    extracted: int,
+    exported: int | None = None,
+) -> None:
+    if extracted != expected:
+        raise ValueError(f"Cannot guarantee complete export for this arXiv {label}: expected {expected} {noun}, got {extracted} extracted")
+    if exported is not None and exported != expected:
+        raise ValueError(
+            f"Cannot guarantee complete export for this arXiv {label}: expected {expected} {noun}, got {extracted} extracted and {exported} exported"
+        )
 
 
 def _extract_list_total_entries(html_text: str) -> int | None:

@@ -306,6 +306,32 @@ async def test_fetch_paper_seeds_from_arxiv_org_url_fails_when_list_pagination_u
 
 
 @pytest.mark.anyio
+async def test_fetch_paper_seeds_from_arxiv_org_url_reads_archive_list_results(tmp_path: Path):
+    class FakeArxivOrgClient:
+        async def fetch_page_html(self, url: str):
+            assert url == "https://arxiv.org/list/cs.CV/2026-03"
+            return """
+            <div class='paging'>Total of 2 entries : <span>1-2</span></div>
+            <div class='morefewer'>Showing up to 25 entries per page:</div>
+            <dl id="articles">
+              <dt><a href="/abs/2603.00060">arXiv:2603.00060</a></dt>
+              <dd><div class="list-title mathjax"><span class="descriptor">Title:</span> Archive A</div></dd>
+              <dt><a href="/abs/2603.00059">arXiv:2603.00059</a></dt>
+              <dd><div class="list-title mathjax"><span class="descriptor">Title:</span> Archive B</div></dd>
+            </dl>
+            """
+
+    result = await fetch_paper_seeds_from_arxiv_org_url(
+        "https://arxiv.org/list/cs.CV/2026-03",
+        arxiv_org_client=FakeArxivOrgClient(),
+        output_dir=tmp_path,
+    )
+
+    assert [seed.name for seed in result.seeds] == ["Archive A", "Archive B"]
+    assert result.csv_path == tmp_path / "arxiv-cs.CV-2026-03-20260326113045.csv"
+
+
+@pytest.mark.anyio
 async def test_fetch_paper_seeds_from_arxiv_org_url_accepts_catchup_urls(tmp_path: Path):
     class FakeArxivOrgClient:
         async def fetch_page_html(self, url: str):
@@ -439,7 +465,7 @@ async def test_fetch_paper_seeds_from_arxiv_org_url_fails_when_search_pagination
 
 
 @pytest.mark.anyio
-async def test_fetch_paper_seeds_from_arxiv_org_url_deduplicates_canonical_urls_across_pages(tmp_path: Path):
+async def test_fetch_paper_seeds_from_arxiv_org_url_fails_when_search_pages_repeat_only_canonical_duplicates(tmp_path: Path):
     class FakeArxivOrgClient:
         async def fetch_page_html(self, url: str):
             if "start=2" in url:
@@ -471,17 +497,12 @@ async def test_fetch_paper_seeds_from_arxiv_org_url_deduplicates_canonical_urls_
             </ol>
             """
 
-    result = await fetch_paper_seeds_from_arxiv_org_url(
-        "https://arxiv.org/search/?searchtype=all&query=reconstruction&abstracts=show&size=2&order=-submitted_date",
-        arxiv_org_client=FakeArxivOrgClient(),
-        output_dir=tmp_path,
-    )
-
-    assert [seed.url for seed in result.seeds] == [
-        "https://arxiv.org/abs/2603.24355",
-        "https://arxiv.org/abs/2603.24354",
-        "https://arxiv.org/abs/2603.24353",
-    ]
+    with pytest.raises(ValueError, match="Cannot guarantee complete export for this arXiv search collection"):
+        await fetch_paper_seeds_from_arxiv_org_url(
+            "https://arxiv.org/search/?searchtype=all&query=reconstruction&abstracts=show&size=2&order=-submitted_date",
+            arxiv_org_client=FakeArxivOrgClient(),
+            output_dir=tmp_path,
+        )
 
 
 @pytest.mark.anyio
