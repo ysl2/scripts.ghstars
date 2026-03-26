@@ -44,8 +44,36 @@ class GitHubClient:
         self.github_token = github_token
         self.semaphore = asyncio.Semaphore(max_concurrent)
         self.rate_limiter = RateLimiter(min_interval)
+        self._star_cache: dict[tuple[str, str], tuple[int | None, str | None]] = {}
+        self._star_tasks: dict[tuple[str, str], asyncio.Task[tuple[int | None, str | None]]] = {}
+        self._star_cache_lock = asyncio.Lock()
 
     async def get_star_count(self, owner: str, repo: str) -> tuple[int | None, str | None]:
+        cache_key = (owner.strip().lower(), repo.strip().lower())
+        async with self._star_cache_lock:
+            cached = self._star_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+            task = self._star_tasks.get(cache_key)
+            if task is None:
+                task = asyncio.create_task(self._fetch_star_count(owner, repo))
+                self._star_tasks[cache_key] = task
+
+        try:
+            result = await task
+        finally:
+            async with self._star_cache_lock:
+                if self._star_tasks.get(cache_key) is task:
+                    self._star_tasks.pop(cache_key, None)
+
+        if _should_cache_star_result(*result):
+            async with self._star_cache_lock:
+                self._star_cache[cache_key] = result
+
+        return result
+
+    async def _fetch_star_count(self, owner: str, repo: str) -> tuple[int | None, str | None]:
         headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "scripts.ghstars"}
         if self.github_token:
             headers["Authorization"] = f"Bearer {self.github_token}"
@@ -76,3 +104,7 @@ class GitHubClient:
                         continue
                     return None, f"Request failed: {exc}"
         return None, "GitHub API error"
+
+
+def _should_cache_star_result(stars: int | None, error: str | None) -> bool:
+    return error is None or error == "Repository not found"

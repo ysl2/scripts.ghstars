@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass
 
 import pytest
@@ -9,7 +10,7 @@ from src.shared.discovery import (
     resolve_arxiv_id_by_title,
     resolve_github_url,
 )
-from src.shared.github import extract_owner_repo, normalize_github_url
+from src.shared.github import GitHubClient, extract_owner_repo, normalize_github_url
 
 
 @dataclass(frozen=True)
@@ -183,3 +184,68 @@ async def test_resolve_github_url_reads_semanticscholar_detail_pages():
 
     assert github_url == "https://github.com/foo/bar"
     assert client.calls == ["https://www.semanticscholar.org/paper/Foo/abc123"]
+
+
+@pytest.mark.anyio
+async def test_discovery_client_caches_concurrent_github_resolution_for_same_paper():
+    from src.shared.discovery import DiscoveryClient
+
+    client = DiscoveryClient(session=object(), huggingface_token="hf_token")
+    calls = []
+
+    async def fake_get_huggingface_paper_html_by_arxiv_id(arxiv_id):
+        calls.append(arxiv_id)
+        await asyncio.sleep(0)
+        return '<script>window.__DATA__={"githubRepo":"https://github.com/foo/bar"}</script>', None
+
+    async def fake_get_huggingface_search_html(title):
+        raise AssertionError("title search should not run when direct paper page already contains the repo")
+
+    client.get_huggingface_paper_html_by_arxiv_id = fake_get_huggingface_paper_html_by_arxiv_id
+    client.get_huggingface_search_html = fake_get_huggingface_search_html
+
+    seed = FakeSeed(name="Paper Title", url="https://arxiv.org/abs/2603.18493")
+    first, second = await asyncio.gather(
+        client.resolve_github_url(seed),
+        client.resolve_github_url(seed),
+    )
+
+    assert first == "https://github.com/foo/bar"
+    assert second == "https://github.com/foo/bar"
+    assert calls == ["2603.18493"]
+
+
+@pytest.mark.anyio
+async def test_github_client_caches_concurrent_star_lookup_for_same_repo():
+    class FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            await asyncio.sleep(0)
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {"stargazers_count": 123}
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, headers=None):
+            self.calls.append(url)
+            return FakeResponse()
+
+    session = FakeSession()
+    client = GitHubClient(session=session)
+
+    first, second = await asyncio.gather(
+        client.get_star_count("foo", "bar"),
+        client.get_star_count("foo", "bar"),
+    )
+
+    assert first == (123, None)
+    assert second == (123, None)
+    assert session.calls == ["https://api.github.com/repos/foo/bar"]

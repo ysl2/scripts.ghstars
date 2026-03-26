@@ -9,7 +9,7 @@ from src.shared.arxiv import normalize_title_for_matching
 from src.shared.github import normalize_github_url
 from src.shared.headless_browser import dump_rendered_html
 from src.shared.http import MAX_RETRIES, RateLimiter
-from src.shared.paper_identity import extract_arxiv_id, normalize_semanticscholar_paper_url
+from src.shared.paper_identity import extract_arxiv_id, normalize_arxiv_url, normalize_semanticscholar_paper_url
 
 
 HUGGINGFACE_PAPER_ID_PATTERN = re.compile(r"^[0-9]{4}\.[0-9]{4,5}$")
@@ -217,6 +217,9 @@ class DiscoveryClient:
         self.alphaxiv_token = alphaxiv_token
         self.semaphore = asyncio.Semaphore(max_concurrent)
         self.rate_limiter = RateLimiter(min_interval)
+        self._github_resolution_cache: dict[str, str] = {}
+        self._github_resolution_tasks: dict[str, asyncio.Task[str | None]] = {}
+        self._github_resolution_lock = asyncio.Lock()
 
     async def _request(self, url: str, *, headers=None, params=None, expect: str = "text", retry_prefix: str = "Request"):
         for attempt in range(MAX_RETRIES + 1):
@@ -298,7 +301,32 @@ class DiscoveryClient:
                 return None, f"Semantic Scholar paper request failed: {exc}"
 
     async def resolve_github_url(self, seed) -> str | None:
-        return await resolve_github_url(seed, self)
+        cache_key = _discovery_cache_key(seed)
+        if cache_key is None:
+            return await resolve_github_url(seed, self)
+
+        async with self._github_resolution_lock:
+            cached = self._github_resolution_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+            task = self._github_resolution_tasks.get(cache_key)
+            if task is None:
+                task = asyncio.create_task(resolve_github_url(seed, self))
+                self._github_resolution_tasks[cache_key] = task
+
+        try:
+            github_url = await task
+        finally:
+            async with self._github_resolution_lock:
+                if self._github_resolution_tasks.get(cache_key) is task:
+                    self._github_resolution_tasks.pop(cache_key, None)
+
+        if github_url:
+            async with self._github_resolution_lock:
+                self._github_resolution_cache[cache_key] = github_url
+
+        return github_url
 
 
 async def resolve_github_url(seed, client) -> str | None:
@@ -367,3 +395,11 @@ async def resolve_arxiv_id_by_title(
         return await arxiv_client.get_arxiv_id_by_title(title)
 
     return None, None, "No arXiv ID found from title search"
+
+
+def _discovery_cache_key(seed) -> str | None:
+    url = getattr(seed, "url", "")
+    normalized_url = normalize_arxiv_url(url) or normalize_semanticscholar_paper_url(url)
+    if normalized_url:
+        return normalized_url
+    return None
