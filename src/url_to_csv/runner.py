@@ -13,6 +13,7 @@ from src.shared.runtime import build_client, load_runtime_config
 from src.shared.settings import DEFAULT_CONCURRENT_LIMIT
 from src.shared.skip_reasons import is_minor_skip_reason
 from src.url_to_csv.arxivxplorer import ArxivXplorerSearchClient
+from src.url_to_csv.arxiv_org import ArxivOrgClient
 from src.url_to_csv.huggingface_papers import HuggingFacePapersClient
 from src.url_to_csv.pipeline import export_url_to_csv
 from src.url_to_csv.semanticscholar import SemanticScholarSearchClient
@@ -30,6 +31,7 @@ async def run_url_mode(
     session_factory=aiohttp.ClientSession,
     arxiv_client_cls=ArxivClient,
     search_client_cls=ArxivXplorerSearchClient,
+    arxiv_org_client_cls=ArxivOrgClient,
     huggingface_papers_client_cls=HuggingFacePapersClient,
     semanticscholar_client_cls=SemanticScholarSearchClient,
     discovery_client_cls=DiscoveryClient,
@@ -50,6 +52,12 @@ async def run_url_mode(
         )
         search_client = build_client(
             search_client_cls,
+            session,
+            max_concurrent=CONCURRENT_LIMIT,
+            min_interval=REQUEST_DELAY,
+        )
+        arxiv_org_client = build_client(
+            arxiv_org_client_cls,
             session,
             max_concurrent=CONCURRENT_LIMIT,
             min_interval=REQUEST_DELAY,
@@ -86,6 +94,7 @@ async def run_url_mode(
             input_url,
             output_dir=output_dir,
             search_client=search_client,
+            arxiv_org_client=arxiv_org_client,
             huggingface_papers_client=huggingface_papers_client,
             semanticscholar_client=semanticscholar_client,
             arxiv_client=arxiv_client,

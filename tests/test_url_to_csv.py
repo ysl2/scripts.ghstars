@@ -125,6 +125,37 @@ async def test_fetch_paper_seeds_from_url_reads_huggingface_collection_payload()
 
 
 @pytest.mark.anyio
+async def test_fetch_paper_seeds_from_url_reads_arxiv_org_collection_results():
+    class FakeArxivOrgClient:
+        async def fetch_page_html(self, url: str):
+            assert url == "https://arxiv.org/list/cs.CV/recent"
+            return """
+            <div class='paging'>Total of 2 entries : <span>1-2</span></div>
+            <div class='morefewer'>Showing up to 25 entries per page:</div>
+            <dl id="articles">
+              <dt><a href="/abs/2502.00002">arXiv:2502.00002</a></dt>
+              <dd><div class="list-title mathjax"><span class="descriptor">Title:</span> Search Match</div></dd>
+              <dt><a href="/abs/2502.00001">arXiv:2502.00001</a></dt>
+              <dd><div class="list-title mathjax"><span class="descriptor">Title:</span> Older Match</div></dd>
+            </dl>
+            """
+
+    messages = []
+    result = await fetch_paper_seeds_from_url(
+        "https://arxiv.org/list/cs.CV/recent",
+        arxiv_org_client=FakeArxivOrgClient(),
+        status_callback=messages.append,
+    )
+
+    assert [seed.name for seed in result.seeds] == ["Search Match", "Older Match"]
+    assert [seed.url for seed in result.seeds] == [
+        "https://arxiv.org/abs/2502.00002",
+        "https://arxiv.org/abs/2502.00001",
+    ]
+    assert any("Fetching arXiv.org list page 1" in message for message in messages)
+
+
+@pytest.mark.anyio
 async def test_fetch_paper_seeds_from_url_reads_semanticscholar_search_results():
     class FakeSemanticScholarClient:
         async def fetch_search_page_html(self, url: str):
@@ -285,6 +316,65 @@ async def test_export_url_to_csv_writes_huggingface_results_in_output_dir(tmp_pa
 
 
 @pytest.mark.anyio
+async def test_export_url_to_csv_writes_arxiv_org_results_in_output_dir(tmp_path: Path):
+    class FakeArxivOrgClient:
+        async def fetch_page_html(self, url: str):
+            return """
+            <div class='paging'>Total of 2 entries : <span>1-2</span></div>
+            <div class='morefewer'>Showing up to 25 entries per page:</div>
+            <dl id="articles">
+              <dt><a href="/abs/2501.00001">arXiv:2501.00001</a></dt>
+              <dd><div class="list-title mathjax"><span class="descriptor">Title:</span> Older</div></dd>
+              <dt><a href="/abs/2502.00002">arXiv:2502.00002</a></dt>
+              <dd><div class="list-title mathjax"><span class="descriptor">Title:</span> Newer</div></dd>
+            </dl>
+            """
+
+    class FakeDiscoveryClient:
+        async def resolve_github_url(self, seed):
+            mapping = {
+                "https://arxiv.org/abs/2501.00001": "https://github.com/foo/old",
+                "https://arxiv.org/abs/2502.00002": "https://github.com/foo/new",
+            }
+            return mapping[seed.url]
+
+    class FakeGitHubClient:
+        async def get_star_count(self, owner, repo):
+            mapping = {
+                ("foo", "old"): (10, None),
+                ("foo", "new"): (20, None),
+            }
+            return mapping[(owner, repo)]
+
+    result = await export_url_to_csv(
+        "https://arxiv.org/list/cs.CV/recent",
+        output_dir=tmp_path,
+        arxiv_org_client=FakeArxivOrgClient(),
+        discovery_client=FakeDiscoveryClient(),
+        github_client=FakeGitHubClient(),
+    )
+
+    with result.csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert result.csv_path == tmp_path / "arxiv-cs.CV-recent.csv"
+    assert rows == [
+        {
+            "Name": "Newer",
+            "Url": "https://arxiv.org/abs/2502.00002",
+            "Github": "https://github.com/foo/new",
+            "Stars": "20",
+        },
+        {
+            "Name": "Older",
+            "Url": "https://arxiv.org/abs/2501.00001",
+            "Github": "https://github.com/foo/old",
+            "Stars": "10",
+        },
+    ]
+
+
+@pytest.mark.anyio
 async def test_export_url_to_csv_writes_semanticscholar_results_in_output_dir(tmp_path: Path):
     class FakeSemanticScholarClient:
         async def fetch_search_page_html(self, url: str):
@@ -353,6 +443,90 @@ async def test_export_url_to_csv_writes_semanticscholar_results_in_output_dir(tm
             "Stars": "10",
         },
     ]
+
+
+@pytest.mark.anyio
+async def test_run_url_mode_supports_arxiv_org_url(tmp_path: Path, capsys):
+    input_url = "https://arxiv.org/list/cs.CV/recent"
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeSearchClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+
+        async def search(self, query, page: int):
+            raise AssertionError("arXiv Xplorer client should not be used for arXiv.org URLs")
+
+    class FakeArxivOrgClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+
+        async def fetch_page_html(self, url: str):
+            return """
+            <div class='paging'>Total of 1 entries : <span>1-1</span></div>
+            <div class='morefewer'>Showing up to 25 entries per page:</div>
+            <dl id="articles">
+              <dt><a href="/abs/2501.00001">arXiv:2501.00001</a></dt>
+              <dd><div class="list-title mathjax"><span class="descriptor">Title:</span> Paper A</div></dd>
+            </dl>
+            """
+
+    class FakeHuggingFacePapersClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+
+        async def fetch_collection_html(self, url: str):
+            raise AssertionError("Hugging Face client should not be used for arXiv.org URLs")
+
+    class FakeSemanticScholarClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+
+        async def fetch_search_page_html(self, url: str):
+            raise AssertionError("Semantic Scholar client should not be used for arXiv.org URLs")
+
+    class FakeDiscoveryClient:
+        def __init__(self, session, *, huggingface_token="", alphaxiv_token="", max_concurrent=0, min_interval=0):
+            self.session = session
+            self.huggingface_token = huggingface_token
+            self.alphaxiv_token = alphaxiv_token
+
+        async def resolve_github_url(self, seed):
+            return "https://github.com/foo/bar"
+
+    class FakeGitHubClient:
+        def __init__(self, session, github_token="", max_concurrent=0, min_interval=0):
+            self.session = session
+            self.github_token = github_token
+
+        async def get_star_count(self, owner, repo):
+            return 11, None
+
+    exit_code = await run_url_mode(
+        input_url,
+        output_dir=tmp_path,
+        session_factory=lambda **kwargs: FakeSession(),
+        search_client_cls=FakeSearchClient,
+        arxiv_org_client_cls=FakeArxivOrgClient,
+        huggingface_papers_client_cls=FakeHuggingFacePapersClient,
+        semanticscholar_client_cls=FakeSemanticScholarClient,
+        discovery_client_cls=FakeDiscoveryClient,
+        github_client_cls=FakeGitHubClient,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Fetching arXiv.org list page 1" in captured.out
+    assert "Found 1 papers" in captured.out
+    assert "[1/1] Paper A" in captured.out
+    assert "foo/bar" in captured.out
+    assert "Wrote CSV:" in captured.out
 
 
 @pytest.mark.anyio

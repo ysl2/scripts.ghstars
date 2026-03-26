@@ -8,6 +8,9 @@ from src.shared.papers import PaperSeed
 from src.url_to_csv.arxivxplorer import (
     fetch_paper_seeds_from_arxivxplorer_url,
 )
+from src.url_to_csv.arxiv_org import (
+    fetch_paper_seeds_from_arxiv_org_url,
+)
 from src.url_to_csv.huggingface_papers import (
     fetch_paper_seeds_from_huggingface_papers_url,
 )
@@ -22,6 +25,7 @@ async def fetch_paper_seeds_from_url(
     input_url: str,
     *,
     search_client=None,
+    arxiv_org_client=None,
     huggingface_papers_client=None,
     semanticscholar_client=None,
     discovery_client=None,
@@ -37,6 +41,15 @@ async def fetch_paper_seeds_from_url(
         fetched = await fetch_paper_seeds_from_arxivxplorer_url(
             input_url,
             search_client=search_client,
+            output_dir=output_dir,
+            status_callback=status_callback,
+        )
+    elif source == UrlSource.ARXIV_ORG:
+        if arxiv_org_client is None:
+            raise ValueError("Missing arXiv.org collection client")
+        fetched = await fetch_paper_seeds_from_arxiv_org_url(
+            input_url,
+            arxiv_org_client=arxiv_org_client,
             output_dir=output_dir,
             status_callback=status_callback,
         )
@@ -74,6 +87,7 @@ async def export_url_to_csv(
     input_url: str,
     *,
     search_client=None,
+    arxiv_org_client=None,
     huggingface_papers_client=None,
     semanticscholar_client=None,
     arxiv_client=None,
@@ -86,6 +100,7 @@ async def export_url_to_csv(
     fetched = await fetch_paper_seeds_from_url(
         input_url,
         search_client=search_client,
+        arxiv_org_client=arxiv_org_client,
         huggingface_papers_client=huggingface_papers_client,
         semanticscholar_client=semanticscholar_client,
         discovery_client=discovery_client,
