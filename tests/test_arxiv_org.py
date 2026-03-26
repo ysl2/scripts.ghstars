@@ -1,8 +1,12 @@
 from pathlib import Path
 
+import pytest
+
 from src.shared.papers import PaperSeed
 from src.url_to_csv.arxiv_org import (
     extract_paper_seeds_from_arxiv_list_html,
+    extract_paper_seeds_from_arxiv_search_html,
+    fetch_paper_seeds_from_arxiv_org_url,
     is_supported_arxiv_org_url,
     output_csv_path_for_arxiv_org_url,
 )
@@ -11,6 +15,9 @@ from src.url_to_csv.arxiv_org import (
 def test_is_supported_arxiv_org_url_accepts_list_collection_pages():
     assert is_supported_arxiv_org_url("https://arxiv.org/list/cs.CV/recent")
     assert is_supported_arxiv_org_url("https://arxiv.org/list/cs.CV/new")
+    assert is_supported_arxiv_org_url(
+        "https://arxiv.org/search/?searchtype=all&query=reconstruction&abstracts=show&size=50&order=-submitted_date"
+    )
 
 
 def test_is_supported_arxiv_org_url_rejects_single_paper_pages():
@@ -33,6 +40,15 @@ def test_output_csv_path_for_arxiv_org_new_url_uses_category_and_mode(tmp_path: 
     )
 
     assert csv_path == tmp_path / "arxiv-cs.CV-new.csv"
+
+
+def test_output_csv_path_for_arxiv_org_search_url_uses_query_and_sort(tmp_path: Path):
+    csv_path = output_csv_path_for_arxiv_org_url(
+        "https://arxiv.org/search/?searchtype=all&query=3d+reconstruction&abstracts=show&size=50&order=-submitted_date",
+        output_dir=tmp_path,
+    )
+
+    assert csv_path == tmp_path / "arxiv-search-3d-reconstruction-all-submitted-date.csv"
 
 
 def test_extract_paper_seeds_from_arxiv_list_html_reads_article_pairs():
@@ -122,3 +138,212 @@ def test_extract_paper_seeds_from_arxiv_list_html_keeps_entries_from_all_new_pag
         PaperSeed(name="Cross-list Entry", url="https://arxiv.org/abs/2603.23501"),
         PaperSeed(name="Replacement Entry", url="https://arxiv.org/abs/2603.23500"),
     ]
+
+
+def test_extract_paper_seeds_from_arxiv_search_html_reads_search_results():
+    html_text = """
+    <ol class="breathe-horizontal" start="1">
+      <li class="arxiv-result">
+        <p class="list-title is-inline-block">
+          <a href="https://arxiv.org/abs/2603.24355v2">arXiv:2603.24355v2</a>
+        </p>
+        <p class="title is-5 mathjax">
+          Search Result A
+        </p>
+      </li>
+      <li class="arxiv-result">
+        <p class="list-title is-inline-block">
+          <a href="https://arxiv.org/abs/2603.24354">arXiv:2603.24354</a>
+        </p>
+        <p class="title is-5 mathjax">
+          Search Result B
+        </p>
+      </li>
+    </ol>
+    """
+
+    assert extract_paper_seeds_from_arxiv_search_html(html_text) == [
+        PaperSeed(name="Search Result A", url="https://arxiv.org/abs/2603.24355"),
+        PaperSeed(name="Search Result B", url="https://arxiv.org/abs/2603.24354"),
+    ]
+
+
+@pytest.mark.anyio
+async def test_fetch_paper_seeds_from_arxiv_org_url_pages_list_results_until_total_covered(tmp_path: Path):
+    class FakeArxivOrgClient:
+        def __init__(self):
+            self.urls = []
+
+        async def fetch_page_html(self, url: str):
+            self.urls.append(url)
+            if url == "https://arxiv.org/list/cs.CV/recent":
+                return """
+                <div class='paging'>Total of 3 entries : <span>1-2</span></div>
+                <div class='morefewer'>Showing up to 2 entries per page:</div>
+                <dl id="articles">
+                  <dt><a href="/abs/2603.23502">arXiv:2603.23502</a></dt>
+                  <dd><div class="list-title mathjax"><span class="descriptor">Title:</span> Page 1 A</div></dd>
+                  <dt><a href="/abs/2603.23501">arXiv:2603.23501</a></dt>
+                  <dd><div class="list-title mathjax"><span class="descriptor">Title:</span> Page 1 B</div></dd>
+                </dl>
+                """
+            if url == "https://arxiv.org/list/cs.CV/recent?skip=2&show=2":
+                return """
+                <div class='paging'>Total of 3 entries : <a href="/list/cs.CV/recent?skip=0&amp;show=2">1-2</a> <span>3-3</span></div>
+                <div class='morefewer'>Showing up to 2 entries per page:</div>
+                <dl id="articles">
+                  <dt><a href="/abs/2603.23500">arXiv:2603.23500</a></dt>
+                  <dd><div class="list-title mathjax"><span class="descriptor">Title:</span> Page 2 C</div></dd>
+                </dl>
+                """
+            raise AssertionError(f"unexpected url: {url}")
+
+    client = FakeArxivOrgClient()
+    result = await fetch_paper_seeds_from_arxiv_org_url(
+        "https://arxiv.org/list/cs.CV/recent",
+        arxiv_org_client=client,
+        output_dir=tmp_path,
+    )
+
+    assert [seed.name for seed in result.seeds] == ["Page 1 A", "Page 1 B", "Page 2 C"]
+    assert client.urls == [
+        "https://arxiv.org/list/cs.CV/recent",
+        "https://arxiv.org/list/cs.CV/recent?skip=2&show=2",
+    ]
+    assert result.csv_path == tmp_path / "arxiv-cs.CV-recent.csv"
+
+
+@pytest.mark.anyio
+async def test_fetch_paper_seeds_from_arxiv_org_url_pages_search_results_until_total_covered(tmp_path: Path):
+    class FakeArxivOrgClient:
+        def __init__(self):
+            self.urls = []
+
+        async def fetch_page_html(self, url: str):
+            self.urls.append(url)
+            if url == "https://arxiv.org/search/?searchtype=all&query=reconstruction&abstracts=show&size=2&order=-submitted_date":
+                return """
+                <h1 class="title is-clearfix">Showing 1&ndash;2 of 3 results for all: reconstruction</h1>
+                <ol class="breathe-horizontal" start="1">
+                  <li class="arxiv-result">
+                    <p class="list-title is-inline-block"><a href="https://arxiv.org/abs/2603.24355">arXiv:2603.24355</a></p>
+                    <p class="title is-5 mathjax">Search Result A</p>
+                  </li>
+                  <li class="arxiv-result">
+                    <p class="list-title is-inline-block"><a href="https://arxiv.org/abs/2603.24354">arXiv:2603.24354</a></p>
+                    <p class="title is-5 mathjax">Search Result B</p>
+                  </li>
+                </ol>
+                """
+            if url == "https://arxiv.org/search/?searchtype=all&query=reconstruction&abstracts=show&size=2&order=-submitted_date&start=2":
+                return """
+                <h1 class="title is-clearfix">Showing 3&ndash;3 of 3 results for all: reconstruction</h1>
+                <ol class="breathe-horizontal" start="3">
+                  <li class="arxiv-result">
+                    <p class="list-title is-inline-block"><a href="https://arxiv.org/abs/2603.24353v1">arXiv:2603.24353v1</a></p>
+                    <p class="title is-5 mathjax">Search Result C</p>
+                  </li>
+                </ol>
+                """
+            raise AssertionError(f"unexpected url: {url}")
+
+    client = FakeArxivOrgClient()
+    result = await fetch_paper_seeds_from_arxiv_org_url(
+        "https://arxiv.org/search/?searchtype=all&query=reconstruction&abstracts=show&size=2&order=-submitted_date",
+        arxiv_org_client=client,
+        output_dir=tmp_path,
+    )
+
+    assert [seed.name for seed in result.seeds] == ["Search Result A", "Search Result B", "Search Result C"]
+    assert client.urls == [
+        "https://arxiv.org/search/?searchtype=all&query=reconstruction&abstracts=show&size=2&order=-submitted_date",
+        "https://arxiv.org/search/?searchtype=all&query=reconstruction&abstracts=show&size=2&order=-submitted_date&start=2",
+    ]
+    assert result.csv_path == tmp_path / "arxiv-search-reconstruction-all-submitted-date.csv"
+
+
+@pytest.mark.anyio
+async def test_fetch_paper_seeds_from_arxiv_org_url_deduplicates_canonical_urls_across_pages(tmp_path: Path):
+    class FakeArxivOrgClient:
+        async def fetch_page_html(self, url: str):
+            if "start=2" in url:
+                return """
+                <h1 class="title is-clearfix">Showing 3&ndash;4 of 4 results for all: reconstruction</h1>
+                <ol class="breathe-horizontal" start="3">
+                  <li class="arxiv-result">
+                    <p class="list-title is-inline-block"><a href="https://arxiv.org/abs/2603.24354v2">arXiv:2603.24354v2</a></p>
+                    <p class="title is-5 mathjax">Search Result B Duplicate</p>
+                  </li>
+                  <li class="arxiv-result">
+                    <p class="list-title is-inline-block"><a href="https://arxiv.org/abs/2603.24353">arXiv:2603.24353</a></p>
+                    <p class="title is-5 mathjax">Search Result C</p>
+                  </li>
+                </ol>
+                """
+
+            return """
+            <h1 class="title is-clearfix">Showing 1&ndash;2 of 4 results for all: reconstruction</h1>
+            <ol class="breathe-horizontal" start="1">
+              <li class="arxiv-result">
+                <p class="list-title is-inline-block"><a href="https://arxiv.org/abs/2603.24355">arXiv:2603.24355</a></p>
+                <p class="title is-5 mathjax">Search Result A</p>
+              </li>
+              <li class="arxiv-result">
+                <p class="list-title is-inline-block"><a href="https://arxiv.org/abs/2603.24354">arXiv:2603.24354</a></p>
+                <p class="title is-5 mathjax">Search Result B</p>
+              </li>
+            </ol>
+            """
+
+    result = await fetch_paper_seeds_from_arxiv_org_url(
+        "https://arxiv.org/search/?searchtype=all&query=reconstruction&abstracts=show&size=2&order=-submitted_date",
+        arxiv_org_client=FakeArxivOrgClient(),
+        output_dir=tmp_path,
+    )
+
+    assert [seed.url for seed in result.seeds] == [
+        "https://arxiv.org/abs/2603.24355",
+        "https://arxiv.org/abs/2603.24354",
+        "https://arxiv.org/abs/2603.24353",
+    ]
+
+
+@pytest.mark.anyio
+async def test_fetch_paper_seeds_from_arxiv_org_url_fails_for_list_pages_without_total_entries(tmp_path: Path):
+    class FakeArxivOrgClient:
+        async def fetch_page_html(self, url: str):
+            return """
+            <div class='morefewer'>Showing up to 2 entries per page:</div>
+            <dl id="articles">
+              <dt><a href="/abs/2603.23502">arXiv:2603.23502</a></dt>
+              <dd><div class="list-title mathjax"><span class="descriptor">Title:</span> Page 1 A</div></dd>
+            </dl>
+            """
+
+    with pytest.raises(ValueError, match="Cannot determine total entries from arXiv list page"):
+        await fetch_paper_seeds_from_arxiv_org_url(
+            "https://arxiv.org/list/cs.CV/recent",
+            arxiv_org_client=FakeArxivOrgClient(),
+            output_dir=tmp_path,
+        )
+
+
+@pytest.mark.anyio
+async def test_fetch_paper_seeds_from_arxiv_org_url_fails_for_search_pages_without_total_results(tmp_path: Path):
+    class FakeArxivOrgClient:
+        async def fetch_page_html(self, url: str):
+            return """
+            <ol class="breathe-horizontal" start="1">
+              <li class="arxiv-result">
+                <p class="list-title is-inline-block"><a href="https://arxiv.org/abs/2603.24355">arXiv:2603.24355</a></p>
+                <p class="title is-5 mathjax">Search Result A</p>
+              </li>
+            </ol>
+            """
+
+    with pytest.raises(ValueError, match="Cannot determine total results from arXiv search page"):
+        await fetch_paper_seeds_from_arxiv_org_url(
+            "https://arxiv.org/search/?searchtype=all&query=reconstruction&abstracts=show&size=2&order=-submitted_date",
+            arxiv_org_client=FakeArxivOrgClient(),
+            output_dir=tmp_path,
+        )
