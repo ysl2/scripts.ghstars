@@ -12,7 +12,7 @@ def build_url_export_csv_path(
     output_dir: Path | None = None,
     timestamp: str | None = None,
 ) -> Path:
-    directory = Path(output_dir) if output_dir is not None else Path.cwd()
+    directory = Path(output_dir) if output_dir is not None else Path("output")
     stem = "-".join(part for part in parts if part)[:200].rstrip("-") or "papers"
     suffix = timestamp or current_run_timestamp()
     return directory / f"{stem}-{suffix}.csv"

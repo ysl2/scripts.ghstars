@@ -304,6 +304,56 @@ async def test_export_url_to_csv_writes_sorted_csv_in_output_dir(tmp_path: Path)
 
 
 @pytest.mark.anyio
+async def test_export_url_to_csv_defaults_to_output_directory_and_creates_it(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    class FakeSearchClient:
+        async def search(self, query, page: int):
+            data = {
+                1: [
+                    {"id": "2501.00001", "journal": "arxiv", "title": "Paper A"},
+                ],
+                2: [],
+            }
+            return data[page]
+
+    class FakeDiscoveryClient:
+        async def resolve_github_url(self, seed):
+            assert seed.url == "https://arxiv.org/abs/2501.00001"
+            return "https://github.com/foo/bar"
+
+    class FakeGitHubClient:
+        async def get_star_count(self, owner, repo):
+            assert (owner, repo) == ("foo", "bar")
+            return 11, None
+
+    result = await export_url_to_csv(
+        "https://arxivxplorer.com/?q=streaming+semantic+3d+reconstruction&cats=cs.CV&year=2026",
+        search_client=FakeSearchClient(),
+        discovery_client=FakeDiscoveryClient(),
+        github_client=FakeGitHubClient(),
+    )
+
+    assert result.csv_path.parent == Path("output")
+    assert result.csv_path == (
+        Path("output") / "arxivxplorer-streaming-semantic-3d-reconstruction-cs.CV-2026-20260326113045.csv"
+    )
+    assert (tmp_path / result.csv_path).exists()
+
+    with (tmp_path / result.csv_path).open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert rows == [
+        {
+            "Name": "Paper A",
+            "Url": "https://arxiv.org/abs/2501.00001",
+            "Github": "https://github.com/foo/bar",
+            "Stars": "11",
+        }
+    ]
+
+
+@pytest.mark.anyio
 async def test_export_url_to_csv_writes_huggingface_results_in_output_dir(tmp_path: Path):
     payload = {
         "query": {"q": "semantic"},

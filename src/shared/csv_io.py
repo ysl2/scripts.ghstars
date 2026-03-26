@@ -10,6 +10,7 @@ CSV_HEADERS = ["Name", "Url", "Github", "Stars"]
 
 def write_records_to_csv_path(records: list[PaperRecord], csv_path: Path) -> Path:
     sorted_records = sort_records(records)
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
 
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="", delete=False, dir=csv_path.parent) as handle:
         writer = csv.DictWriter(handle, fieldnames=CSV_HEADERS)
