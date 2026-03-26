@@ -13,7 +13,7 @@ from src.shared.paper_identity import extract_arxiv_id, normalize_arxiv_url, nor
 
 
 HUGGINGFACE_PAPER_ID_PATTERN = re.compile(r"^[0-9]{4}\.[0-9]{4,5}$")
-HUGGINGFACE_DIRECT_FETCH_ATTEMPTS = 3
+HUGGINGFACE_DIRECT_FETCH_ATTEMPTS = 2
 
 
 class _DiscoveryRequestGate:
