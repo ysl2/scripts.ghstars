@@ -2,12 +2,13 @@ import re
 from urllib.parse import urlparse, urlunparse
 
 
+ARXIV_HOSTS = {"arxiv.org", "www.arxiv.org"}
 ARXIV_URL_PATTERN = re.compile(
     r"arxiv\.org/(?:abs|pdf)/([0-9]{4}\.[0-9]{4,5})(?:v\d+)?(?:\.pdf)?",
     re.IGNORECASE,
 )
 ARXIV_SINGLE_PAPER_PATTERN = re.compile(
-    r"arxiv\.org/(?:abs|pdf)/(?P<id>[0-9]{4}\.[0-9]{4,5})(?:v\d+)?(?:\.pdf)?$",
+    r"^/(?:abs|pdf)/(?P<id>[0-9]{4}\.[0-9]{4,5})(?:v\d+)?(?:\.pdf)?/?$",
     re.IGNORECASE,
 )
 SEMANTIC_SCHOLAR_HOSTS = {"semanticscholar.org", "www.semanticscholar.org"}
@@ -27,7 +28,13 @@ def extract_arxiv_id_from_single_paper_url(url: str) -> str | None:
     if not url or not isinstance(url, str):
         return None
 
-    match = ARXIV_SINGLE_PAPER_PATTERN.search(url.strip())
+    parsed = urlparse(url.strip())
+    host = (parsed.hostname or parsed.netloc or "").lower()
+    path = re.sub(r"/+", "/", parsed.path or "")
+    if parsed.scheme not in {"http", "https"} or host not in ARXIV_HOSTS:
+        return None
+
+    match = ARXIV_SINGLE_PAPER_PATTERN.fullmatch(path)
     if not match:
         return None
     return match.group("id")

@@ -238,3 +238,109 @@ async def test_get_arxiv_title_accepts_id_only_input():
             {"id_list": "2501.12345"},
         )
     ]
+
+
+@pytest.mark.anyio
+async def test_get_arxiv_title_accepts_pdf_url_input():
+    class FakeResponse:
+        def __init__(self, status: int, text: str):
+            self.status = status
+            self._text = text
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def text(self):
+            return self._text
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, params=None):
+            self.calls.append((url, params))
+            assert url == "https://export.arxiv.org/api/query"
+            return FakeResponse(
+                200,
+                """
+                <feed xmlns="http://www.w3.org/2005/Atom">
+                  <entry>
+                    <id>http://arxiv.org/abs/2501.12345v1</id>
+                    <title>Example Paper Title</title>
+                  </entry>
+                </feed>
+                """,
+            )
+
+    session = FakeSession()
+    client = ArxivClient(session, max_concurrent=1, min_interval=0)
+
+    title, error = await client.get_title("https://arxiv.org/pdf/2501.12345v1.pdf")
+
+    assert (title, error) == ("Example Paper Title", None)
+    assert session.calls == [
+        (
+            "https://export.arxiv.org/api/query",
+            {"id_list": "2501.12345"},
+        )
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://arxiv.org/abs/2501.12345v1/",
+        "https://arxiv.org/abs/2501.12345v1?context=copy",
+        "https://arxiv.org/abs/2501.12345v1#references",
+    ],
+)
+async def test_get_arxiv_title_accepts_single_paper_url_variants(url: str):
+    class FakeResponse:
+        def __init__(self, status: int, text: str):
+            self.status = status
+            self._text = text
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def text(self):
+            return self._text
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, params=None):
+            self.calls.append((url, params))
+            assert url == "https://export.arxiv.org/api/query"
+            return FakeResponse(
+                200,
+                """
+                <feed xmlns="http://www.w3.org/2005/Atom">
+                  <entry>
+                    <id>http://arxiv.org/abs/2501.12345v1</id>
+                    <title>Example Paper Title</title>
+                  </entry>
+                </feed>
+                """,
+            )
+
+    session = FakeSession()
+    client = ArxivClient(session, max_concurrent=1, min_interval=0)
+
+    title, error = await client.get_title(url)
+
+    assert (title, error) == ("Example Paper Title", None)
+    assert session.calls == [
+        (
+            "https://export.arxiv.org/api/query",
+            {"id_list": "2501.12345"},
+        )
+    ]

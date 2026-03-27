@@ -44,3 +44,9 @@ def test_malformed_arxiv_urls_are_rejected():
             None,
         ]
     )
+
+
+def test_embedded_arxiv_path_on_non_arxiv_host_is_rejected():
+    url = "https://example.com/archive/arxiv.org/abs/2603.12345"
+    assert extract_arxiv_id_from_single_paper_url(url) is None
+    assert not is_single_arxiv_paper_url(url)
