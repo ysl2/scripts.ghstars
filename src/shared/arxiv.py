@@ -8,7 +8,10 @@ import xml.etree.ElementTree as ET
 import aiohttp
 
 from src.shared.http import MAX_RETRIES, RateLimiter
-from src.shared.paper_identity import extract_arxiv_id
+from src.shared.paper_identity import (
+    extract_arxiv_id,
+    extract_arxiv_id_from_single_paper_url,
+)
 
 
 ARXIV_SUBMITTED_PATTERN = re.compile(r"\[Submitted on (\d{1,2} [A-Za-z]{3} \d{4})\b", re.IGNORECASE)
@@ -23,6 +26,10 @@ ARXIV_SEARCH_LINK_PATTERN = re.compile(
 )
 HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
 NON_ALNUM_PATTERN = re.compile(r"[^0-9a-z]+")
+ARXIV_ID_ONLY_PATTERN = re.compile(
+    r"^([0-9]{4}\.[0-9]{4,5})(?:v\d+)?$",
+    re.IGNORECASE,
+)
 
 
 def normalize_title_for_matching(title: str) -> str:
@@ -156,6 +163,51 @@ def extract_submitted_date_from_abs_html(html: str) -> str | None:
         return None
 
 
+def _extract_single_arxiv_id_input(value: str) -> str | None:
+    if not value or not isinstance(value, str):
+        return None
+
+    candidate = value.strip()
+    if not candidate:
+        return None
+
+    url_id = extract_arxiv_id_from_single_paper_url(candidate)
+    if url_id:
+        return url_id
+
+    match = ARXIV_ID_ONLY_PATTERN.fullmatch(candidate)
+    if not match:
+        return None
+    return match.group(1)
+
+
+def _extract_title_from_feed(feed_xml: str, arxiv_id: str) -> str | None:
+    if not feed_xml or not arxiv_id:
+        return None
+
+    ns = {"a": "http://www.w3.org/2005/Atom"}
+    try:
+        root = ET.fromstring(feed_xml)
+    except ET.ParseError:
+        return None
+
+    for entry in root.findall("a:entry", ns):
+        id_el = entry.find("a:id", ns)
+        title_el = entry.find("a:title", ns)
+        if id_el is None or title_el is None or not id_el.text:
+            continue
+
+        entry_id = extract_arxiv_id(id_el.text.strip())
+        if entry_id != arxiv_id:
+            continue
+
+        title_text = "".join(title_el.itertext())
+        stripped = _strip_html_text(title_text)
+        return stripped or None
+
+    return None
+
+
 class ArxivClient:
     def __init__(self, session: aiohttp.ClientSession, max_concurrent: int = 5, min_interval: float = 0.2):
         self.session = session
@@ -208,6 +260,24 @@ class ArxivClient:
         if not date:
             return None, "No submitted date found on arXiv abs page"
         return date, None
+
+    async def get_title(self, arxiv_identifier: str) -> tuple[str | None, str | None]:
+        arxiv_id = _extract_single_arxiv_id_input(arxiv_identifier)
+        if not arxiv_id:
+            return None, "Invalid arXiv identifier"
+
+        feed_xml, error = await self._request_text(
+            "https://export.arxiv.org/api/query",
+            params={"id_list": arxiv_id},
+            retry_prefix="arXiv metadata query",
+        )
+        if error:
+            return None, error
+
+        title = _extract_title_from_feed(feed_xml, arxiv_id)
+        if not title:
+            return None, "No title found on arXiv metadata feed"
+        return title, None
 
     async def get_published_dates(self, arxiv_urls: list[str]) -> tuple[dict[str, str], dict[str, str]]:
         unique_urls = []

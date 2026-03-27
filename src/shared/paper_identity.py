@@ -6,6 +6,10 @@ ARXIV_URL_PATTERN = re.compile(
     r"arxiv\.org/(?:abs|pdf)/([0-9]{4}\.[0-9]{4,5})(?:v\d+)?(?:\.pdf)?",
     re.IGNORECASE,
 )
+ARXIV_SINGLE_PAPER_PATTERN = re.compile(
+    r"arxiv\.org/(?:abs|pdf)/(?P<id>[0-9]{4}\.[0-9]{4,5})(?:v\d+)?(?:\.pdf)?$",
+    re.IGNORECASE,
+)
 SEMANTIC_SCHOLAR_HOSTS = {"semanticscholar.org", "www.semanticscholar.org"}
 
 
@@ -17,6 +21,20 @@ def extract_arxiv_id(url: str) -> str | None:
     if not match:
         return None
     return match.group(1)
+
+
+def extract_arxiv_id_from_single_paper_url(url: str) -> str | None:
+    if not url or not isinstance(url, str):
+        return None
+
+    match = ARXIV_SINGLE_PAPER_PATTERN.search(url.strip())
+    if not match:
+        return None
+    return match.group("id")
+
+
+def is_single_arxiv_paper_url(url: str) -> bool:
+    return extract_arxiv_id_from_single_paper_url(url) is not None
 
 
 def build_arxiv_abs_url(arxiv_id: str) -> str:
