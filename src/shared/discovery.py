@@ -235,6 +235,7 @@ class DiscoveryClient:
         huggingface_token: str = "",
         alphaxiv_token: str = "",
         repo_cache=None,
+        hf_exact_no_repo_threshold: int = HF_EXACT_NO_REPO_THRESHOLD,
         max_concurrent: int = 5,
         min_interval: float = 0.2,
     ):
@@ -242,7 +243,7 @@ class DiscoveryClient:
         self.huggingface_token = huggingface_token
         self.alphaxiv_token = alphaxiv_token
         self.repo_cache = repo_cache
-        self.hf_exact_no_repo_threshold = HF_EXACT_NO_REPO_THRESHOLD
+        self.hf_exact_no_repo_threshold = hf_exact_no_repo_threshold
         self._huggingface_gate = _DiscoveryRequestGate(max_concurrent, resolve_huggingface_min_interval(min_interval))
         self._huggingface_search_semaphore = asyncio.Semaphore(HUGGINGFACE_SEARCH_MAX_CONCURRENT)
         self._alphaxiv_gate = _DiscoveryRequestGate(max_concurrent, min_interval)

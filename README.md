@@ -30,6 +30,7 @@ Copy `.env.example` to `.env` and fill in the variables you need.
 GITHUB_TOKEN=your_github_token_here
 HUGGINGFACE_TOKEN=your_huggingface_token_here
 ALPHAXIV_TOKEN=your_alphaxiv_token_here
+HF_EXACT_NO_REPO_THRESHOLD=10
 ```
 
 `cache.db` is created automatically at the project root and shared across URL, CSV, and Notion runs.
@@ -231,6 +232,7 @@ When `Github` is empty, the sync flow:
 4. stores successful exact no-repo outcomes as a counter in `cache.db`
 
 The no-repo counter is only incremented when Hugging Face exact responds successfully but without a `githubRepo`. Transient request failures do not increment it.
+`HF_EXACT_NO_REPO_THRESHOLD` controls how many successful exact no-repo results are required before the cache will stop re-checking that arXiv URL.
 
 ## Notes
 
