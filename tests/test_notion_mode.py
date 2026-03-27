@@ -29,6 +29,7 @@ def test_load_config_accepts_env_values():
             "DATABASE_ID": "db_123",
             "ALPHAXIV_TOKEN": "axv1_test",
             "HUGGINGFACE_TOKEN": "hf_test",
+            "HF_EXACT_NO_REPO_RECHECK_DAYS": "7",
         }
     )
 
@@ -38,6 +39,7 @@ def test_load_config_accepts_env_values():
         "database_id": "db_123",
         "alphaxiv_token": "axv1_test",
         "huggingface_token": "hf_test",
+        "hf_exact_no_repo_recheck_days": 7,
     }
 
 

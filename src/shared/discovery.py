@@ -2,6 +2,7 @@ import asyncio
 import html as html_lib
 import json
 import re
+from datetime import datetime, timedelta, timezone
 
 import aiohttp
 
@@ -10,7 +11,7 @@ from src.shared.github import normalize_github_url
 from src.shared.headless_browser import dump_rendered_html
 from src.shared.http import MAX_RETRIES, RateLimiter
 from src.shared.paper_identity import extract_arxiv_id, normalize_arxiv_url, normalize_semanticscholar_paper_url
-from src.shared.settings import HF_EXACT_NO_REPO_THRESHOLD
+from src.shared.settings import HF_EXACT_NO_REPO_RECHECK_DAYS
 
 
 HUGGINGFACE_PAPER_ID_PATTERN = re.compile(r"^[0-9]{4}\.[0-9]{4,5}$")
@@ -235,7 +236,7 @@ class DiscoveryClient:
         huggingface_token: str = "",
         alphaxiv_token: str = "",
         repo_cache=None,
-        hf_exact_no_repo_threshold: int = HF_EXACT_NO_REPO_THRESHOLD,
+        hf_exact_no_repo_recheck_days: int = HF_EXACT_NO_REPO_RECHECK_DAYS,
         max_concurrent: int = 5,
         min_interval: float = 0.2,
     ):
@@ -243,7 +244,7 @@ class DiscoveryClient:
         self.huggingface_token = huggingface_token
         self.alphaxiv_token = alphaxiv_token
         self.repo_cache = repo_cache
-        self.hf_exact_no_repo_threshold = hf_exact_no_repo_threshold
+        self.hf_exact_no_repo_recheck_days = hf_exact_no_repo_recheck_days
         self._huggingface_gate = _DiscoveryRequestGate(max_concurrent, resolve_huggingface_min_interval(min_interval))
         self._huggingface_search_semaphore = asyncio.Semaphore(HUGGINGFACE_SEARCH_MAX_CONCURRENT)
         self._alphaxiv_gate = _DiscoveryRequestGate(max_concurrent, min_interval)
@@ -421,8 +422,8 @@ async def resolve_github_url(seed, client) -> str | None:
             if cached.github_url:
                 return cached.github_url
 
-            threshold = getattr(client, "hf_exact_no_repo_threshold", HF_EXACT_NO_REPO_THRESHOLD)
-            if cached.hf_exact_no_repo_count >= threshold:
+            recheck_days = getattr(client, "hf_exact_no_repo_recheck_days", HF_EXACT_NO_REPO_RECHECK_DAYS)
+            if _should_skip_negative_cache_recheck(cached.last_hf_exact_checked_at, recheck_days):
                 return None
 
     exact_fetcher = getattr(client, "get_huggingface_paper_payload_by_arxiv_id", None)
@@ -439,6 +440,21 @@ async def resolve_github_url(seed, client) -> str | None:
         return None
 
     return None
+
+
+def _should_skip_negative_cache_recheck(last_checked_at: str | None, recheck_days: int) -> bool:
+    if not last_checked_at:
+        return False
+
+    try:
+        checked_at = datetime.fromisoformat(last_checked_at)
+    except ValueError:
+        return False
+
+    if checked_at.tzinfo is None:
+        checked_at = checked_at.replace(tzinfo=timezone.utc)
+
+    return datetime.now(timezone.utc) < checked_at + timedelta(days=recheck_days)
 
 
 async def resolve_arxiv_id_by_title(

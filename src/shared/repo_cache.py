@@ -8,7 +8,6 @@ from pathlib import Path
 class RepoCacheEntry:
     arxiv_url: str
     github_url: str | None
-    hf_exact_no_repo_count: int
     created_at: str
     updated_at: str
     last_hf_exact_checked_at: str | None
@@ -27,7 +26,7 @@ class RepoCacheStore:
     def get(self, arxiv_url: str) -> RepoCacheEntry | None:
         row = self.connection.execute(
             """
-            SELECT arxiv_url, github_url, hf_exact_no_repo_count, created_at, updated_at, last_hf_exact_checked_at
+            SELECT arxiv_url, github_url, created_at, updated_at, last_hf_exact_checked_at
             FROM repo_cache
             WHERE arxiv_url = ?
             """,
@@ -39,7 +38,6 @@ class RepoCacheStore:
         return RepoCacheEntry(
             arxiv_url=row["arxiv_url"],
             github_url=row["github_url"],
-            hf_exact_no_repo_count=row["hf_exact_no_repo_count"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             last_hf_exact_checked_at=row["last_hf_exact_checked_at"],
@@ -52,15 +50,13 @@ class RepoCacheStore:
             INSERT INTO repo_cache (
                 arxiv_url,
                 github_url,
-                hf_exact_no_repo_count,
                 created_at,
                 updated_at,
                 last_hf_exact_checked_at
             )
-            VALUES (?, ?, 0, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(arxiv_url) DO UPDATE SET
                 github_url = excluded.github_url,
-                hf_exact_no_repo_count = 0,
                 updated_at = excluded.updated_at,
                 last_hf_exact_checked_at = excluded.last_hf_exact_checked_at
             """,
@@ -75,16 +71,15 @@ class RepoCacheStore:
             INSERT INTO repo_cache (
                 arxiv_url,
                 github_url,
-                hf_exact_no_repo_count,
                 created_at,
                 updated_at,
                 last_hf_exact_checked_at
             )
-            VALUES (?, NULL, 1, ?, ?, ?)
+            VALUES (?, NULL, ?, ?, ?)
             ON CONFLICT(arxiv_url) DO UPDATE SET
-                hf_exact_no_repo_count = CASE
-                    WHEN repo_cache.github_url IS NULL THEN repo_cache.hf_exact_no_repo_count + 1
-                    ELSE repo_cache.hf_exact_no_repo_count
+                github_url = CASE
+                    WHEN repo_cache.github_url IS NULL THEN NULL
+                    ELSE repo_cache.github_url
                 END,
                 updated_at = excluded.updated_at,
                 last_hf_exact_checked_at = excluded.last_hf_exact_checked_at
@@ -94,18 +89,71 @@ class RepoCacheStore:
         self.connection.commit()
 
     def _initialize_schema(self) -> None:
+        existing_columns = self._existing_columns()
+        if not existing_columns:
+            self._create_schema()
+            return
+
+        if "hf_exact_no_repo_count" in existing_columns:
+            self._migrate_from_threshold_schema()
+            return
+
+        if "last_hf_exact_checked_at" not in existing_columns:
+            self.connection.execute(
+                "ALTER TABLE repo_cache ADD COLUMN last_hf_exact_checked_at TEXT"
+            )
+            self.connection.commit()
+
+    def _existing_columns(self) -> set[str]:
+        rows = self.connection.execute("PRAGMA table_info(repo_cache)").fetchall()
+        return {row["name"] for row in rows}
+
+    def _create_schema(self) -> None:
         self.connection.execute(
             """
             CREATE TABLE IF NOT EXISTS repo_cache (
                 arxiv_url TEXT PRIMARY KEY,
                 github_url TEXT,
-                hf_exact_no_repo_count INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 last_hf_exact_checked_at TEXT
             )
             """
         )
+        self.connection.commit()
+
+    def _migrate_from_threshold_schema(self) -> None:
+        self.connection.execute(
+            """
+            CREATE TABLE repo_cache_new (
+                arxiv_url TEXT PRIMARY KEY,
+                github_url TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_hf_exact_checked_at TEXT
+            )
+            """
+        )
+        self.connection.execute(
+            """
+            INSERT INTO repo_cache_new (
+                arxiv_url,
+                github_url,
+                created_at,
+                updated_at,
+                last_hf_exact_checked_at
+            )
+            SELECT
+                arxiv_url,
+                github_url,
+                created_at,
+                updated_at,
+                last_hf_exact_checked_at
+            FROM repo_cache
+            """
+        )
+        self.connection.execute("DROP TABLE repo_cache")
+        self.connection.execute("ALTER TABLE repo_cache_new RENAME TO repo_cache")
         self.connection.commit()
 
 

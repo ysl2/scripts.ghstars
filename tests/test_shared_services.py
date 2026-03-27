@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -193,10 +194,11 @@ async def test_resolve_github_url_uses_cached_repo_before_hf_exact():
                 get=lambda arxiv_url: SimpleNamespace(
                     arxiv_url=arxiv_url,
                     github_url="https://github.com/foo/bar",
-                    hf_exact_no_repo_count=0,
+                    created_at="2026-03-27T00:00:00+00:00",
+                    updated_at="2026-03-27T00:00:00+00:00",
+                    last_hf_exact_checked_at="2026-03-27T00:00:00+00:00",
                 )
             )
-            self.hf_exact_no_repo_threshold = 10
 
         async def get_huggingface_paper_payload_by_arxiv_id(self, arxiv_id):
             raise AssertionError("HF exact should not run when cache already has a repo")
@@ -211,20 +213,24 @@ async def test_resolve_github_url_uses_cached_repo_before_hf_exact():
 
 
 @pytest.mark.anyio
-async def test_resolve_github_url_skips_hf_exact_when_cached_no_repo_reaches_threshold():
+async def test_resolve_github_url_skips_hf_exact_when_cached_no_repo_is_still_fresh():
+    recent = datetime.now(timezone.utc).isoformat()
+
     class FakeDiscoveryClient:
         def __init__(self):
             self.repo_cache = SimpleNamespace(
                 get=lambda arxiv_url: SimpleNamespace(
                     arxiv_url=arxiv_url,
                     github_url=None,
-                    hf_exact_no_repo_count=10,
+                    created_at=recent,
+                    updated_at=recent,
+                    last_hf_exact_checked_at=recent,
                 )
             )
-            self.hf_exact_no_repo_threshold = 10
+            self.hf_exact_no_repo_recheck_days = 7
 
         async def get_huggingface_paper_payload_by_arxiv_id(self, arxiv_id):
-            raise AssertionError("HF exact should not run once no-repo threshold is reached")
+            raise AssertionError("HF exact should not run while cached no-repo entry is still fresh")
 
     client = FakeDiscoveryClient()
     github_url = await resolve_github_url(
@@ -236,7 +242,9 @@ async def test_resolve_github_url_skips_hf_exact_when_cached_no_repo_reaches_thr
 
 
 @pytest.mark.anyio
-async def test_resolve_github_url_queries_hf_exact_when_cached_no_repo_is_below_threshold():
+async def test_resolve_github_url_queries_hf_exact_when_cached_no_repo_entry_is_stale():
+    stale = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+
     class FakeRepoCache:
         def __init__(self):
             self.found_calls = []
@@ -246,7 +254,9 @@ async def test_resolve_github_url_queries_hf_exact_when_cached_no_repo_is_below_
             return SimpleNamespace(
                 arxiv_url=arxiv_url,
                 github_url=None,
-                hf_exact_no_repo_count=9,
+                created_at=stale,
+                updated_at=stale,
+                last_hf_exact_checked_at=stale,
             )
 
         def record_found_repo(self, arxiv_url, github_url):
@@ -260,7 +270,7 @@ async def test_resolve_github_url_queries_hf_exact_when_cached_no_repo_is_below_
             self.huggingface_token = "hf_token"
             self.calls = []
             self.repo_cache = FakeRepoCache()
-            self.hf_exact_no_repo_threshold = 10
+            self.hf_exact_no_repo_recheck_days = 7
 
         async def get_huggingface_paper_payload_by_arxiv_id(self, arxiv_id):
             self.calls.append(("hf_paper_api", arxiv_id))

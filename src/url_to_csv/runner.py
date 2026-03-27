@@ -83,7 +83,7 @@ async def run_url_mode(
                 huggingface_token=config["huggingface_token"],
                 alphaxiv_token=config["alphaxiv_token"],
                 repo_cache=repo_cache,
-                hf_exact_no_repo_threshold=config["hf_exact_no_repo_threshold"],
+                hf_exact_no_repo_recheck_days=config["hf_exact_no_repo_recheck_days"],
                 max_concurrent=CONCURRENT_LIMIT,
                 min_interval=REQUEST_DELAY,
             )

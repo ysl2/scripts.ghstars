@@ -1,6 +1,6 @@
 import inspect
 
-from src.shared.settings import HF_EXACT_NO_REPO_THRESHOLD
+from src.shared.settings import HF_EXACT_NO_REPO_RECHECK_DAYS
 
 
 def load_runtime_config(env: dict[str, str]) -> dict[str, str]:
@@ -8,9 +8,9 @@ def load_runtime_config(env: dict[str, str]) -> dict[str, str]:
         "github_token": (env.get("GITHUB_TOKEN") or "").strip(),
         "huggingface_token": (env.get("HUGGINGFACE_TOKEN") or "").strip(),
         "alphaxiv_token": (env.get("ALPHAXIV_TOKEN") or "").strip(),
-        "hf_exact_no_repo_threshold": _parse_positive_int(
-            env.get("HF_EXACT_NO_REPO_THRESHOLD"),
-            default=HF_EXACT_NO_REPO_THRESHOLD,
+        "hf_exact_no_repo_recheck_days": _parse_positive_int(
+            env.get("HF_EXACT_NO_REPO_RECHECK_DAYS"),
+            default=HF_EXACT_NO_REPO_RECHECK_DAYS,
         ),
     }
 
