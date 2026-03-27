@@ -1,11 +1,12 @@
 import asyncio
+import re
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
 import aiohttp
 
 from src.shared.http import MAX_RETRIES, RateLimiter
-from src.shared.paper_identity import normalize_arxiv_url
+from src.shared.paper_identity import build_arxiv_abs_url, normalize_arxiv_url
 from src.shared.papers import PaperSeed
 
 
@@ -13,6 +14,7 @@ OPENALEX_WORKS_URL = "https://api.openalex.org/works"
 OPENALEX_SEARCH_PAGE_SIZE = 5
 OPENALEX_CITED_BY_PAGE_SIZE = 200
 OPENALEX_RETRY_STATUSES = {429, 500, 502, 503, 504}
+ARXIV_DOI_PATTERN = re.compile(r"10\.48550/arxiv\.([0-9]{4}\.[0-9]{4,5})(?:v\d+)?", re.IGNORECASE)
 
 
 class OpenAlexClient:
@@ -45,18 +47,21 @@ class OpenAlexClient:
         return await asyncio.gather(*tasks)
 
     async def fetch_citations(self, work: dict[str, Any]) -> list[dict[str, Any]]:
-        url = work.get("cited_by_api_url")
-        if not url:
+        work_id = self._extract_work_id(work.get("id"))
+        if not work_id:
             return []
 
-        cursor: str | None = None
+        cursor: str | None = "*"
         citations: list[dict[str, Any]] = []
         while True:
-            params: dict[str, Any] = {"per_page": OPENALEX_CITED_BY_PAGE_SIZE}
+            params: dict[str, Any] = {
+                "filter": f"cites:{work_id}",
+                "per_page": OPENALEX_CITED_BY_PAGE_SIZE,
+            }
             if cursor:
                 params["cursor"] = cursor
 
-            payload = await self._get_json(url, params=params)
+            payload = await self._get_json(OPENALEX_WORKS_URL, params=params)
             citations.extend(payload.get("results") or [])
 
             meta = payload.get("meta") or {}
@@ -67,16 +72,11 @@ class OpenAlexClient:
         return citations
 
     def normalize_related_work(self, work: dict[str, Any]) -> PaperSeed | None:
-        ids = work.get("ids") or {}
-        arxiv_id = ids.get("arxiv")
-        if not arxiv_id or not isinstance(arxiv_id, str):
-            return None
-
-        canonical = normalize_arxiv_url(f"https://arxiv.org/abs/{arxiv_id}")
+        canonical = self._canonical_arxiv_url(work)
         if not canonical:
             return None
 
-        name = work.get("display_name") or work.get("title") or arxiv_id
+        name = work.get("display_name") or work.get("title") or canonical
         return PaperSeed(name=name, url=canonical)
 
     async def _get_json(self, url: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -84,8 +84,12 @@ class OpenAlexClient:
             async with self.semaphore:
                 await self.rate_limiter.acquire()
                 try:
+                    request_params = dict(params or {})
+                    if self.openalex_api_key:
+                        request_params["api_key"] = self.openalex_api_key
+
                     async with self.session.get(
-                        url, headers=self._build_headers(), params=params
+                        url, headers=self._build_headers(), params=request_params
                     ) as response:
                         if response.status == 200:
                             return await response.json()
@@ -105,9 +109,45 @@ class OpenAlexClient:
 
     def _build_headers(self) -> dict[str, str]:
         headers = {"User-Agent": "scripts.ghstars"}
-        if self.openalex_api_key:
-            headers["Authorization"] = f"Bearer {self.openalex_api_key}"
         return headers
+
+    def _canonical_arxiv_url(self, work: dict[str, Any]) -> str | None:
+        ids = work.get("ids") or {}
+        arxiv_id = ids.get("arxiv")
+        if isinstance(arxiv_id, str):
+            canonical = normalize_arxiv_url(build_arxiv_abs_url(arxiv_id))
+            if canonical:
+                return canonical
+
+        doi = work.get("doi")
+        doi_arxiv_id = self._extract_arxiv_id_from_doi(doi)
+        if doi_arxiv_id:
+            canonical = normalize_arxiv_url(build_arxiv_abs_url(doi_arxiv_id))
+            if canonical:
+                return canonical
+
+        locations = work.get("locations") or []
+        for location in locations:
+            location_url = None
+            if isinstance(location, dict):
+                location_url = location.get("url")
+            elif isinstance(location, str):
+                location_url = location
+
+            canonical = normalize_arxiv_url(location_url or "")
+            if canonical:
+                return canonical
+
+        return None
+
+    @staticmethod
+    def _extract_arxiv_id_from_doi(doi: str | None) -> str | None:
+        if not doi or not isinstance(doi, str):
+            return None
+        match = ARXIV_DOI_PATTERN.search(doi.strip())
+        if not match:
+            return None
+        return match.group(1)
 
     @staticmethod
     def _unique_work_ids(values: Iterable[str | None]) -> list[str]:

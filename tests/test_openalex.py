@@ -91,20 +91,42 @@ async def test_citations_paginate_across_multiple_pages():
     second_page = {"results": [{"id": "W2"}], "meta": {"next_cursor": None}}
     session = FakeSession([FakeResponse(first_page), FakeResponse(second_page)])
     client = OpenAlexClient(session, min_interval=0, max_concurrent=1)
-    work = {"cited_by_api_url": "https://api.openalex.org/works/W0/cited_by"}
+    work = {"id": "https://openalex.org/works/W0"}
 
     citations = await client.fetch_citations(work)
 
     assert citations == first_page["results"] + second_page["results"]
     assert session.calls[0]["params"]["per_page"] == 200
-    assert "cursor" not in session.calls[0]["params"]
+    assert session.calls[0]["params"]["filter"] == "cites:W0"
+    assert session.calls[0]["params"]["cursor"] == "*"
     assert session.calls[1]["params"]["cursor"] == "abc"
+    assert session.calls[1]["params"]["filter"] == "cites:W0"
 
 
 @pytest.mark.anyio
-async def test_request_headers_include_openalex_api_key_when_present():
+async def test_query_params_include_openalex_api_key_when_present():
     session = FakeSession([FakeResponse({"results": []})])
     client = OpenAlexClient(session, openalex_api_key="oa_key", min_interval=0, max_concurrent=1)
     await client.search_first_work("title")
 
-    assert session.calls[0]["headers"]["Authorization"] == "Bearer oa_key"
+    assert session.calls[0]["params"]["api_key"] == "oa_key"
+
+
+def test_normalizes_related_work_from_location_url():
+    session = FakeSession([])
+    client = OpenAlexClient(session, min_interval=0)
+    work = {"display_name": "Location Paper", "locations": [{"url": "https://arxiv.org/pdf/2403.00002.pdf"}]}
+
+    seed = client.normalize_related_work(work)
+
+    assert seed == PaperSeed(name="Location Paper", url="https://arxiv.org/abs/2403.00002")
+
+
+def test_normalizes_related_work_from_doi():
+    session = FakeSession([])
+    client = OpenAlexClient(session, min_interval=0)
+    work = {"doi": "https://doi.org/10.48550/arXiv.2403.00003"}
+
+    seed = client.normalize_related_work(work)
+
+    assert seed == PaperSeed(name="https://arxiv.org/abs/2403.00003", url="https://arxiv.org/abs/2403.00003")
