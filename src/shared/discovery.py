@@ -13,13 +13,19 @@ from src.shared.paper_identity import extract_arxiv_id, normalize_arxiv_url, nor
 
 
 HUGGINGFACE_PAPER_ID_PATTERN = re.compile(r"^[0-9]{4}\.[0-9]{4,5}$")
-HUGGINGFACE_DIRECT_FETCH_ATTEMPTS = 2
+HUGGINGFACE_API_MIN_INTERVAL = 0.7
+HUGGINGFACE_SEARCH_LIMIT = 1
+HUGGINGFACE_SEARCH_MAX_CONCURRENT = 1
 
 
 class _DiscoveryRequestGate:
     def __init__(self, max_concurrent: int, min_interval: float):
         self.semaphore = asyncio.Semaphore(max_concurrent)
         self.rate_limiter = RateLimiter(min_interval)
+
+
+def resolve_huggingface_min_interval(requested_min_interval: float) -> float:
+    return max(requested_min_interval, HUGGINGFACE_API_MIN_INTERVAL)
 
 
 def find_github_url_in_text(text: str) -> str | None:
@@ -79,6 +85,17 @@ def find_github_url_in_huggingface_paper_html(html: str) -> str | None:
                     return github_url
 
     return None
+
+
+def find_github_url_in_huggingface_paper_payload(payload) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+
+    github_url = payload.get("githubRepo")
+    if not github_url or not isinstance(github_url, str):
+        return None
+
+    return normalize_github_url(github_url)
 
 
 def find_github_url_in_semanticscholar_paper_html(html: str) -> str | None:
@@ -209,7 +226,7 @@ def find_github_url_in_alphaxiv_legacy_payload(payload) -> str | None:
 
 
 class DiscoveryClient:
-    """Hugging Face / AlphaXiv discovery client."""
+    """Discovery client for GitHub repo lookup and paper identity helpers."""
 
     def __init__(
         self,
@@ -223,7 +240,8 @@ class DiscoveryClient:
         self.session = session
         self.huggingface_token = huggingface_token
         self.alphaxiv_token = alphaxiv_token
-        self._huggingface_gate = _DiscoveryRequestGate(max_concurrent, min_interval)
+        self._huggingface_gate = _DiscoveryRequestGate(max_concurrent, resolve_huggingface_min_interval(min_interval))
+        self._huggingface_search_semaphore = asyncio.Semaphore(HUGGINGFACE_SEARCH_MAX_CONCURRENT)
         self._alphaxiv_gate = _DiscoveryRequestGate(max_concurrent, min_interval)
         self._semanticscholar_gate = _DiscoveryRequestGate(max_concurrent, min_interval)
         self.semaphore = self._huggingface_gate.semaphore
@@ -241,7 +259,9 @@ class DiscoveryClient:
         expect: str = "text",
         retry_prefix: str = "Request",
         gate: _DiscoveryRequestGate,
+        allow_statuses: set[int] | None = None,
     ):
+        allow_statuses = allow_statuses or set()
         for attempt in range(MAX_RETRIES + 1):
             async with gate.semaphore:
                 await gate.rate_limiter.acquire()
@@ -251,6 +271,8 @@ class DiscoveryClient:
                             if expect == "json":
                                 return await response.json(), None
                             return await response.text(), None
+                        if response.status in allow_statuses:
+                            return None, None
                         if response.status in {429, 500, 502, 503, 504} and attempt < MAX_RETRIES:
                             await asyncio.sleep(0.5 * (2**attempt))
                             continue
@@ -267,13 +289,42 @@ class DiscoveryClient:
                     return None, f"{retry_prefix} request failed: {exc}"
         return None, f"{retry_prefix} error"
 
+    def _build_huggingface_headers(self, accept: str) -> dict[str, str]:
+        headers = {
+            "Accept": accept,
+            "User-Agent": "scripts.ghstars",
+        }
+        if self.huggingface_token:
+            headers["Authorization"] = f"Bearer {self.huggingface_token}"
+        return headers
+
+    async def get_huggingface_paper_payload_by_arxiv_id(self, arxiv_id: str):
+        return await self._request(
+            f"https://huggingface.co/api/papers/{arxiv_id}",
+            headers=self._build_huggingface_headers("application/json"),
+            expect="json",
+            retry_prefix="Hugging Face Papers API",
+            gate=self._huggingface_gate,
+            allow_statuses={404},
+        )
+
+    async def get_huggingface_paper_search_results(self, title: str, *, limit: int = HUGGINGFACE_SEARCH_LIMIT):
+        async with self._huggingface_search_semaphore:
+            return await self._request(
+                "https://huggingface.co/api/papers/search",
+                headers=self._build_huggingface_headers("application/json"),
+                params={"q": title, "limit": max(1, limit)},
+                expect="json",
+                retry_prefix="Hugging Face Papers API",
+                gate=self._huggingface_gate,
+            )
+
     async def get_huggingface_paper_html_by_arxiv_id(self, arxiv_id: str):
         if not self.huggingface_token:
             return None, "Missing HUGGINGFACE_TOKEN"
-        headers = {"Accept": "text/html,application/json", "User-Agent": "scripts.ghstars", "Authorization": f"Bearer {self.huggingface_token}"}
         return await self._request(
             f"https://huggingface.co/papers/{arxiv_id}",
-            headers=headers,
+            headers=self._build_huggingface_headers("text/html,application/json"),
             expect="text",
             retry_prefix="Hugging Face Papers",
             gate=self._huggingface_gate,
@@ -282,15 +333,15 @@ class DiscoveryClient:
     async def get_huggingface_search_html(self, title: str):
         if not self.huggingface_token:
             return None, "Missing HUGGINGFACE_TOKEN"
-        headers = {"Accept": "text/html,application/json", "User-Agent": "scripts.ghstars", "Authorization": f"Bearer {self.huggingface_token}"}
-        return await self._request(
-            "https://huggingface.co/papers",
-            headers=headers,
-            params={"q": title},
-            expect="text",
-            retry_prefix="Hugging Face Papers",
-            gate=self._huggingface_gate,
-        )
+        async with self._huggingface_search_semaphore:
+            return await self._request(
+                "https://huggingface.co/papers",
+                headers=self._build_huggingface_headers("text/html,application/json"),
+                params={"q": title},
+                expect="text",
+                retry_prefix="Hugging Face Papers",
+                gate=self._huggingface_gate,
+            )
 
     async def get_alphaxiv_paper_legacy(self, arxiv_id: str):
         if not self.alphaxiv_token:
@@ -369,12 +420,28 @@ async def resolve_github_url(seed, client) -> str | None:
             return None
         return find_github_url_in_semanticscholar_paper_html(html)
 
+    exact_fetcher = getattr(client, "get_huggingface_paper_payload_by_arxiv_id", None)
+    if callable(exact_fetcher):
+        payload, error = await exact_fetcher(arxiv_id)
+        if not error:
+            github_url = find_github_url_in_huggingface_paper_payload(payload)
+            if github_url:
+                return github_url
+
+            search_fetcher = getattr(client, "get_huggingface_paper_search_results", None)
+            if callable(search_fetcher):
+                search_results, search_error = await search_fetcher(
+                    getattr(seed, "name", ""),
+                    limit=HUGGINGFACE_SEARCH_LIMIT,
+                )
+                if not search_error:
+                    github_url = _find_github_url_in_huggingface_search_results(search_results, arxiv_id)
+                    if github_url:
+                        return github_url
+        return None
+
     if getattr(client, "huggingface_token", ""):
-        github_url, error = await _get_huggingface_github_url_by_arxiv_id(
-            client,
-            arxiv_id,
-            attempts=HUGGINGFACE_DIRECT_FETCH_ATTEMPTS,
-        )
+        github_url, error = await _get_huggingface_github_url_by_arxiv_id(client, arxiv_id)
         if github_url:
             return github_url
         if error:
@@ -382,38 +449,39 @@ async def resolve_github_url(seed, client) -> str | None:
             if not search_error:
                 paper_id = find_huggingface_paper_id_in_search_html(search_html, getattr(seed, "name", ""))
                 if paper_id and paper_id == arxiv_id:
-                    github_url, page_error = await _get_huggingface_github_url_by_arxiv_id(
-                        client,
-                        paper_id,
-                        attempts=HUGGINGFACE_DIRECT_FETCH_ATTEMPTS,
-                    )
+                    github_url, _page_error = await _get_huggingface_github_url_by_arxiv_id(client, paper_id)
                     if github_url:
                         return github_url
-
-    if getattr(client, "alphaxiv_token", ""):
-        payload, error = await client.get_alphaxiv_paper_legacy(arxiv_id)
-        if not error:
-            return find_github_url_in_alphaxiv_legacy_payload(payload)
 
     return None
 
 
-async def _get_huggingface_github_url_by_arxiv_id(
-    client,
-    arxiv_id: str,
-    *,
-    attempts: int = 1,
-) -> tuple[str | None, str | None]:
-    for _ in range(max(1, attempts)):
-        html, error = await client.get_huggingface_paper_html_by_arxiv_id(arxiv_id)
-        if error:
-            return None, error
+def _find_github_url_in_huggingface_search_results(results, arxiv_id: str) -> str | None:
+    if not isinstance(results, list):
+        return None
 
-        github_url = find_github_url_in_huggingface_paper_html(html)
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        paper = item.get("paper", {})
+        if not isinstance(paper, dict):
+            continue
+        if str(paper.get("id") or "").strip() != arxiv_id:
+            continue
+
+        github_url = find_github_url_in_huggingface_paper_payload(paper)
         if github_url:
-            return github_url, None
+            return github_url
 
-    return None, None
+    return None
+
+
+async def _get_huggingface_github_url_by_arxiv_id(client, arxiv_id: str) -> tuple[str | None, str | None]:
+    html, error = await client.get_huggingface_paper_html_by_arxiv_id(arxiv_id)
+    if error:
+        return None, error
+
+    return find_github_url_in_huggingface_paper_html(html), None
 
 
 async def resolve_arxiv_id_by_title(
