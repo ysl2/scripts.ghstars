@@ -68,7 +68,7 @@ async def run_arxiv_relations_mode(
                     is_minor_reason=is_minor_skip_reason,
                 ),
             )
-        except (ValueError, RuntimeError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        except Exception as exc:
             print(f"ArXiv relation export failed: {exc}", file=sys.stderr)
             return 1
 

@@ -1,10 +1,11 @@
 # scripts.ghstars
 
-One CLI, three modes:
+One CLI, four modes:
 
 - No positional argument: sync GitHub links and star counts into Notion
 - One existing `.csv` file path: update that CSV in place
 - One supported papers collection URL: fetch the full result set and write a CSV under `./output` in the current working directory
+- One supported single-paper arXiv URL: export related references and citations into two CSV files under `./output` in the current working directory
 
 Repository discovery for arXiv-backed papers now uses:
 
@@ -35,6 +36,12 @@ HF_EXACT_NO_REPO_RECHECK_DAYS=7
 ```
 
 `cache.db` is created automatically in the current working directory and shared across URL, CSV, and Notion runs.
+
+### Optional only for single-paper arXiv relation mode
+
+```bash
+OPENALEX_API_KEY=
+```
 
 ### Optional override only for Semantic Scholar URL mode
 
@@ -149,7 +156,7 @@ Common arXiv.org examples:
 
 Not supported:
 
-- single paper pages such as `https://arxiv.org/abs/2603.23502`
+- single paper pages are handled by single-paper arXiv relation mode, not collection URL mode
 - malformed catchup paths such as `https://arxiv.org/catchup/cs.CV/2026/03/26`
 - Hugging Face single paper pages such as `https://huggingface.co/papers/2501.12345`
 - non-search Semantic Scholar pages such as `https://www.semanticscholar.org/paper/Foo/123`
@@ -231,6 +238,38 @@ URL mode behavior:
 - rows that cannot be mapped to arXiv are dropped from the final CSV
 - repo discovery reuses the shared `cache.db` mapping of canonical arXiv URL to GitHub repo
 - downstream repository discovery, star lookup, sorting, progress printing, and CSV writing reuse the same shared export logic as CSV update mode where applicable
+
+### Single-paper arXiv relation export mode
+
+Reads one arXiv paper URL, resolves related works through OpenAlex, filters to arXiv-backed items only in this first version, and writes two CSV files under `./output` in the current working directory by default.
+
+Command shape:
+
+```bash
+uv run main.py '<single-paper-arxiv-url>'
+```
+
+Accepted URL shapes:
+
+- `https://arxiv.org/abs/<arxiv-id>`
+- `https://www.arxiv.org/abs/<arxiv-id>`
+- `https://arxiv.org/pdf/<arxiv-id>.pdf`
+- `https://www.arxiv.org/pdf/<arxiv-id>.pdf`
+
+Examples:
+
+```bash
+uv run main.py 'https://arxiv.org/abs/2603.23502'
+```
+
+```bash
+uv run main.py 'https://arxiv.org/pdf/2603.23502v4.pdf?download=1'
+```
+
+Output example:
+
+- `./output/arxiv-2603.23502-references-20260326113045.csv`
+- `./output/arxiv-2603.23502-citations-20260326113045.csv`
 
 ## Notion expectations
 

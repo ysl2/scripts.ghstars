@@ -250,3 +250,60 @@ async def test_run_arxiv_relations_mode_prints_concise_stderr_and_returns_nonzer
     assert exit_code == 1
     assert captured.out == ""
     assert captured.err.strip() == f"ArXiv relation export failed: {message}"
+
+
+@pytest.mark.anyio
+async def test_run_arxiv_relations_mode_returns_nonzero_on_unexpected_hard_failure(monkeypatch, capsys):
+    class HardFailure(Exception):
+        pass
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeArxivClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeOpenAlexClient:
+        def __init__(self, session, *, openalex_api_key="", max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeDiscoveryClient:
+        def __init__(
+            self,
+            session,
+            *,
+            huggingface_token="",
+            repo_cache=None,
+            hf_exact_no_repo_recheck_days=0,
+            max_concurrent=0,
+            min_interval=0,
+        ):
+            self.session = session
+
+    class FakeGitHubClient:
+        def __init__(self, session, *, github_token="", max_concurrent=0, min_interval=0):
+            self.session = session
+
+    async def fake_export(*args, **kwargs):
+        raise HardFailure("unhandled export branch")
+
+    monkeypatch.setattr("src.arxiv_relations.runner.export_arxiv_relations_to_csv", fake_export)
+
+    exit_code = await run_arxiv_relations_mode(
+        "https://arxiv.org/abs/2603.23502",
+        session_factory=lambda **kwargs: FakeSession(),
+        arxiv_client_cls=FakeArxivClient,
+        openalex_client_cls=FakeOpenAlexClient,
+        discovery_client_cls=FakeDiscoveryClient,
+        github_client_cls=FakeGitHubClient,
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert captured.err.strip() == "ArXiv relation export failed: unhandled export branch"
