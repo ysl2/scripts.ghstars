@@ -1,4 +1,5 @@
 import asyncio
+import re
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
@@ -12,12 +13,26 @@ from src.url_to_csv.sources import is_supported_url_source
 
 try:
     from src.arxiv_relations.runner import run_arxiv_relations_mode
-except ModuleNotFoundError:  # pragma: no cover - placeholder until runner exists
+except ModuleNotFoundError as exc:
+    if exc.name not in {"src.arxiv_relations.runner", "src.arxiv_relations"}:
+        raise
+
     async def run_arxiv_relations_mode(*args, **kwargs):
-        raise NotImplementedError("run_arxiv_relations_mode is not implemented")
+        raise RuntimeError("run_arxiv_relations_mode is not available because the runner import failed.")
+
+    _HAS_ARXIV_RELATIONS_RUNNER = False
+else:
+    _HAS_ARXIV_RELATIONS_RUNNER = True
 
 
 load_dotenv()
+
+ARXIV_SINGLE_PAPER_ID_PATTERN = re.compile(r"\d{4}\.\d{5}(v\d+)?", re.ASCII)
+ARXIV_ORG_HOSTS = {"arxiv.org", "www.arxiv.org"}
+ARXIV_RUNNER_UNAVAILABLE_EXIT_CODE = 3
+ARXIV_RUNNER_UNAVAILABLE_MESSAGE = (
+    "Single-paper ArXiv relation mode is unavailable because src.arxiv_relations.runner could not be imported."
+)
 
 
 def _normalize_argv(argv: list[str] | None) -> list[str]:
@@ -54,12 +69,15 @@ def _is_arxiv_single_paper_url(raw_value: str) -> bool:
     if not path_parts:
         return False
 
-    if path_parts[0] == "abs":
-        return len(path_parts) >= 2 and bool(path_parts[1])
+    if path_parts[0] == "abs" and len(path_parts) >= 2:
+        return bool(ARXIV_SINGLE_PAPER_ID_PATTERN.fullmatch(path_parts[1]))
 
     if path_parts[0] == "pdf" and len(path_parts) >= 2:
         pdf_name = path_parts[1]
-        return pdf_name.lower().endswith(".pdf") and len(pdf_name) > 4
+        if not pdf_name.lower().endswith(".pdf"):
+            return False
+        identifier = pdf_name[:-4]
+        return bool(ARXIV_SINGLE_PAPER_ID_PATTERN.fullmatch(identifier))
 
     return False
 
@@ -76,6 +94,9 @@ async def async_main(argv: list[str] | None = None) -> int:
 
     raw_input = args[0]
     if _is_arxiv_single_paper_url(raw_input):
+        if not _HAS_ARXIV_RELATIONS_RUNNER:
+            print(ARXIV_RUNNER_UNAVAILABLE_MESSAGE, file=sys.stderr)
+            return ARXIV_RUNNER_UNAVAILABLE_EXIT_CODE
         return await run_arxiv_relations_mode(raw_input)
 
     if _is_url(raw_input):

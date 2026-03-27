@@ -197,6 +197,7 @@ async def test_async_main_routes_arxiv_abs_urls_to_relations_mode(monkeypatch):
     monkeypatch.setattr(app, "run_csv_mode", csv_runner)
     monkeypatch.setattr(app, "run_url_mode", url_runner, raising=False)
     monkeypatch.setattr(app, "run_arxiv_relations_mode", arxiv_runner)
+    monkeypatch.setattr(app, "_HAS_ARXIV_RELATIONS_RUNNER", True)
 
     exit_code = await app.async_main([input_url])
 
@@ -219,6 +220,7 @@ async def test_async_main_routes_arxiv_pdf_urls_to_relations_mode(monkeypatch):
     monkeypatch.setattr(app, "run_csv_mode", csv_runner)
     monkeypatch.setattr(app, "run_url_mode", url_runner, raising=False)
     monkeypatch.setattr(app, "run_arxiv_relations_mode", arxiv_runner)
+    monkeypatch.setattr(app, "_HAS_ARXIV_RELATIONS_RUNNER", True)
 
     exit_code = await app.async_main([input_url])
 
@@ -227,6 +229,56 @@ async def test_async_main_routes_arxiv_pdf_urls_to_relations_mode(monkeypatch):
     csv_runner.assert_not_awaited()
     url_runner.assert_not_awaited()
     arxiv_runner.assert_awaited_once_with(input_url)
+
+
+@pytest.mark.anyio
+async def test_async_main_fails_when_arxiv_runner_not_installed(monkeypatch, capsys):
+    input_url = "https://arxiv.org/abs/2603.23502"
+
+    notion_runner = AsyncMock(return_value=0)
+    csv_runner = AsyncMock(return_value=0)
+    url_runner = AsyncMock(return_value=0)
+    arxiv_runner = AsyncMock(return_value=0)
+    monkeypatch.setattr(app, "run_notion_mode", notion_runner)
+    monkeypatch.setattr(app, "run_csv_mode", csv_runner)
+    monkeypatch.setattr(app, "run_url_mode", url_runner, raising=False)
+    monkeypatch.setattr(app, "run_arxiv_relations_mode", arxiv_runner)
+    monkeypatch.setattr(app, "_HAS_ARXIV_RELATIONS_RUNNER", False)
+
+    exit_code = await app.async_main([input_url])
+    captured = capsys.readouterr()
+
+    assert exit_code == app.ARXIV_RUNNER_UNAVAILABLE_EXIT_CODE
+    assert app.ARXIV_RUNNER_UNAVAILABLE_MESSAGE in captured.err
+    notion_runner.assert_not_awaited()
+    csv_runner.assert_not_awaited()
+    url_runner.assert_not_awaited()
+    arxiv_runner.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_async_main_treats_abs_help_as_unsupported(monkeypatch, capsys):
+    input_url = "https://arxiv.org/abs/help"
+
+    notion_runner = AsyncMock(return_value=0)
+    csv_runner = AsyncMock(return_value=0)
+    url_runner = AsyncMock(return_value=0)
+    arxiv_runner = AsyncMock(return_value=0)
+    monkeypatch.setattr(app, "run_notion_mode", notion_runner)
+    monkeypatch.setattr(app, "run_csv_mode", csv_runner)
+    monkeypatch.setattr(app, "run_url_mode", url_runner, raising=False)
+    monkeypatch.setattr(app, "run_arxiv_relations_mode", arxiv_runner)
+    monkeypatch.setattr(app, "_HAS_ARXIV_RELATIONS_RUNNER", True)
+
+    exit_code = await app.async_main([input_url])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "Input file or URL not supported" in captured.err
+    notion_runner.assert_not_awaited()
+    csv_runner.assert_not_awaited()
+    url_runner.assert_not_awaited()
+    arxiv_runner.assert_not_awaited()
 
 
 @pytest.mark.anyio
