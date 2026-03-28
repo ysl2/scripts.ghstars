@@ -141,6 +141,155 @@ async def test_get_arxiv_id_by_title_uses_search_html_results():
 
 
 @pytest.mark.anyio
+async def test_get_arxiv_id_by_title_from_api_uses_feed_results():
+    class FakeResponse:
+        def __init__(self, status: int, text: str):
+            self.status = status
+            self._text = text
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def text(self):
+            return self._text
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, params=None):
+            self.calls.append((url, params))
+            assert url == "https://export.arxiv.org/api/query"
+            return FakeResponse(
+                200,
+                """
+                <feed xmlns="http://www.w3.org/2005/Atom">
+                  <entry>
+                    <id>http://arxiv.org/abs/2312.00451v1</id>
+                    <title>FSGS: Real-Time Few-shot View Synthesis using Gaussian Splatting</title>
+                  </entry>
+                </feed>
+                """,
+            )
+
+    session = FakeSession()
+    client = ArxivClient(session, max_concurrent=1, min_interval=0)
+
+    arxiv_id, source, error = await client.get_arxiv_id_by_title_from_api(
+        "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting"
+    )
+
+    assert (arxiv_id, source, error) == ("2312.00451", "title_search_exact", None)
+    assert session.calls == [
+        (
+            "https://export.arxiv.org/api/query",
+            {
+                "search_query": 'ti:"FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting"',
+                "start": "0",
+                "max_results": "10",
+            },
+        )
+    ]
+
+
+@pytest.mark.anyio
+async def test_get_arxiv_id_by_title_from_api_returns_missing_title_error():
+    class FakeSession:
+        def get(self, url, params=None):
+            raise AssertionError("request should not be made for missing title")
+
+    client = ArxivClient(FakeSession(), max_concurrent=1, min_interval=0)
+
+    assert await client.get_arxiv_id_by_title_from_api("") == (None, None, "Missing title")
+
+
+@pytest.mark.anyio
+async def test_get_arxiv_id_by_title_from_api_returns_request_error():
+    class FakeResponse:
+        def __init__(self, status: int, text: str):
+            self.status = status
+            self._text = text
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def text(self):
+            return self._text
+
+    class FakeSession:
+        def get(self, url, params=None):
+            return FakeResponse(418, "")
+
+    client = ArxivClient(FakeSession(), max_concurrent=1, min_interval=0)
+
+    assert await client.get_arxiv_id_by_title_from_api("Example Title") == (
+        None,
+        None,
+        "arXiv metadata query error (418)",
+    )
+
+
+@pytest.mark.anyio
+async def test_get_arxiv_id_by_title_from_api_returns_no_match_error():
+    class FakeResponse:
+        def __init__(self, status: int, text: str):
+            self.status = status
+            self._text = text
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def text(self):
+            return self._text
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, params=None):
+            self.calls.append((url, params))
+            return FakeResponse(
+                200,
+                """
+                <feed xmlns="http://www.w3.org/2005/Atom">
+                  <entry>
+                    <id>http://arxiv.org/abs/2312.00451v1</id>
+                    <title>A Different Paper Title</title>
+                  </entry>
+                </feed>
+                """,
+            )
+
+    session = FakeSession()
+    client = ArxivClient(session, max_concurrent=1, min_interval=0)
+
+    assert await client.get_arxiv_id_by_title_from_api("Example Title") == (
+        None,
+        None,
+        "No arXiv ID found from title search",
+    )
+    assert session.calls == [
+        (
+            "https://export.arxiv.org/api/query",
+            {
+                "search_query": 'ti:"Example Title"',
+                "start": "0",
+                "max_results": "10",
+            },
+        )
+    ]
+
+
+@pytest.mark.anyio
 async def test_get_arxiv_title_from_metadata_feed():
     class FakeResponse:
         def __init__(self, status: int, text: str):

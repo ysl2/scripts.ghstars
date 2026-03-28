@@ -373,6 +373,30 @@ class ArxivClient:
             return None, None, "No arXiv ID found from title search"
         return arxiv_id, source, None
 
+    async def get_arxiv_id_by_title_from_api(
+        self,
+        title: str,
+    ) -> tuple[str | None, str | None, str | None]:
+        if not title:
+            return None, None, "Missing title"
+
+        feed_xml, error = await self._request_text(
+            "https://export.arxiv.org/api/query",
+            params={
+                "search_query": f'ti:"{title}"',
+                "start": "0",
+                "max_results": "10",
+            },
+            retry_prefix="arXiv metadata query",
+        )
+        if error:
+            return None, None, error
+
+        arxiv_id, source = extract_best_arxiv_id_from_feed(feed_xml, title)
+        if not arxiv_id:
+            return None, None, "No arXiv ID found from title search"
+        return arxiv_id, source, None
+
 
 def _strip_html_text(text: str) -> str:
     stripped = HTML_TAG_PATTERN.sub(" ", text)
