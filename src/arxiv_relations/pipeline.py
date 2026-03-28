@@ -15,6 +15,12 @@ class ArxivRelationsExportResult:
     citations: ConversionResult
 
 
+@dataclass(frozen=True)
+class NormalizedRelatedRow:
+    title: str
+    url: str
+
+
 def normalize_single_arxiv_input(arxiv_input: str) -> str:
     arxiv_id = extract_arxiv_id_from_single_paper_url(arxiv_input)
     if not arxiv_id:
@@ -45,16 +51,66 @@ def build_relations_csv_paths(
     return references_csv_path, citations_csv_path
 
 
-def normalize_related_works_to_seeds(related_works: list[dict], *, openalex_client) -> list[PaperSeed]:
-    seeds: list[PaperSeed] = []
-    seen_urls: set[str] = set()
-    for related_work in related_works:
-        seed = openalex_client.normalize_related_work(related_work)
-        if seed is None or seed.url in seen_urls:
+def _fallback_related_work_url(candidate) -> str:
+    return candidate.doi_url or candidate.landing_page_url or candidate.openalex_url
+
+
+async def _resolve_related_work_rows(candidates: list, *, arxiv_client) -> list[NormalizedRelatedRow]:
+    rows: list[NormalizedRelatedRow] = []
+    for candidate in candidates:
+        if candidate.direct_arxiv_url:
+            rows.append(
+                NormalizedRelatedRow(
+                    title=candidate.title or candidate.direct_arxiv_url,
+                    url=candidate.direct_arxiv_url,
+                )
+            )
             continue
-        seen_urls.add(seed.url)
-        seeds.append(seed)
-    return seeds
+
+        matched_arxiv_id, _, _ = await arxiv_client.get_arxiv_id_by_title(candidate.title)
+        if matched_arxiv_id:
+            matched_title, _ = await arxiv_client.get_title(matched_arxiv_id)
+            matched_url = build_arxiv_abs_url(matched_arxiv_id)
+            rows.append(
+                NormalizedRelatedRow(
+                    title=matched_title or candidate.title or matched_url,
+                    url=matched_url,
+                )
+            )
+            continue
+
+        fallback_url = _fallback_related_work_url(candidate)
+        rows.append(
+            NormalizedRelatedRow(
+                title=candidate.title or fallback_url,
+                url=fallback_url,
+            )
+        )
+
+    return rows
+
+
+def _dedupe_normalized_rows(rows: list[NormalizedRelatedRow]) -> list[NormalizedRelatedRow]:
+    deduped_rows: list[NormalizedRelatedRow] = []
+    seen_urls: set[str] = set()
+    for row in rows:
+        if row.url in seen_urls:
+            continue
+        seen_urls.add(row.url)
+        deduped_rows.append(row)
+    return deduped_rows
+
+
+async def normalize_related_works_to_seeds(
+    related_works: list[dict],
+    *,
+    openalex_client,
+    arxiv_client,
+) -> list[PaperSeed]:
+    candidates = [openalex_client.build_related_work_candidate(work) for work in related_works]
+    normalized_rows = await _resolve_related_work_rows(candidates, arxiv_client=arxiv_client)
+    deduped_rows = _dedupe_normalized_rows(normalized_rows)
+    return [PaperSeed(name=row.title, url=row.url) for row in deduped_rows]
 
 
 async def export_arxiv_relations_to_csv(
@@ -91,8 +147,16 @@ async def export_arxiv_relations_to_csv(
     if callable(status_callback):
         status_callback(f"📚 Retrieved {len(citation_works)} citation works")
 
-    reference_seeds = normalize_related_works_to_seeds(referenced_works, openalex_client=openalex_client)
-    citation_seeds = normalize_related_works_to_seeds(citation_works, openalex_client=openalex_client)
+    reference_seeds = await normalize_related_works_to_seeds(
+        referenced_works,
+        openalex_client=openalex_client,
+        arxiv_client=arxiv_client,
+    )
+    citation_seeds = await normalize_related_works_to_seeds(
+        citation_works,
+        openalex_client=openalex_client,
+        arxiv_client=arxiv_client,
+    )
 
     references_csv_path, citations_csv_path = build_relations_csv_paths(arxiv_url, output_dir=output_dir)
 

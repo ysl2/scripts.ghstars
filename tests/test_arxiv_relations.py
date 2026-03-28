@@ -6,9 +6,107 @@ import aiohttp
 import pytest
 
 from src.arxiv_relations.pipeline import ArxivRelationsExportResult
+from src.shared.openalex import RelatedWorkCandidate
 from src.shared.papers import ConversionResult, PaperSeed
 from src.shared.papers import PaperRecord
 from src.arxiv_relations.runner import run_arxiv_relations_mode
+
+
+@pytest.mark.anyio
+async def test_normalize_related_works_maps_non_arxiv_title_hits_to_canonical_arxiv():
+    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+
+    class FakeOpenAlexClient:
+        def build_related_work_candidate(self, work: dict):
+            mapping = {
+                "R1": RelatedWorkCandidate(
+                    title="Direct Paper",
+                    direct_arxiv_url="https://arxiv.org/abs/2403.00001",
+                    doi_url=None,
+                    landing_page_url=None,
+                    openalex_url="https://openalex.org/W1",
+                ),
+                "R2": RelatedWorkCandidate(
+                    title="Original OpenAlex Title",
+                    direct_arxiv_url=None,
+                    doi_url=None,
+                    landing_page_url="https://publisher.example/mapped",
+                    openalex_url="https://openalex.org/W2",
+                ),
+            }
+            return mapping[work["id"]]
+
+    class FakeArxivClient:
+        async def get_arxiv_id_by_title(self, title: str):
+            if title == "Original OpenAlex Title":
+                return "2501.12345", "title_search_exact", None
+            raise AssertionError(f"Unexpected title search: {title}")
+
+        async def get_title(self, arxiv_identifier: str):
+            if arxiv_identifier == "2501.12345":
+                return "Mapped Arxiv Title", None
+            raise AssertionError(f"Unexpected arXiv title lookup: {arxiv_identifier}")
+
+    related_works = [{"id": "R1"}, {"id": "R2"}]
+    seeds = await normalize_related_works_to_seeds(
+        related_works,
+        openalex_client=FakeOpenAlexClient(),
+        arxiv_client=FakeArxivClient(),
+    )
+
+    assert seeds == [
+        PaperSeed(name="Direct Paper", url="https://arxiv.org/abs/2403.00001"),
+        PaperSeed(name="Mapped Arxiv Title", url="https://arxiv.org/abs/2501.12345"),
+    ]
+
+
+@pytest.mark.anyio
+async def test_normalize_related_works_retains_unresolved_non_arxiv_rows_with_url_priority():
+    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+
+    class FakeOpenAlexClient:
+        def build_related_work_candidate(self, work: dict):
+            mapping = {
+                "R3": RelatedWorkCandidate(
+                    title="With DOI",
+                    direct_arxiv_url=None,
+                    doi_url="https://doi.org/10.1145/example",
+                    landing_page_url="https://publisher.example/doi",
+                    openalex_url="https://openalex.org/W3",
+                ),
+                "R4": RelatedWorkCandidate(
+                    title="With Landing",
+                    direct_arxiv_url=None,
+                    doi_url=None,
+                    landing_page_url="https://publisher.example/paper",
+                    openalex_url="https://openalex.org/W4",
+                ),
+                "R5": RelatedWorkCandidate(
+                    title="OpenAlex Only",
+                    direct_arxiv_url=None,
+                    doi_url=None,
+                    landing_page_url=None,
+                    openalex_url="https://openalex.org/W5",
+                ),
+            }
+            return mapping[work["id"]]
+
+    class FakeArxivClient:
+        async def get_arxiv_id_by_title(self, title: str):
+            return None, None, "No arXiv ID found from title search"
+
+    related_works = [{"id": "R3"}, {"id": "R4"}, {"id": "R5"}]
+    seeds = await normalize_related_works_to_seeds(
+        related_works,
+        openalex_client=FakeOpenAlexClient(),
+        arxiv_client=FakeArxivClient(),
+    )
+
+    assert seeds == [
+        PaperSeed(name="With DOI", url="https://doi.org/10.1145/example"),
+        PaperSeed(name="With Landing", url="https://publisher.example/paper"),
+        PaperSeed(name="OpenAlex Only", url="https://openalex.org/W5"),
+    ]
 
 
 @pytest.mark.anyio
@@ -20,10 +118,20 @@ async def test_export_arxiv_relations_to_csv_resolves_title_filters_and_exports_
     class FakeArxivClient:
         def __init__(self):
             self.calls: list[str] = []
+            self.title_searches: list[str] = []
 
         async def get_title(self, arxiv_identifier: str):
             self.calls.append(arxiv_identifier)
-            return "Target Paper", None
+            title_mapping = {
+                "https://arxiv.org/abs/2603.23502": "Target Paper",
+                "2501.00001": "Reference A",
+                "2502.00002": "Citation A",
+            }
+            return title_mapping[arxiv_identifier], None
+
+        async def get_arxiv_id_by_title(self, title: str):
+            self.title_searches.append(title)
+            return None, None, "No arXiv ID found from title search"
 
     class FakeOpenAlexClient:
         def __init__(self):
@@ -49,6 +157,46 @@ async def test_export_arxiv_relations_to_csv_resolves_title_filters_and_exports_
                 {"id": "C1"},
                 {"id": "C2"},
             ]
+
+        def build_related_work_candidate(self, work: dict):
+            mapping = {
+                "R1": RelatedWorkCandidate(
+                    title="Reference A",
+                    direct_arxiv_url="https://arxiv.org/abs/2501.00001",
+                    doi_url=None,
+                    landing_page_url=None,
+                    openalex_url="https://openalex.org/WR1",
+                ),
+                "R2": RelatedWorkCandidate(
+                    title="Reference Missing",
+                    direct_arxiv_url=None,
+                    doi_url=None,
+                    landing_page_url=None,
+                    openalex_url="https://openalex.org/WR2",
+                ),
+                "R3": RelatedWorkCandidate(
+                    title="Reference A Duplicate",
+                    direct_arxiv_url="https://arxiv.org/abs/2501.00001",
+                    doi_url=None,
+                    landing_page_url=None,
+                    openalex_url="https://openalex.org/WR3",
+                ),
+                "C1": RelatedWorkCandidate(
+                    title="Citation A",
+                    direct_arxiv_url="https://arxiv.org/abs/2502.00002",
+                    doi_url=None,
+                    landing_page_url=None,
+                    openalex_url="https://openalex.org/WC1",
+                ),
+                "C2": RelatedWorkCandidate(
+                    title="Citation A Duplicate",
+                    direct_arxiv_url="https://arxiv.org/abs/2502.00002",
+                    doi_url=None,
+                    landing_page_url=None,
+                    openalex_url="https://openalex.org/WC2",
+                ),
+            }
+            return mapping[work["id"]]
 
         def normalize_related_work(self, work: dict):
             mapping = {
@@ -99,6 +247,7 @@ async def test_export_arxiv_relations_to_csv_resolves_title_filters_and_exports_
     )
 
     assert arxiv_client.calls == ["https://arxiv.org/abs/2603.23502"]
+    assert arxiv_client.title_searches == ["Reference Missing"]
     assert openalex_client.title_queries == ["Target Paper"]
     assert openalex_client.reference_work_queries == [{"id": "https://openalex.org/W0"}]
     assert openalex_client.citation_work_queries == [{"id": "https://openalex.org/W0"}]
@@ -111,7 +260,10 @@ async def test_export_arxiv_relations_to_csv_resolves_title_filters_and_exports_
 
     reference_seeds = export_calls[0]["seeds"]
     citation_seeds = export_calls[1]["seeds"]
-    assert reference_seeds == [PaperSeed(name="Reference A", url="https://arxiv.org/abs/2501.00001")]
+    assert reference_seeds == [
+        PaperSeed(name="Reference A", url="https://arxiv.org/abs/2501.00001"),
+        PaperSeed(name="Reference Missing", url="https://openalex.org/WR2"),
+    ]
     assert citation_seeds == [PaperSeed(name="Citation A", url="https://arxiv.org/abs/2502.00002")]
     assert all(isinstance(seed, PaperSeed) for seed in reference_seeds + citation_seeds)
 
