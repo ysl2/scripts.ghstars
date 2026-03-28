@@ -53,12 +53,12 @@ def test_dedup_breaks_same_strength_ties_by_normalized_then_original_title():
 
     rows = [
         NormalizedRelatedRow(
-            title="A-study",
+            title="Zoo",
             url="https://publisher.example/paper",
             strength=NormalizationStrength.RETAINED_NON_ARXIV,
         ),
         NormalizedRelatedRow(
-            title="A  Study",
+            title="alpha",
             url="https://publisher.example/paper",
             strength=NormalizationStrength.RETAINED_NON_ARXIV,
         ),
@@ -68,7 +68,7 @@ def test_dedup_breaks_same_strength_ties_by_normalized_then_original_title():
 
     assert winner == [
         NormalizedRelatedRow(
-            title="A  Study",
+            title="alpha",
             url="https://publisher.example/paper",
             strength=NormalizationStrength.RETAINED_NON_ARXIV,
         )
