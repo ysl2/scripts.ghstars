@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,6 +12,32 @@ from src.shared.openalex import RelatedWorkCandidate
 from src.shared.papers import ConversionResult, PaperSeed
 from src.shared.papers import PaperRecord
 from src.arxiv_relations.runner import run_arxiv_relations_mode
+
+
+class FakeRelationResolutionCache:
+    def __init__(self, entries: dict[tuple[str, str], object] | None = None):
+        self.entries = entries or {}
+        self.get_calls: list[tuple[str, str]] = []
+        self.record_calls: list[tuple[str, str, str | None]] = []
+
+    def get(self, key_type: str, key_value: str):
+        self.get_calls.append((key_type, key_value))
+        return self.entries.get((key_type, key_value))
+
+    def record_resolution(self, *, key_type: str, key_value: str, arxiv_url: str | None) -> None:
+        self.record_calls.append((key_type, key_value, arxiv_url))
+        self.entries[(key_type, key_value)] = SimpleNamespace(
+            key_type=key_type,
+            key_value=key_value,
+            arxiv_url=arxiv_url,
+            checked_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    @staticmethod
+    def is_negative_cache_fresh(checked_at: str | None, recheck_days: int) -> bool:
+        from src.shared.relation_resolution_cache import RelationResolutionCacheStore
+
+        return RelationResolutionCacheStore.is_negative_cache_fresh(checked_at, recheck_days)
 
 
 def test_dedup_prefers_direct_arxiv_over_title_mapped_row():
@@ -200,6 +227,9 @@ async def test_normalize_related_works_maps_non_arxiv_title_hits_to_canonical_ar
 
     class FakeArxivClient:
         async def get_arxiv_id_by_title(self, title: str):
+            raise AssertionError("Relation normalization should use the arXiv API title search path")
+
+        async def get_arxiv_id_by_title_from_api(self, title: str):
             if title == "Original OpenAlex Title":
                 return "2501.12345", "title_search_exact", None
             raise AssertionError(f"Unexpected title search: {title}")
@@ -220,6 +250,68 @@ async def test_normalize_related_works_maps_non_arxiv_title_hits_to_canonical_ar
         PaperSeed(name="Direct Paper", url="https://arxiv.org/abs/2403.00001"),
         PaperSeed(name="Mapped Arxiv Title", url="https://arxiv.org/abs/2501.12345"),
     ]
+
+
+@pytest.mark.anyio
+async def test_normalize_related_works_uses_positive_cache_before_title_search():
+    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+
+    recent = datetime.now(timezone.utc).isoformat()
+    cache = FakeRelationResolutionCache(
+        {
+            ("openalex_work", "https://openalex.org/W9"): SimpleNamespace(
+                key_type="openalex_work",
+                key_value="https://openalex.org/W9",
+                arxiv_url="https://arxiv.org/abs/2312.00451",
+                checked_at=recent,
+            ),
+            ("doi", "https://doi.org/10.1007/978-3-031-72933-1_9"): SimpleNamespace(
+                key_type="doi",
+                key_value="https://doi.org/10.1007/978-3-031-72933-1_9",
+                arxiv_url=None,
+                checked_at=recent,
+            ),
+        }
+    )
+
+    class FakeOpenAlexClient:
+        def build_related_work_candidate(self, work: dict):
+            return RelatedWorkCandidate(
+                title="Cached Candidate Title",
+                direct_arxiv_url=None,
+                doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
+                landing_page_url="https://publisher.example/cached",
+                openalex_url="https://openalex.org/W9",
+            )
+
+    class FakeArxivClient:
+        def __init__(self):
+            self.title_lookups: list[str] = []
+
+        async def get_arxiv_id_by_title(self, title: str):
+            raise AssertionError("HTML title search should not run when cache already has an arXiv URL")
+
+        async def get_arxiv_id_by_title_from_api(self, title: str):
+            raise AssertionError("API title search should not run when cache already has an arXiv URL")
+
+        async def get_title(self, arxiv_identifier: str):
+            self.title_lookups.append(arxiv_identifier)
+            if arxiv_identifier in {"2312.00451", "https://arxiv.org/abs/2312.00451"}:
+                return "Cached Arxiv Title", None
+            raise AssertionError(f"Unexpected arXiv title lookup: {arxiv_identifier}")
+
+    arxiv_client = FakeArxivClient()
+    seeds = await normalize_related_works_to_seeds(
+        [{"id": "R9"}],
+        openalex_client=FakeOpenAlexClient(),
+        arxiv_client=arxiv_client,
+        relation_resolution_cache=cache,
+        arxiv_relation_no_arxiv_recheck_days=30,
+    )
+
+    assert seeds == [PaperSeed(name="Cached Arxiv Title", url="https://arxiv.org/abs/2312.00451")]
+    assert cache.record_calls == []
+    assert arxiv_client.title_lookups == ["https://arxiv.org/abs/2312.00451"]
 
 
 @pytest.mark.anyio
@@ -255,6 +347,9 @@ async def test_normalize_related_works_retains_unresolved_non_arxiv_rows_with_ur
 
     class FakeArxivClient:
         async def get_arxiv_id_by_title(self, title: str):
+            raise AssertionError("Relation normalization should use the arXiv API title search path")
+
+        async def get_arxiv_id_by_title_from_api(self, title: str):
             return None, None, "No arXiv ID found from title search"
 
     related_works = [{"id": "R3"}, {"id": "R4"}, {"id": "R5"}]
@@ -269,6 +364,162 @@ async def test_normalize_related_works_retains_unresolved_non_arxiv_rows_with_ur
         PaperSeed(name="With Landing", url="https://publisher.example/paper"),
         PaperSeed(name="OpenAlex Only", url="https://openalex.org/W5"),
     ]
+
+
+@pytest.mark.anyio
+async def test_normalize_related_works_skips_api_when_negative_cache_is_fresh():
+    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+
+    recent = datetime.now(timezone.utc).isoformat()
+    cache = FakeRelationResolutionCache(
+        {
+            ("doi", "https://doi.org/10.1007/978-3-031-72933-1_9"): SimpleNamespace(
+                key_type="doi",
+                key_value="https://doi.org/10.1007/978-3-031-72933-1_9",
+                arxiv_url=None,
+                checked_at=recent,
+            )
+        }
+    )
+
+    class FakeOpenAlexClient:
+        def build_related_work_candidate(self, work: dict):
+            return RelatedWorkCandidate(
+                title="Fallback Only",
+                direct_arxiv_url=None,
+                doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
+                landing_page_url="https://publisher.example/fallback",
+                openalex_url="https://openalex.org/W10",
+            )
+
+    class FakeArxivClient:
+        async def get_arxiv_id_by_title(self, title: str):
+            raise AssertionError("HTML title search should not run for a fresh negative cache entry")
+
+        async def get_arxiv_id_by_title_from_api(self, title: str):
+            raise AssertionError("API title search should not run for a fresh negative cache entry")
+
+        async def get_title(self, arxiv_identifier: str):
+            raise AssertionError("arXiv title lookup should not run for a retained fallback row")
+
+    seeds = await normalize_related_works_to_seeds(
+        [{"id": "R10"}],
+        openalex_client=FakeOpenAlexClient(),
+        arxiv_client=FakeArxivClient(),
+        relation_resolution_cache=cache,
+        arxiv_relation_no_arxiv_recheck_days=30,
+    )
+
+    assert seeds == [PaperSeed(name="Fallback Only", url="https://doi.org/10.1007/978-3-031-72933-1_9")]
+    assert cache.record_calls == []
+
+
+@pytest.mark.anyio
+async def test_normalize_related_works_rechecks_stale_negative_and_backfills_all_keys():
+    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+
+    stale = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    cache = FakeRelationResolutionCache(
+        {
+            ("openalex_work", "https://openalex.org/W11"): SimpleNamespace(
+                key_type="openalex_work",
+                key_value="https://openalex.org/W11",
+                arxiv_url=None,
+                checked_at=stale,
+            )
+        }
+    )
+
+    class FakeOpenAlexClient:
+        def build_related_work_candidate(self, work: dict):
+            return RelatedWorkCandidate(
+                title="Backfilled Paper",
+                direct_arxiv_url=None,
+                doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
+                landing_page_url="https://publisher.example/backfilled",
+                openalex_url="https://openalex.org/W11",
+            )
+
+    class FakeArxivClient:
+        def __init__(self):
+            self.api_title_searches: list[str] = []
+            self.title_lookups: list[str] = []
+
+        async def get_arxiv_id_by_title(self, title: str):
+            raise AssertionError("Legacy HTML title search should not run in the relation cache pipeline")
+
+        async def get_arxiv_id_by_title_from_api(self, title: str):
+            self.api_title_searches.append(title)
+            return "2312.00451", "title_search_exact", None
+
+        async def get_title(self, arxiv_identifier: str):
+            self.title_lookups.append(arxiv_identifier)
+            if arxiv_identifier == "2312.00451":
+                return "Mapped Arxiv Title", None
+            raise AssertionError(f"Unexpected arXiv title lookup: {arxiv_identifier}")
+
+    arxiv_client = FakeArxivClient()
+    seeds = await normalize_related_works_to_seeds(
+        [{"id": "R11"}],
+        openalex_client=FakeOpenAlexClient(),
+        arxiv_client=arxiv_client,
+        relation_resolution_cache=cache,
+        arxiv_relation_no_arxiv_recheck_days=30,
+    )
+
+    assert seeds == [PaperSeed(name="Mapped Arxiv Title", url="https://arxiv.org/abs/2312.00451")]
+    assert arxiv_client.api_title_searches == ["Backfilled Paper"]
+    assert arxiv_client.title_lookups == ["2312.00451"]
+    assert cache.record_calls == [
+        ("openalex_work", "https://openalex.org/W11", "https://arxiv.org/abs/2312.00451"),
+        ("doi", "https://doi.org/10.1007/978-3-031-72933-1_9", "https://arxiv.org/abs/2312.00451"),
+    ]
+
+
+@pytest.mark.anyio
+async def test_normalize_related_works_direct_arxiv_rows_bypass_cache_and_search_path():
+    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+
+    class ExplodingRelationResolutionCache:
+        def get(self, key_type: str, key_value: str):
+            raise AssertionError("Direct arXiv rows should not consult the relation-resolution cache")
+
+        def record_resolution(self, *, key_type: str, key_value: str, arxiv_url: str | None) -> None:
+            raise AssertionError("Direct arXiv rows should not update the relation-resolution cache")
+
+        @staticmethod
+        def is_negative_cache_fresh(checked_at: str | None, recheck_days: int) -> bool:
+            raise AssertionError("Direct arXiv rows should not check negative-cache freshness")
+
+    class FakeOpenAlexClient:
+        def build_related_work_candidate(self, work: dict):
+            return RelatedWorkCandidate(
+                title="Direct Paper",
+                direct_arxiv_url="https://arxiv.org/abs/2501.00001",
+                doi_url="https://doi.org/10.1000/direct",
+                landing_page_url="https://publisher.example/direct",
+                openalex_url="https://openalex.org/W12",
+            )
+
+    class FakeArxivClient:
+        async def get_arxiv_id_by_title(self, title: str):
+            raise AssertionError("Direct arXiv rows should not invoke legacy title search")
+
+        async def get_arxiv_id_by_title_from_api(self, title: str):
+            raise AssertionError("Direct arXiv rows should not invoke API title search")
+
+        async def get_title(self, arxiv_identifier: str):
+            raise AssertionError("Direct arXiv rows should not need extra title lookups")
+
+    seeds = await normalize_related_works_to_seeds(
+        [{"id": "R12"}],
+        openalex_client=FakeOpenAlexClient(),
+        arxiv_client=FakeArxivClient(),
+        relation_resolution_cache=ExplodingRelationResolutionCache(),
+        arxiv_relation_no_arxiv_recheck_days=30,
+    )
+
+    assert seeds == [PaperSeed(name="Direct Paper", url="https://arxiv.org/abs/2501.00001")]
 
 
 @pytest.mark.anyio
@@ -301,6 +552,9 @@ async def test_normalize_related_works_resolves_non_direct_rows_concurrently():
             self.release_searches = asyncio.Event()
 
         async def get_arxiv_id_by_title(self, title: str):
+            raise AssertionError("Relation normalization should use the arXiv API title search path")
+
+        async def get_arxiv_id_by_title_from_api(self, title: str):
             self.search_started.append(title)
             if len(self.search_started) == 2:
                 self.release_searches.set()
@@ -340,10 +594,22 @@ async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_ret
 ):
     from src.arxiv_relations.pipeline import export_arxiv_relations_to_csv
 
+    recent = datetime.now(timezone.utc).isoformat()
+    relation_resolution_cache = FakeRelationResolutionCache(
+        {
+            ("doi", "https://doi.org/10.1145/example"): SimpleNamespace(
+                key_type="doi",
+                key_value="https://doi.org/10.1145/example",
+                arxiv_url=None,
+                checked_at=recent,
+            )
+        }
+    )
+
     class FakeArxivClient:
         def __init__(self):
             self.calls: list[str] = []
-            self.title_searches: list[str] = []
+            self.api_title_searches: list[str] = []
 
         async def get_title(self, arxiv_identifier: str):
             self.calls.append(arxiv_identifier)
@@ -354,11 +620,12 @@ async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_ret
             return title_mapping[arxiv_identifier], None
 
         async def get_arxiv_id_by_title(self, title: str):
-            self.title_searches.append(title)
+            raise AssertionError("Relation export should use the arXiv API title search path")
+
+        async def get_arxiv_id_by_title_from_api(self, title: str):
+            self.api_title_searches.append(title)
             if title == "Reference Needs Mapping":
                 return "2501.00002", "title_search_exact", None
-            if title == "Publisher Reference":
-                return None, None, "No arXiv ID found from title search"
             raise AssertionError(f"Unexpected title search: {title}")
 
     class FakeOpenAlexClient:
@@ -460,12 +727,14 @@ async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_ret
         openalex_client=openalex_client,
         discovery_client=discovery_client,
         github_client=github_client,
+        relation_resolution_cache=relation_resolution_cache,
+        arxiv_relation_no_arxiv_recheck_days=30,
         output_dir=tmp_path,
         status_callback=statuses.append,
     )
 
     assert arxiv_client.calls == ["https://arxiv.org/abs/2603.23502", "2501.00002"]
-    assert arxiv_client.title_searches == ["Reference Needs Mapping", "Publisher Reference"]
+    assert arxiv_client.api_title_searches == ["Reference Needs Mapping"]
     assert openalex_client.title_queries == ["Target Paper"]
     assert openalex_client.reference_work_queries == [{"id": "https://openalex.org/W0"}]
     assert openalex_client.citation_work_queries == [{"id": "https://openalex.org/W0"}]
@@ -818,6 +1087,8 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
         openalex_client,
         discovery_client,
         github_client,
+        relation_resolution_cache,
+        arxiv_relation_no_arxiv_recheck_days,
         status_callback=None,
         progress_callback=None,
     ):
@@ -829,6 +1100,8 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
                 "openalex_client": openalex_client,
                 "discovery_client": discovery_client,
                 "github_client": github_client,
+                "relation_resolution_cache": relation_resolution_cache,
+                "arxiv_relation_no_arxiv_recheck_days": arxiv_relation_no_arxiv_recheck_days,
                 "status_callback": status_callback,
                 "progress_callback": progress_callback,
             }
@@ -882,6 +1155,8 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
     assert export_calls[0]["openalex_client"] is constructed["openalex_client"]
     assert export_calls[0]["discovery_client"] is constructed["discovery_client"]
     assert export_calls[0]["github_client"] is constructed["github_client"]
+    assert export_calls[0]["relation_resolution_cache"] is not None
+    assert export_calls[0]["arxiv_relation_no_arxiv_recheck_days"] == 30
     assert "Starting relation export" in captured.out
     assert "[1/1] Reference Paper" in captured.out
     assert "foo/bar" in captured.out

@@ -39,6 +39,7 @@ async def run_arxiv_relations_mode(
             github_client_cls=github_client_cls,
             concurrent_limit=CONCURRENT_LIMIT,
             request_delay=REQUEST_DELAY,
+            enable_relation_resolution_cache=True,
         ) as runtime:
             arxiv_client = build_client(
                 arxiv_client_cls,
@@ -61,6 +62,8 @@ async def run_arxiv_relations_mode(
                 openalex_client=openalex_client,
                 discovery_client=runtime.discovery_client,
                 github_client=runtime.github_client,
+                relation_resolution_cache=runtime.relation_resolution_cache,
+                arxiv_relation_no_arxiv_recheck_days=config["arxiv_relation_no_arxiv_recheck_days"],
                 status_callback=lambda message: print(message, flush=True),
                 progress_callback=lambda outcome, total: print_paper_progress(
                     outcome,
