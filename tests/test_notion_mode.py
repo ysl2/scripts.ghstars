@@ -39,6 +39,7 @@ def test_load_config_accepts_env_values():
         "github_token": "ghp_xxx",
         "database_id": "db_123",
         "huggingface_token": "hf_test",
+        "openalex_api_key": "",
         "hf_exact_no_repo_recheck_days": 7,
     }
 

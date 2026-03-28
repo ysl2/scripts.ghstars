@@ -30,30 +30,30 @@ async def run_arxiv_relations_mode(
     discovery_client_cls=DiscoveryClient,
     github_client_cls=GitHubClient,
 ) -> int:
-    config = load_runtime_config(dict(os.environ))
-    async with open_runtime_clients(
-        config,
-        session_factory=session_factory,
-        discovery_client_cls=discovery_client_cls,
-        github_client_cls=github_client_cls,
-        concurrent_limit=CONCURRENT_LIMIT,
-        request_delay=REQUEST_DELAY,
-    ) as runtime:
-        arxiv_client = build_client(
-            arxiv_client_cls,
-            runtime.session,
-            max_concurrent=CONCURRENT_LIMIT,
-            min_interval=REQUEST_DELAY,
-        )
-        openalex_client = build_client(
-            openalex_client_cls,
-            runtime.session,
-            openalex_api_key=config["openalex_api_key"],
-            max_concurrent=CONCURRENT_LIMIT,
-            min_interval=REQUEST_DELAY,
-        )
+    try:
+        config = load_runtime_config(dict(os.environ))
+        async with open_runtime_clients(
+            config,
+            session_factory=session_factory,
+            discovery_client_cls=discovery_client_cls,
+            github_client_cls=github_client_cls,
+            concurrent_limit=CONCURRENT_LIMIT,
+            request_delay=REQUEST_DELAY,
+        ) as runtime:
+            arxiv_client = build_client(
+                arxiv_client_cls,
+                runtime.session,
+                max_concurrent=CONCURRENT_LIMIT,
+                min_interval=REQUEST_DELAY,
+            )
+            openalex_client = build_client(
+                openalex_client_cls,
+                runtime.session,
+                openalex_api_key=config["openalex_api_key"],
+                max_concurrent=CONCURRENT_LIMIT,
+                min_interval=REQUEST_DELAY,
+            )
 
-        try:
             result = await export_arxiv_relations_to_csv(
                 arxiv_input,
                 output_dir=output_dir,
@@ -68,9 +68,9 @@ async def run_arxiv_relations_mode(
                     is_minor_reason=is_minor_skip_reason,
                 ),
             )
-        except Exception as exc:
-            print(f"ArXiv relation export failed: {exc}", file=sys.stderr)
-            return 1
+    except Exception as exc:
+        print(f"ArXiv relation export failed: {exc}", file=sys.stderr)
+        return 1
 
     print_summary(
         "References resolved",

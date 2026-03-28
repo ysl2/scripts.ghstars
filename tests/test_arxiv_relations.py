@@ -1,9 +1,13 @@
+from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import aiohttp
 import pytest
 
+from src.arxiv_relations.pipeline import ArxivRelationsExportResult
 from src.shared.papers import ConversionResult, PaperSeed
+from src.shared.papers import PaperRecord
 from src.arxiv_relations.runner import run_arxiv_relations_mode
 
 
@@ -307,3 +311,211 @@ async def test_run_arxiv_relations_mode_returns_nonzero_on_unexpected_hard_failu
     assert exit_code == 1
     assert captured.out == ""
     assert captured.err.strip() == "ArXiv relation export failed: unhandled export branch"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("failure_stage", "message"),
+    [
+        ("runtime", "runtime setup exploded"),
+        ("build", "arxiv client construction exploded"),
+    ],
+)
+async def test_run_arxiv_relations_mode_returns_nonzero_on_pre_export_setup_failures(
+    monkeypatch, capsys, failure_stage, message
+):
+    async def fake_export(*args, **kwargs):
+        raise AssertionError("export should not run when setup fails")
+
+    monkeypatch.setattr("src.arxiv_relations.runner.export_arxiv_relations_to_csv", fake_export)
+
+    if failure_stage == "runtime":
+
+        @asynccontextmanager
+        async def fake_open_runtime_clients(*args, **kwargs):
+            raise RuntimeError(message)
+            yield
+
+        monkeypatch.setattr("src.arxiv_relations.runner.open_runtime_clients", fake_open_runtime_clients)
+
+        exit_code = await run_arxiv_relations_mode("https://arxiv.org/abs/2603.23502")
+    else:
+
+        class FakeSession:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class FailingArxivClient:
+            def __init__(self, session, *, max_concurrent=0, min_interval=0):
+                raise RuntimeError(message)
+
+        class FakeOpenAlexClient:
+            def __init__(self, session, *, openalex_api_key="", max_concurrent=0, min_interval=0):
+                self.session = session
+
+        class FakeDiscoveryClient:
+            def __init__(
+                self,
+                session,
+                *,
+                huggingface_token="",
+                repo_cache=None,
+                hf_exact_no_repo_recheck_days=0,
+                max_concurrent=0,
+                min_interval=0,
+            ):
+                self.session = session
+
+        class FakeGitHubClient:
+            def __init__(self, session, *, github_token="", max_concurrent=0, min_interval=0):
+                self.session = session
+
+        exit_code = await run_arxiv_relations_mode(
+            "https://arxiv.org/abs/2603.23502",
+            session_factory=lambda **kwargs: FakeSession(),
+            arxiv_client_cls=FailingArxivClient,
+            openalex_client_cls=FakeOpenAlexClient,
+            discovery_client_cls=FakeDiscoveryClient,
+            github_client_cls=FakeGitHubClient,
+        )
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert captured.err.strip() == f"ArXiv relation export failed: {message}"
+
+
+@pytest.mark.anyio
+async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and_summary_output(
+    tmp_path: Path, monkeypatch, capsys
+):
+    references_csv_path = tmp_path / "arxiv-2603.23502-references-20260326113045.csv"
+    citations_csv_path = tmp_path / "arxiv-2603.23502-citations-20260326113045.csv"
+    constructed = {}
+    export_calls = []
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeArxivClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+            self.max_concurrent = max_concurrent
+            self.min_interval = min_interval
+            constructed["arxiv_client"] = self
+
+    class FakeOpenAlexClient:
+        def __init__(self, session, *, openalex_api_key="", max_concurrent=0, min_interval=0):
+            self.session = session
+            self.openalex_api_key = openalex_api_key
+            self.max_concurrent = max_concurrent
+            self.min_interval = min_interval
+            constructed["openalex_client"] = self
+
+    class FakeDiscoveryClient:
+        def __init__(
+            self,
+            session,
+            *,
+            huggingface_token="",
+            repo_cache=None,
+            hf_exact_no_repo_recheck_days=0,
+            max_concurrent=0,
+            min_interval=0,
+        ):
+            self.session = session
+            constructed["discovery_client"] = self
+
+    class FakeGitHubClient:
+        def __init__(self, session, *, github_token="", max_concurrent=0, min_interval=0):
+            self.session = session
+            constructed["github_client"] = self
+
+    async def fake_export(
+        arxiv_input: str,
+        *,
+        output_dir: Path | None = None,
+        arxiv_client,
+        openalex_client,
+        discovery_client,
+        github_client,
+        status_callback=None,
+        progress_callback=None,
+    ):
+        export_calls.append(
+            {
+                "arxiv_input": arxiv_input,
+                "output_dir": output_dir,
+                "arxiv_client": arxiv_client,
+                "openalex_client": openalex_client,
+                "discovery_client": discovery_client,
+                "github_client": github_client,
+                "status_callback": status_callback,
+                "progress_callback": progress_callback,
+            }
+        )
+        assert callable(status_callback)
+        assert callable(progress_callback)
+
+        status_callback("Starting relation export")
+        progress_callback(
+            SimpleNamespace(
+                index=1,
+                record=PaperRecord(
+                    name="Reference Paper",
+                    url="https://arxiv.org/abs/2501.00001",
+                    github="https://github.com/foo/bar",
+                    stars=12,
+                ),
+                reason=None,
+                current_stars=10,
+            ),
+            1,
+        )
+
+        return ArxivRelationsExportResult(
+            arxiv_url="https://arxiv.org/abs/2603.23502",
+            title="Target Paper",
+            references=ConversionResult(csv_path=references_csv_path, resolved=1, skipped=[]),
+            citations=ConversionResult(csv_path=citations_csv_path, resolved=2, skipped=[]),
+        )
+
+    monkeypatch.setattr("src.arxiv_relations.runner.export_arxiv_relations_to_csv", fake_export)
+
+    exit_code = await run_arxiv_relations_mode(
+        "https://arxiv.org/abs/2603.23502",
+        output_dir=tmp_path,
+        session_factory=lambda **kwargs: FakeSession(),
+        arxiv_client_cls=FakeArxivClient,
+        openalex_client_cls=FakeOpenAlexClient,
+        discovery_client_cls=FakeDiscoveryClient,
+        github_client_cls=FakeGitHubClient,
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured.err == ""
+    assert len(export_calls) == 1
+    assert export_calls[0]["arxiv_input"] == "https://arxiv.org/abs/2603.23502"
+    assert export_calls[0]["output_dir"] == tmp_path
+    assert export_calls[0]["arxiv_client"] is constructed["arxiv_client"]
+    assert export_calls[0]["openalex_client"] is constructed["openalex_client"]
+    assert export_calls[0]["discovery_client"] is constructed["discovery_client"]
+    assert export_calls[0]["github_client"] is constructed["github_client"]
+    assert "Starting relation export" in captured.out
+    assert "[1/1] Reference Paper" in captured.out
+    assert "foo/bar" in captured.out
+    assert "Updated: 10 → 12" in captured.out
+    assert "References resolved: 1" in captured.out
+    assert "Citations resolved: 2" in captured.out
+    assert f"Wrote references CSV: {references_csv_path}" in captured.out
+    assert f"Wrote citations CSV: {citations_csv_path}" in captured.out

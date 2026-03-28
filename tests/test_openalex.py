@@ -86,6 +86,40 @@ async def test_references_hydrate_from_referenced_work_ids():
 
 
 @pytest.mark.anyio
+async def test_references_skip_single_missing_work_during_hydration():
+    responses = [
+        FakeResponse({"id": "https://openalex.org/W1", "display_name": "Ref 1"}),
+        FakeResponse(status=404),
+        FakeResponse({"id": "https://openalex.org/W3", "display_name": "Ref 3"}),
+    ]
+    session = FakeSession(responses)
+    client = OpenAlexClient(session, min_interval=0, max_concurrent=1)
+    work = {
+        "referenced_works": [
+            "https://openalex.org/works/W1",
+            "https://openalex.org/W404",
+            "W3",
+        ]
+    }
+
+    hydrated = await client.fetch_referenced_works(work)
+
+    assert hydrated == [responses[0]._json_data, responses[2]._json_data]
+    assert len(session.calls) == 3
+    assert session.calls[1]["url"].endswith("/W404")
+
+
+@pytest.mark.anyio
+async def test_references_still_raise_non_404_hydration_errors():
+    session = FakeSession([FakeResponse(status=403)])
+    client = OpenAlexClient(session, min_interval=0, max_concurrent=1)
+    work = {"referenced_works": ["W403"]}
+
+    with pytest.raises(RuntimeError, match=r"OpenAlex API error \(403\)"):
+        await client.fetch_referenced_works(work)
+
+
+@pytest.mark.anyio
 async def test_citations_paginate_across_multiple_pages():
     first_page = {"results": [{"id": "W1"}], "meta": {"next_cursor": "abc"}}
     second_page = {"results": [{"id": "W2"}], "meta": {"next_cursor": None}}

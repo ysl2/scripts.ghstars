@@ -43,8 +43,9 @@ class OpenAlexClient:
         if not work_ids:
             return []
 
-        tasks = [self._get_json(f"{OPENALEX_WORKS_URL}/{work_id}") for work_id in work_ids]
-        return await asyncio.gather(*tasks)
+        tasks = [self._fetch_referenced_work(work_id) for work_id in work_ids]
+        hydrated = await asyncio.gather(*tasks)
+        return [work for work in hydrated if work is not None]
 
     async def fetch_citations(self, work: dict[str, Any]) -> list[dict[str, Any]]:
         work_id = self._extract_work_id(work.get("id"))
@@ -106,6 +107,14 @@ class OpenAlexClient:
                     raise
 
         raise RuntimeError("OpenAlex API request failed")
+
+    async def _fetch_referenced_work(self, work_id: str) -> dict[str, Any] | None:
+        try:
+            return await self._get_json(f"{OPENALEX_WORKS_URL}/{work_id}")
+        except RuntimeError as exc:
+            if self._is_openalex_not_found_error(exc):
+                return None
+            raise
 
     def _build_headers(self) -> dict[str, str]:
         headers = {"User-Agent": "scripts.ghstars"}
@@ -187,3 +196,7 @@ class OpenAlexClient:
             return None
 
         return segments[-1]
+
+    @staticmethod
+    def _is_openalex_not_found_error(exc: RuntimeError) -> bool:
+        return str(exc) == "OpenAlex API error (404)"
