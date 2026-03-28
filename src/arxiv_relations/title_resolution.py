@@ -90,7 +90,8 @@ async def resolve_related_work_title_to_arxiv(
             negative_cacheable=False,
         )
 
-    if arxiv_error != NO_MATCH_TITLE_SEARCH_ERROR:
+    arxiv_definitive_no_match = arxiv_error == NO_MATCH_TITLE_SEARCH_ERROR
+    if not arxiv_definitive_no_match and arxiv_error is None:
         return RelationTitleResolution(arxiv_url=None, resolved_title=None, negative_cacheable=False)
 
     hf_search = getattr(discovery_client, "get_huggingface_paper_search_results", None)
@@ -113,5 +114,5 @@ async def resolve_related_work_title_to_arxiv(
     return RelationTitleResolution(
         arxiv_url=None,
         resolved_title=None,
-        negative_cacheable=definitive_no_match,
+        negative_cacheable=arxiv_definitive_no_match and definitive_no_match,
     )
