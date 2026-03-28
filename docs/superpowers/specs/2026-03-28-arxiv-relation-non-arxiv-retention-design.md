@@ -90,8 +90,10 @@ This precedence rule is especially important when a directly arXiv-backed work a
 
 If multiple rows still collide after applying normalization-strength precedence because they have the same strength and the same final identity, the winner must be selected deterministically by title, not by iteration order:
 
-- compare candidate titles using normalized title text
-- choose the lexicographically smallest normalized title
+- compare candidate titles using this ordered tuple:
+  1. normalized title text
+  2. original title text
+- choose the lexicographically smallest tuple
 - preserve the original title text of the winning row in the final CSV
 
 This same-strength tie-break applies to unresolved non-arXiv rows that collapse to the same retained URL as well as any same-strength arXiv-resolved collisions.
