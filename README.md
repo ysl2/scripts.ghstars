@@ -41,7 +41,10 @@ HF_EXACT_NO_REPO_RECHECK_DAYS=7
 
 ```bash
 OPENALEX_API_KEY=
+ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS=30
 ```
+
+`ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS` controls how long single-paper relation mode keeps a cached "no arXiv match found" result before retrying arXiv title search.
 
 ### Optional override only for Semantic Scholar URL mode
 
@@ -285,6 +288,8 @@ Single-paper mode behavior:
 - otherwise tries arXiv title search and takes the first most relevant hit
 - mapped rows use the matched arXiv title and canonical arXiv `abs` URL
 - if still unresolved, keeps the non-arXiv row with `Url` priority `DOI > landing page > OpenAlex URL`
+- relation normalization reuses `./cache.db` to cache non-direct relation resolution by OpenAlex work URL and DOI
+- cached positive matches store canonical arXiv `abs` URLs; cached negative matches are retried after `ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS`
 - referenced and citing works are deduplicated by final normalized URL before export
 - both CSVs use the standard columns: `Name`, `Url`, `Github`, `Stars`
 - shared GitHub discovery and star enrichment are reused, so resolved and unresolved rows remain in the CSV even when no repo is found; in that case `Github` and `Stars` are left blank

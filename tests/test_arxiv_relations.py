@@ -415,6 +415,46 @@ async def test_normalize_related_works_skips_api_when_negative_cache_is_fresh():
 
 
 @pytest.mark.anyio
+async def test_normalize_related_works_does_not_negative_cache_api_request_failures():
+    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+
+    cache = FakeRelationResolutionCache()
+
+    class FakeOpenAlexClient:
+        def build_related_work_candidate(self, work: dict):
+            return RelatedWorkCandidate(
+                title="Transient Failure Paper",
+                direct_arxiv_url=None,
+                doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
+                landing_page_url="https://publisher.example/transient",
+                openalex_url="https://openalex.org/W10",
+            )
+
+    class FakeArxivClient:
+        async def get_arxiv_id_by_title(self, title: str):
+            raise AssertionError("HTML title search should not run in relation mode")
+
+        async def get_arxiv_id_by_title_from_api(self, title: str):
+            return None, None, "arXiv metadata query timeout"
+
+        async def get_title(self, arxiv_identifier: str):
+            raise AssertionError("Title lookup should not run when API search fails")
+
+    seeds = await normalize_related_works_to_seeds(
+        [{"id": "R10"}],
+        openalex_client=FakeOpenAlexClient(),
+        arxiv_client=FakeArxivClient(),
+        relation_resolution_cache=cache,
+        arxiv_relation_no_arxiv_recheck_days=30,
+    )
+
+    assert seeds == [
+        PaperSeed(name="Transient Failure Paper", url="https://doi.org/10.1007/978-3-031-72933-1_9")
+    ]
+    assert cache.record_calls == []
+
+
+@pytest.mark.anyio
 async def test_normalize_related_works_rechecks_stale_negative_and_backfills_all_keys():
     from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
 

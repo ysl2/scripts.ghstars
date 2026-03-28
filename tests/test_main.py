@@ -184,7 +184,7 @@ async def test_open_runtime_clients_leaves_relation_cache_disabled_by_default_fo
 
 
 @pytest.mark.anyio
-async def test_open_runtime_clients_closes_repo_cache_if_opt_in_relation_cache_setup_fails(
+async def test_open_runtime_clients_degrades_to_uncached_mode_if_relation_cache_setup_fails(
     monkeypatch,
 ):
     close_calls = []
@@ -207,16 +207,18 @@ async def test_open_runtime_clients_closes_repo_cache_if_opt_in_relation_cache_s
         ExplodingRelationResolutionCacheStore,
     )
 
-    with pytest.raises(sqlite3.OperationalError, match="readonly"):
-        async with open_runtime_clients(
-            load_runtime_config({}),
-            session_factory=lambda **kwargs: FakeSession(),
-            discovery_client_cls=FakeDiscoveryClient,
-            github_client_cls=FakeGitHubClient,
-            concurrent_limit=2,
-            request_delay=0.1,
-            enable_relation_resolution_cache=True,
-        ):
-            pass
+    async with open_runtime_clients(
+        load_runtime_config({}),
+        session_factory=lambda **kwargs: FakeSession(),
+        discovery_client_cls=FakeDiscoveryClient,
+        github_client_cls=FakeGitHubClient,
+        concurrent_limit=2,
+        request_delay=0.1,
+        enable_relation_resolution_cache=True,
+    ) as runtime:
+        assert runtime.relation_resolution_cache is None
+        assert runtime.repo_cache is not None
+
+    assert close_calls == ["repo_cache"]
 
     assert close_calls == ["repo_cache"]

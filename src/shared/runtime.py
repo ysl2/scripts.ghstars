@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import inspect
+import sqlite3
 
 from src.shared.http import build_timeout
 from src.shared.relation_resolution_cache import RelationResolutionCacheStore
@@ -91,7 +92,10 @@ async def open_runtime_clients(
     try:
         repo_cache = RepoCacheStore(REPO_CACHE_DB_PATH)
         if enable_relation_resolution_cache:
-            relation_resolution_cache = RelationResolutionCacheStore(REPO_CACHE_DB_PATH)
+            try:
+                relation_resolution_cache = RelationResolutionCacheStore(REPO_CACHE_DB_PATH)
+            except sqlite3.Error:
+                relation_resolution_cache = None
 
         async with session_factory(timeout=build_timeout()) as session:
             discovery_client = build_client(

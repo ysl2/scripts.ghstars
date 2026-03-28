@@ -86,6 +86,10 @@ def _relation_cache_keys(candidate) -> list[tuple[str, str]]:
     return keys
 
 
+def _is_no_match_title_search_error(error: str | None) -> bool:
+    return error == "No arXiv ID found from title search"
+
+
 async def _resolve_related_work_row(
     candidate,
     *,
@@ -131,7 +135,7 @@ async def _resolve_related_work_row(
     if has_fresh_negative:
         return _build_retained_related_row(candidate)
 
-    matched_arxiv_id, _, _ = await arxiv_client.get_arxiv_id_by_title_from_api(candidate.title)
+    matched_arxiv_id, _, search_error = await arxiv_client.get_arxiv_id_by_title_from_api(candidate.title)
     if matched_arxiv_id:
         matched_title, _ = await arxiv_client.get_title(matched_arxiv_id)
         matched_url = build_arxiv_abs_url(matched_arxiv_id)
@@ -150,7 +154,7 @@ async def _resolve_related_work_row(
             original_title=original_title,
         )
 
-    if relation_resolution_cache is not None:
+    if relation_resolution_cache is not None and _is_no_match_title_search_error(search_error):
         for key_type, key_value in cache_keys:
             relation_resolution_cache.record_resolution(
                 key_type=key_type,
