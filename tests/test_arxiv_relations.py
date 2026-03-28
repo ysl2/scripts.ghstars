@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +11,62 @@ from src.shared.openalex import RelatedWorkCandidate
 from src.shared.papers import ConversionResult, PaperSeed
 from src.shared.papers import PaperRecord
 from src.arxiv_relations.runner import run_arxiv_relations_mode
+
+
+def test_dedup_prefers_direct_arxiv_over_title_mapped_row():
+    from src.arxiv_relations.pipeline import (
+        NormalizationStrength,
+        NormalizedRelatedRow,
+        _dedupe_normalized_rows,
+    )
+
+    rows = [
+        NormalizedRelatedRow(
+            title="Mapped Title",
+            url="https://arxiv.org/abs/2403.00001",
+            strength=NormalizationStrength.TITLE_SEARCH,
+        ),
+        NormalizedRelatedRow(
+            title="Direct Title",
+            url="https://arxiv.org/abs/2403.00001",
+            strength=NormalizationStrength.DIRECT_ARXIV,
+        ),
+    ]
+
+    winner = _dedupe_normalized_rows(rows)
+
+    assert winner == [
+        NormalizedRelatedRow(
+            title="Direct Title",
+            url="https://arxiv.org/abs/2403.00001",
+            strength=NormalizationStrength.DIRECT_ARXIV,
+        )
+    ]
+
+
+def test_dedup_breaks_same_strength_ties_by_normalized_then_original_title():
+    from src.arxiv_relations.pipeline import (
+        NormalizationStrength,
+        NormalizedRelatedRow,
+        _dedupe_normalized_rows,
+    )
+
+    rows = [
+        NormalizedRelatedRow(
+            title="A  Study",
+            url="https://publisher.example/paper",
+            strength=NormalizationStrength.RETAINED_NON_ARXIV,
+        ),
+        NormalizedRelatedRow(
+            title="A-study",
+            url="https://publisher.example/paper",
+            strength=NormalizationStrength.RETAINED_NON_ARXIV,
+        ),
+    ]
+
+    winner = _dedupe_normalized_rows(rows)
+
+    assert winner[0].title == "A  Study"
 
 
 @pytest.mark.anyio
@@ -106,6 +163,69 @@ async def test_normalize_related_works_retains_unresolved_non_arxiv_rows_with_ur
         PaperSeed(name="With DOI", url="https://doi.org/10.1145/example"),
         PaperSeed(name="With Landing", url="https://publisher.example/paper"),
         PaperSeed(name="OpenAlex Only", url="https://openalex.org/W5"),
+    ]
+
+
+@pytest.mark.anyio
+async def test_normalize_related_works_resolves_non_direct_rows_concurrently():
+    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+
+    class FakeOpenAlexClient:
+        def build_related_work_candidate(self, work: dict):
+            mapping = {
+                "R6": RelatedWorkCandidate(
+                    title="Concurrent Paper A",
+                    direct_arxiv_url=None,
+                    doi_url=None,
+                    landing_page_url="https://publisher.example/a",
+                    openalex_url="https://openalex.org/W6",
+                ),
+                "R7": RelatedWorkCandidate(
+                    title="Concurrent Paper B",
+                    direct_arxiv_url=None,
+                    doi_url=None,
+                    landing_page_url="https://publisher.example/b",
+                    openalex_url="https://openalex.org/W7",
+                ),
+            }
+            return mapping[work["id"]]
+
+    class FakeArxivClient:
+        def __init__(self):
+            self.search_started: list[str] = []
+            self.release_searches = asyncio.Event()
+
+        async def get_arxiv_id_by_title(self, title: str):
+            self.search_started.append(title)
+            if len(self.search_started) == 2:
+                self.release_searches.set()
+            await self.release_searches.wait()
+
+            mapping = {
+                "Concurrent Paper A": ("2601.00001", "title_search_exact", None),
+                "Concurrent Paper B": ("2601.00002", "title_search_exact", None),
+            }
+            return mapping[title]
+
+        async def get_title(self, arxiv_identifier: str):
+            mapping = {
+                "2601.00001": ("Concurrent Match A", None),
+                "2601.00002": ("Concurrent Match B", None),
+            }
+            return mapping[arxiv_identifier]
+
+    seeds = await asyncio.wait_for(
+        normalize_related_works_to_seeds(
+            [{"id": "R6"}, {"id": "R7"}],
+            openalex_client=FakeOpenAlexClient(),
+            arxiv_client=FakeArxivClient(),
+        ),
+        timeout=0.2,
+    )
+
+    assert seeds == [
+        PaperSeed(name="Concurrent Match A", url="https://arxiv.org/abs/2601.00001"),
+        PaperSeed(name="Concurrent Match B", url="https://arxiv.org/abs/2601.00002"),
     ]
 
 

@@ -1,6 +1,9 @@
+import asyncio
 from dataclasses import dataclass
+from enum import IntEnum
 from pathlib import Path
 
+from src.shared.arxiv import normalize_title_for_matching
 from src.shared.paper_export import export_paper_seeds_to_csv
 from src.shared.paper_identity import build_arxiv_abs_url, extract_arxiv_id, extract_arxiv_id_from_single_paper_url
 from src.shared.papers import ConversionResult, PaperSeed
@@ -15,10 +18,17 @@ class ArxivRelationsExportResult:
     citations: ConversionResult
 
 
+class NormalizationStrength(IntEnum):
+    DIRECT_ARXIV = 0
+    TITLE_SEARCH = 1
+    RETAINED_NON_ARXIV = 2
+
+
 @dataclass(frozen=True)
 class NormalizedRelatedRow:
     title: str
     url: str
+    strength: NormalizationStrength
 
 
 def normalize_single_arxiv_input(arxiv_input: str) -> str:
@@ -55,50 +65,52 @@ def _fallback_related_work_url(candidate) -> str:
     return candidate.doi_url or candidate.landing_page_url or candidate.openalex_url
 
 
-async def _resolve_related_work_rows(candidates: list, *, arxiv_client) -> list[NormalizedRelatedRow]:
-    rows: list[NormalizedRelatedRow] = []
-    for candidate in candidates:
-        if candidate.direct_arxiv_url:
-            rows.append(
-                NormalizedRelatedRow(
-                    title=candidate.title or candidate.direct_arxiv_url,
-                    url=candidate.direct_arxiv_url,
-                )
-            )
-            continue
-
-        matched_arxiv_id, _, _ = await arxiv_client.get_arxiv_id_by_title(candidate.title)
-        if matched_arxiv_id:
-            matched_title, _ = await arxiv_client.get_title(matched_arxiv_id)
-            matched_url = build_arxiv_abs_url(matched_arxiv_id)
-            rows.append(
-                NormalizedRelatedRow(
-                    title=matched_title or candidate.title or matched_url,
-                    url=matched_url,
-                )
-            )
-            continue
-
-        fallback_url = _fallback_related_work_url(candidate)
-        rows.append(
-            NormalizedRelatedRow(
-                title=candidate.title or fallback_url,
-                url=fallback_url,
-            )
+async def _resolve_related_work_row(candidate, *, arxiv_client) -> NormalizedRelatedRow:
+    if candidate.direct_arxiv_url:
+        return NormalizedRelatedRow(
+            title=candidate.title or candidate.direct_arxiv_url,
+            url=candidate.direct_arxiv_url,
+            strength=NormalizationStrength.DIRECT_ARXIV,
         )
 
-    return rows
+    matched_arxiv_id, _, _ = await arxiv_client.get_arxiv_id_by_title(candidate.title)
+    if matched_arxiv_id:
+        matched_title, _ = await arxiv_client.get_title(matched_arxiv_id)
+        matched_url = build_arxiv_abs_url(matched_arxiv_id)
+        return NormalizedRelatedRow(
+            title=matched_title or candidate.title or matched_url,
+            url=matched_url,
+            strength=NormalizationStrength.TITLE_SEARCH,
+        )
+
+    fallback_url = _fallback_related_work_url(candidate)
+    return NormalizedRelatedRow(
+        title=candidate.title or fallback_url,
+        url=fallback_url,
+        strength=NormalizationStrength.RETAINED_NON_ARXIV,
+    )
+
+
+async def _resolve_related_work_rows(candidates: list, *, arxiv_client) -> list[NormalizedRelatedRow]:
+    return await asyncio.gather(
+        *[
+            _resolve_related_work_row(candidate, arxiv_client=arxiv_client)
+            for candidate in candidates
+        ]
+    )
+
+
+def _normalized_row_ordering(row: NormalizedRelatedRow) -> tuple[int, str, str]:
+    return (int(row.strength), normalize_title_for_matching(row.title), row.title)
 
 
 def _dedupe_normalized_rows(rows: list[NormalizedRelatedRow]) -> list[NormalizedRelatedRow]:
-    deduped_rows: list[NormalizedRelatedRow] = []
-    seen_urls: set[str] = set()
+    winners_by_url: dict[str, NormalizedRelatedRow] = {}
     for row in rows:
-        if row.url in seen_urls:
-            continue
-        seen_urls.add(row.url)
-        deduped_rows.append(row)
-    return deduped_rows
+        current_winner = winners_by_url.get(row.url)
+        if current_winner is None or _normalized_row_ordering(row) < _normalized_row_ordering(current_winner):
+            winners_by_url[row.url] = row
+    return list(winners_by_url.values())
 
 
 async def normalize_related_works_to_seeds(
