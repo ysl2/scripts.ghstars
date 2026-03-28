@@ -682,6 +682,114 @@ async def test_normalize_related_works_does_not_negative_cache_unparseable_hf_pa
 
 
 @pytest.mark.anyio
+async def test_normalize_related_works_does_not_negative_cache_malformed_hf_search_items():
+    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+
+    class FakeOpenAlexClient:
+        def build_related_work_candidate(self, work: dict):
+            return RelatedWorkCandidate(
+                title="FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting",
+                direct_arxiv_url=None,
+                doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
+                landing_page_url="https://publisher.example/fsgs",
+                openalex_url="https://openalex.org/WFSGS",
+            )
+
+    class FakeNoMatchArxivClient:
+        async def get_arxiv_id_by_title(self, title: str):
+            raise AssertionError("Relation mode should not use legacy HTML title search")
+
+        async def get_arxiv_id_by_title_from_api(self, title: str):
+            return None, None, "No arXiv ID found from title search"
+
+        async def get_title(self, arxiv_identifier: str):
+            raise AssertionError("No title lookup should run after malformed HF search items")
+
+    class FakeDiscoveryClient:
+        huggingface_token = "hf-token"
+
+        async def get_huggingface_paper_search_results(self, title: str, *, limit: int = 3):
+            return [
+                {"paper": {"title": "FSGS: Real-Time Few-shot View Synthesis using Gaussian Splatting"}},
+                {"paper": {"id": "2312.00451"}},
+            ], None
+
+    cache = FakeRelationResolutionCache()
+    seeds = await normalize_related_works_to_seeds(
+        [{"id": "R1"}],
+        openalex_client=FakeOpenAlexClient(),
+        arxiv_client=FakeNoMatchArxivClient(),
+        discovery_client=FakeDiscoveryClient(),
+        relation_resolution_cache=cache,
+        arxiv_relation_no_arxiv_recheck_days=30,
+    )
+
+    assert seeds == [
+        PaperSeed(
+            name="FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting",
+            url="https://doi.org/10.1007/978-3-031-72933-1_9",
+        )
+    ]
+    assert cache.record_calls == []
+
+
+@pytest.mark.anyio
+async def test_normalize_related_works_does_not_negative_cache_when_hf_title_payload_shape_is_invalid():
+    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+
+    class FakeOpenAlexClient:
+        def build_related_work_candidate(self, work: dict):
+            return RelatedWorkCandidate(
+                title="FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting",
+                direct_arxiv_url=None,
+                doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
+                landing_page_url="https://publisher.example/fsgs",
+                openalex_url="https://openalex.org/WFSGS",
+            )
+
+    class FakeNoMatchArxivClient:
+        async def get_arxiv_id_by_title(self, title: str):
+            raise AssertionError("Relation mode should not use legacy HTML title search")
+
+        async def get_arxiv_id_by_title_from_api(self, title: str):
+            return None, None, "No arXiv ID found from title search"
+
+        async def get_title(self, arxiv_identifier: str):
+            raise AssertionError("No title lookup should run after malformed HF title payloads")
+
+    class FakeDiscoveryClient:
+        huggingface_token = "hf-token"
+
+        async def get_huggingface_paper_search_results(self, title: str, *, limit: int = 3):
+            return [
+                {
+                    "paper": {
+                        "id": "2312.00451",
+                        "title": {"unexpected": "shape"},
+                    }
+                }
+            ], None
+
+    cache = FakeRelationResolutionCache()
+    seeds = await normalize_related_works_to_seeds(
+        [{"id": "R1"}],
+        openalex_client=FakeOpenAlexClient(),
+        arxiv_client=FakeNoMatchArxivClient(),
+        discovery_client=FakeDiscoveryClient(),
+        relation_resolution_cache=cache,
+        arxiv_relation_no_arxiv_recheck_days=30,
+    )
+
+    assert seeds == [
+        PaperSeed(
+            name="FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting",
+            url="https://doi.org/10.1007/978-3-031-72933-1_9",
+        )
+    ]
+    assert cache.record_calls == []
+
+
+@pytest.mark.anyio
 async def test_normalize_related_works_negative_caches_only_after_arxiv_and_hf_both_miss():
     from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
 

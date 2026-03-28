@@ -29,7 +29,7 @@ def _extract_best_huggingface_paper_id_from_search_results(
     title_query_norm = normalize_title_for_matching(title_query)
     best_id = None
     best_score = -1
-    saw_structured_candidate = False
+    saw_interpretable_candidate = False
 
     for item in search_results:
         if not isinstance(item, dict):
@@ -39,14 +39,24 @@ def _extract_best_huggingface_paper_id_from_search_results(
         if not isinstance(paper, dict):
             continue
 
-        paper_id = str(paper.get("id") or "").strip()
-        title_text = " ".join(str(item.get("title") or paper.get("title") or "").split()).strip()
-        if paper_id or title_text:
-            saw_structured_candidate = True
+        raw_paper_id = paper.get("id")
+        if not isinstance(raw_paper_id, str):
+            continue
+
+        raw_title = item.get("title")
+        if not isinstance(raw_title, str):
+            raw_title = paper.get("title")
+        if not isinstance(raw_title, str):
+            continue
+
+        paper_id = raw_paper_id.strip()
+        title_text = " ".join(raw_title.split()).strip()
 
         title = normalize_title_for_matching(title_text)
         if not HUGGINGFACE_PAPER_ID_PATTERN.match(paper_id) or not title:
             continue
+
+        saw_interpretable_candidate = True
 
         score = 0
         if title == title_query_norm:
@@ -62,7 +72,7 @@ def _extract_best_huggingface_paper_id_from_search_results(
 
     if best_id:
         return best_id, False
-    return None, saw_structured_candidate
+    return None, saw_interpretable_candidate
 
 
 async def resolve_related_work_title_to_arxiv(
