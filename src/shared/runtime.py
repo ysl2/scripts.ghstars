@@ -16,7 +16,7 @@ from src.shared.settings import (
 class RuntimeClients:
     session: object
     repo_cache: RepoCacheStore
-    relation_resolution_cache: RelationResolutionCacheStore
+    relation_resolution_cache: RelationResolutionCacheStore | None
     discovery_client: object
     github_client: object
 
@@ -38,7 +38,7 @@ def load_runtime_config(env: dict[str, str]) -> dict[str, str | int]:
 
 
 def load_notion_config(env: dict[str, str]) -> dict[str, str | int]:
-    config = load_runtime_config(env)
+    runtime_config = load_runtime_config(env)
     notion_token = (env.get("NOTION_TOKEN") or "").strip()
     database_id = (env.get("DATABASE_ID") or "").strip()
 
@@ -53,9 +53,12 @@ def load_notion_config(env: dict[str, str]) -> dict[str, str | int]:
         raise ValueError(f"Missing required environment variables: {joined}")
 
     return {
-        **config,
         "notion_token": notion_token,
+        "github_token": runtime_config["github_token"],
         "database_id": database_id,
+        "huggingface_token": runtime_config["huggingface_token"],
+        "openalex_api_key": runtime_config["openalex_api_key"],
+        "hf_exact_no_repo_recheck_days": runtime_config["hf_exact_no_repo_recheck_days"],
     }
 
 
@@ -80,11 +83,16 @@ async def open_runtime_clients(
     concurrent_limit: int,
     request_delay: float,
     github_min_interval: float | None = None,
+    enable_relation_resolution_cache: bool = False,
 ):
-    repo_cache = RepoCacheStore(REPO_CACHE_DB_PATH)
-    relation_resolution_cache = RelationResolutionCacheStore(REPO_CACHE_DB_PATH)
+    repo_cache = None
+    relation_resolution_cache = None
 
     try:
+        repo_cache = RepoCacheStore(REPO_CACHE_DB_PATH)
+        if enable_relation_resolution_cache:
+            relation_resolution_cache = RelationResolutionCacheStore(REPO_CACHE_DB_PATH)
+
         async with session_factory(timeout=build_timeout()) as session:
             discovery_client = build_client(
                 discovery_client_cls,
@@ -110,8 +118,10 @@ async def open_runtime_clients(
                 github_client=github_client,
             )
     finally:
-        relation_resolution_cache.close()
-        repo_cache.close()
+        if relation_resolution_cache is not None:
+            relation_resolution_cache.close()
+        if repo_cache is not None:
+            repo_cache.close()
 
 
 def _parse_positive_int(raw_value, *, default: int) -> int:
