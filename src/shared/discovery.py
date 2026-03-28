@@ -296,6 +296,19 @@ class DiscoveryClient:
                 gate=self._huggingface_gate,
             )
 
+    async def get_huggingface_paper_search_results(self, title: str, *, limit: int = 1):
+        if not self.huggingface_token:
+            return None, "Missing HUGGINGFACE_TOKEN"
+        async with self._huggingface_search_semaphore:
+            return await self._request(
+                "https://huggingface.co/api/papers/search",
+                headers=self._build_huggingface_headers("application/json"),
+                params={"q": title, "limit": str(limit)},
+                expect="json",
+                retry_prefix="Hugging Face Papers API",
+                gate=self._huggingface_gate,
+            )
+
     async def get_semanticscholar_paper_html(self, url: str):
         normalized_url = normalize_semanticscholar_paper_url(url)
         if not normalized_url:

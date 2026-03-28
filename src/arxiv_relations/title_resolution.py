@@ -1,14 +1,12 @@
-import html as html_lib
-import json
 import re
 from dataclasses import dataclass
 
-from src.shared.discovery import extract_best_huggingface_paper_id_from_search_html
+from src.shared.arxiv import normalize_title_for_matching
 from src.shared.paper_identity import build_arxiv_abs_url
 
 
 NO_MATCH_TITLE_SEARCH_ERROR = "No arXiv ID found from title search"
-HF_DAILYPAPERS_PATTERN = re.compile(r'data-target="DailyPapers"[^>]*data-props="([^"]*)"')
+HUGGINGFACE_PAPER_ID_PATTERN = re.compile(r"^[0-9]{4}\.[0-9]{4,5}$")
 
 
 @dataclass(frozen=True)
@@ -18,23 +16,53 @@ class RelationTitleResolution:
     negative_cacheable: bool
 
 
-def _is_definitive_huggingface_no_match(search_html: str) -> bool:
-    if not search_html or not isinstance(search_html, str):
-        return False
+def _extract_best_huggingface_paper_id_from_search_results(
+    search_results,
+    title_query: str,
+) -> tuple[str | None, bool]:
+    if not isinstance(search_results, list) or not title_query:
+        return None, False
 
-    match = HF_DAILYPAPERS_PATTERN.search(search_html)
-    if not match:
-        return False
+    if not search_results:
+        return None, True
 
-    try:
-        payload = json.loads(html_lib.unescape(match.group(1)))
-    except json.JSONDecodeError:
-        return False
+    title_query_norm = normalize_title_for_matching(title_query)
+    best_id = None
+    best_score = -1
+    saw_structured_candidate = False
 
-    items = payload.get("searchResults")
-    if not isinstance(items, list):
-        items = payload.get("dailyPapers")
-    return isinstance(items, list)
+    for item in search_results:
+        if not isinstance(item, dict):
+            continue
+
+        paper = item.get("paper", {})
+        if not isinstance(paper, dict):
+            continue
+
+        paper_id = str(paper.get("id") or "").strip()
+        title_text = " ".join(str(item.get("title") or paper.get("title") or "").split()).strip()
+        if paper_id or title_text:
+            saw_structured_candidate = True
+
+        title = normalize_title_for_matching(title_text)
+        if not HUGGINGFACE_PAPER_ID_PATTERN.match(paper_id) or not title:
+            continue
+
+        score = 0
+        if title == title_query_norm:
+            score = 100
+        elif title_query_norm in title:
+            score = 80
+        elif title in title_query_norm:
+            score = 60
+
+        if score > 0 and score > best_score:
+            best_score = score
+            best_id = paper_id
+
+    if best_id:
+        return best_id, False
+    return None, saw_structured_candidate
 
 
 async def resolve_related_work_title_to_arxiv(
@@ -55,15 +83,15 @@ async def resolve_related_work_title_to_arxiv(
     if arxiv_error != NO_MATCH_TITLE_SEARCH_ERROR:
         return RelationTitleResolution(arxiv_url=None, resolved_title=None, negative_cacheable=False)
 
-    hf_search = getattr(discovery_client, "get_huggingface_search_html", None)
+    hf_search = getattr(discovery_client, "get_huggingface_paper_search_results", None)
     if not getattr(discovery_client, "huggingface_token", "") or not callable(hf_search):
         return RelationTitleResolution(arxiv_url=None, resolved_title=None, negative_cacheable=False)
 
-    search_html, hf_error = await hf_search(title)
-    if hf_error or not search_html:
+    search_results, hf_error = await hf_search(title, limit=3)
+    if hf_error or search_results is None:
         return RelationTitleResolution(arxiv_url=None, resolved_title=None, negative_cacheable=False)
 
-    hf_arxiv_id, _hf_source = extract_best_huggingface_paper_id_from_search_html(search_html, title)
+    hf_arxiv_id, definitive_no_match = _extract_best_huggingface_paper_id_from_search_results(search_results, title)
     if hf_arxiv_id:
         matched_title, _ = await arxiv_client.get_title(hf_arxiv_id)
         return RelationTitleResolution(
@@ -75,5 +103,5 @@ async def resolve_related_work_title_to_arxiv(
     return RelationTitleResolution(
         arxiv_url=None,
         resolved_title=None,
-        negative_cacheable=_is_definitive_huggingface_no_match(search_html),
+        negative_cacheable=definitive_no_match,
     )

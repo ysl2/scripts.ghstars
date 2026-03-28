@@ -486,12 +486,17 @@ async def test_normalize_related_works_uses_hf_fallback_after_arxiv_api_miss():
     class FakeDiscoveryClient:
         huggingface_token = "hf-token"
 
-        async def get_huggingface_search_html(self, title: str):
-            events.append(("hf_search", title))
+        async def get_huggingface_paper_search_results(self, title: str, *, limit: int = 3):
+            events.append(("hf_search_json", title, limit))
             return (
-                """
-                <div data-target="DailyPapers" data-props="{&quot;searchResults&quot;:[{&quot;paper&quot;:{&quot;id&quot;:&quot;2312.00451&quot;},&quot;title&quot;:&quot;FSGS: Real-Time Few-shot View Synthesis using Gaussian Splatting&quot;}]}"></div>
-                """,
+                [
+                    {
+                        "paper": {
+                            "id": "2312.00451",
+                            "title": "FSGS: Real-Time Few-shot View Synthesis using Gaussian Splatting",
+                        }
+                    }
+                ],
                 None,
             )
 
@@ -522,7 +527,7 @@ async def test_normalize_related_works_uses_hf_fallback_after_arxiv_api_miss():
     ]
     assert events == [
         ("arxiv_api_miss", "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting"),
-        ("hf_search", "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting"),
+        ("hf_search_json", "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting", 3),
         ("title_lookup", "2312.00451"),
         ("cache_record", "openalex_work", "https://openalex.org/WFSGS", "https://arxiv.org/abs/2312.00451"),
         ("cache_record", "doi", "https://doi.org/10.1007/978-3-031-72933-1_9", "https://arxiv.org/abs/2312.00451"),
@@ -556,7 +561,7 @@ async def test_normalize_related_works_skips_hf_fallback_when_token_missing():
     class FakeDiscoveryClient:
         huggingface_token = ""
 
-        async def get_huggingface_search_html(self, title: str):
+        async def get_huggingface_paper_search_results(self, title: str, *, limit: int = 3):
             raise AssertionError("HF fallback should be skipped when token is missing")
 
     cache = FakeRelationResolutionCache()
@@ -605,7 +610,7 @@ async def test_normalize_related_works_does_not_negative_cache_transient_hf_fail
     class FakeDiscoveryClient:
         huggingface_token = "hf-token"
 
-        async def get_huggingface_search_html(self, title: str):
+        async def get_huggingface_paper_search_results(self, title: str, *, limit: int = 3):
             return None, "Hugging Face Papers timeout"
 
     cache = FakeRelationResolutionCache()
@@ -654,8 +659,8 @@ async def test_normalize_related_works_does_not_negative_cache_unparseable_hf_pa
     class FakeDiscoveryClient:
         huggingface_token = "hf-token"
 
-        async def get_huggingface_search_html(self, title: str):
-            return '<div data-target="DailyPapers" data-props="{not-json"></div>', None
+        async def get_huggingface_paper_search_results(self, title: str, *, limit: int = 3):
+            return {"unexpected": "payload"}, None
 
     cache = FakeRelationResolutionCache()
     seeds = await normalize_related_works_to_seeds(
@@ -706,9 +711,9 @@ async def test_normalize_related_works_negative_caches_only_after_arxiv_and_hf_b
     class FakeDiscoveryClient:
         huggingface_token = "hf-token"
 
-        async def get_huggingface_search_html(self, title: str):
-            events.append(("hf_search_miss", title))
-            return '<div data-target="DailyPapers" data-props="{&quot;searchResults&quot;:[]}"></div>', None
+        async def get_huggingface_paper_search_results(self, title: str, *, limit: int = 3):
+            events.append(("hf_search_json_miss", title, limit))
+            return [], None
 
     class TrackingRelationResolutionCache(FakeRelationResolutionCache):
         def record_resolution(self, *, key_type: str, key_value: str, arxiv_url: str | None) -> None:
@@ -731,7 +736,7 @@ async def test_normalize_related_works_negative_caches_only_after_arxiv_and_hf_b
     ]
     assert events == [
         ("arxiv_api_miss", "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting"),
-        ("hf_search_miss", "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting"),
+        ("hf_search_json_miss", "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting", 3),
         ("cache_record", "openalex_work", "https://openalex.org/WFSGS", None),
         ("cache_record", "doi", "https://doi.org/10.1007/978-3-031-72933-1_9", None),
     ]
@@ -1095,7 +1100,7 @@ async def test_export_arxiv_relations_to_csv_uses_hf_fallback_for_unresolved_rel
 ):
     from src.arxiv_relations.pipeline import export_arxiv_relations_to_csv
 
-    events: list[tuple[str, str]] = []
+    events: list[tuple] = []
 
     class FakeArxivClient:
         def __init__(self):
@@ -1153,17 +1158,27 @@ async def test_export_arxiv_relations_to_csv_uses_hf_fallback_for_unresolved_rel
     class FakeDiscoveryClient:
         huggingface_token = "hf-token"
 
-        async def get_huggingface_search_html(self, title: str):
-            events.append(("hf_search", title))
-            html_by_title = {
-                "Reference Needs HF Mapping": """
-                <div data-target="DailyPapers" data-props="{&quot;searchResults&quot;:[{&quot;paper&quot;:{&quot;id&quot;:&quot;2312.00451&quot;},&quot;title&quot;:&quot;Reference Needs HF Mapping&quot;}]}"></div>
-                """,
-                "Citation Needs HF Mapping": """
-                <div data-target="DailyPapers" data-props="{&quot;searchResults&quot;:[{&quot;paper&quot;:{&quot;id&quot;:&quot;2312.00452&quot;},&quot;title&quot;:&quot;Citation Needs HF Mapping&quot;}]}"></div>
-                """,
+        async def get_huggingface_paper_search_results(self, title: str, *, limit: int = 3):
+            events.append(("hf_search_json", title, limit))
+            payload_by_title = {
+                "Reference Needs HF Mapping": [
+                    {
+                        "paper": {
+                            "id": "2312.00451",
+                            "title": "Reference Needs HF Mapping",
+                        }
+                    }
+                ],
+                "Citation Needs HF Mapping": [
+                    {
+                        "paper": {
+                            "id": "2312.00452",
+                            "title": "Citation Needs HF Mapping",
+                        }
+                    }
+                ],
             }
-            return html_by_title[title], None
+            return payload_by_title[title], None
 
     arxiv_client = FakeArxivClient()
     export_calls = []
@@ -1201,8 +1216,8 @@ async def test_export_arxiv_relations_to_csv_uses_hf_fallback_for_unresolved_rel
         "2312.00452",
     ]
     assert events == [
-        ("hf_search", "Reference Needs HF Mapping"),
-        ("hf_search", "Citation Needs HF Mapping"),
+        ("hf_search_json", "Reference Needs HF Mapping", 3),
+        ("hf_search_json", "Citation Needs HF Mapping", 3),
     ]
 
     assert [call["seeds"] for call in export_calls] == [
