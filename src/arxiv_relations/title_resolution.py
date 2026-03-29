@@ -22,15 +22,16 @@ class RelationTitleResolution:
 def _extract_best_huggingface_paper_id_from_search_results(
     search_results,
     title_query: str,
-) -> tuple[str | None, bool]:
+) -> tuple[str | None, str | None, bool]:
     if not isinstance(search_results, list) or not title_query:
-        return None, False
+        return None, None, False
 
     if not search_results:
-        return None, True
+        return None, None, True
 
     title_query_norm = normalize_title_for_matching(title_query)
     best_id = None
+    best_title = None
     best_score = -1
     saw_interpretable_candidate = False
 
@@ -72,10 +73,11 @@ def _extract_best_huggingface_paper_id_from_search_results(
         if score > 0 and score > best_score:
             best_score = score
             best_id = paper_id
+            best_title = title_text
 
     if best_id:
-        return best_id, False
-    return None, saw_interpretable_candidate
+        return best_id, best_title, False
+    return None, None, saw_interpretable_candidate
 
 
 async def resolve_related_work_title_to_arxiv(
@@ -87,24 +89,34 @@ async def resolve_related_work_title_to_arxiv(
     discovery_client=None,
 ) -> RelationTitleResolution:
     openalex_crosswalk_transient_failure = False
+    openalex_crosswalk_match = getattr(openalex_client, "find_related_work_preprint_match", None)
     openalex_crosswalk = getattr(openalex_client, "find_related_work_preprint_arxiv_url", None)
-    if callable(openalex_crosswalk) and isinstance(openalex_work, dict):
+    if (callable(openalex_crosswalk_match) or callable(openalex_crosswalk)) and isinstance(openalex_work, dict):
         try:
-            openalex_arxiv_url = await openalex_crosswalk(openalex_work, title=title)
+            openalex_resolved_title = None
+            if callable(openalex_crosswalk_match):
+                openalex_arxiv_url, openalex_resolved_title = await openalex_crosswalk_match(openalex_work, title=title)
+            else:
+                openalex_arxiv_url = await openalex_crosswalk(openalex_work, title=title)
         except (RuntimeError, aiohttp.ClientError, asyncio.TimeoutError):
             openalex_crosswalk_transient_failure = True
         else:
             if openalex_arxiv_url:
-                matched_title, _ = await arxiv_client.get_title(openalex_arxiv_url)
                 return RelationTitleResolution(
                     arxiv_url=openalex_arxiv_url,
-                    resolved_title=matched_title or title,
+                    resolved_title=openalex_resolved_title or title,
                     negative_cacheable=False,
                 )
 
-    arxiv_id, _source, arxiv_error = await arxiv_client.get_arxiv_id_by_title_from_api(title)
+    arxiv_title_match = getattr(arxiv_client, "get_arxiv_match_by_title_from_api", None)
+    if callable(arxiv_title_match):
+        arxiv_id, matched_title, _source, arxiv_error = await arxiv_title_match(title)
+    else:
+        arxiv_id, _source, arxiv_error = await arxiv_client.get_arxiv_id_by_title_from_api(title)
+        matched_title = None
     if arxiv_id:
-        matched_title, _ = await arxiv_client.get_title(arxiv_id)
+        if matched_title is None:
+            matched_title, _ = await arxiv_client.get_title(arxiv_id)
         return RelationTitleResolution(
             arxiv_url=build_arxiv_abs_url(arxiv_id),
             resolved_title=matched_title or title,
@@ -123,7 +135,9 @@ async def resolve_related_work_title_to_arxiv(
     if hf_error or search_results is None:
         return RelationTitleResolution(arxiv_url=None, resolved_title=None, negative_cacheable=False)
 
-    hf_arxiv_id, definitive_no_match = _extract_best_huggingface_paper_id_from_search_results(search_results, title)
+    hf_arxiv_id, _hf_title, definitive_no_match = _extract_best_huggingface_paper_id_from_search_results(
+        search_results, title
+    )
     if hf_arxiv_id:
         matched_title, _ = await arxiv_client.get_title(hf_arxiv_id)
         return RelationTitleResolution(

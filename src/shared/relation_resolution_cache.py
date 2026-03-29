@@ -9,6 +9,7 @@ class RelationResolutionCacheEntry:
     key_type: str
     key_value: str
     arxiv_url: str | None
+    resolved_title: str | None
     checked_at: str
 
 
@@ -25,7 +26,7 @@ class RelationResolutionCacheStore:
     def get(self, key_type: str, key_value: str) -> RelationResolutionCacheEntry | None:
         row = self.connection.execute(
             """
-            SELECT key_type, key_value, arxiv_url, checked_at
+            SELECT key_type, key_value, arxiv_url, resolved_title, checked_at
             FROM relation_resolution_cache
             WHERE key_type = ? AND key_value = ?
             """,
@@ -38,6 +39,7 @@ class RelationResolutionCacheStore:
             key_type=row["key_type"],
             key_value=row["key_value"],
             arxiv_url=row["arxiv_url"],
+            resolved_title=row["resolved_title"],
             checked_at=row["checked_at"],
         )
 
@@ -47,17 +49,25 @@ class RelationResolutionCacheStore:
         key_type: str,
         key_value: str,
         arxiv_url: str | None,
+        resolved_title: str | None = None,
     ) -> None:
         checked_at = _utc_now()
         self.connection.execute(
             """
-            INSERT INTO relation_resolution_cache (key_type, key_value, arxiv_url, checked_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO relation_resolution_cache (
+                key_type,
+                key_value,
+                arxiv_url,
+                resolved_title,
+                checked_at
+            )
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(key_type, key_value) DO UPDATE SET
                 arxiv_url = excluded.arxiv_url,
+                resolved_title = excluded.resolved_title,
                 checked_at = excluded.checked_at
             """,
-            (key_type, key_value, arxiv_url, checked_at),
+            (key_type, key_value, arxiv_url, resolved_title, checked_at),
         )
         self.connection.commit()
 
@@ -82,11 +92,22 @@ class RelationResolutionCacheStore:
                 key_type TEXT NOT NULL,
                 key_value TEXT NOT NULL,
                 arxiv_url TEXT,
+                resolved_title TEXT,
                 checked_at TEXT NOT NULL,
                 PRIMARY KEY (key_type, key_value)
             )
             """
         )
+        columns = {
+            row["name"]
+            for row in self.connection.execute(
+                "PRAGMA table_info(relation_resolution_cache)"
+            ).fetchall()
+        }
+        if "resolved_title" not in columns:
+            self.connection.execute(
+                "ALTER TABLE relation_resolution_cache ADD COLUMN resolved_title TEXT"
+            )
         self.connection.commit()
 
 

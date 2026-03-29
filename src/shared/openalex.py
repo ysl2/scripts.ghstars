@@ -56,17 +56,17 @@ class OpenAlexClient:
         results = payload.get("results") or []
         return results[0] if results else None
 
-    async def find_related_work_preprint_arxiv_url(
+    async def find_related_work_preprint_match(
         self,
         work: dict[str, Any],
         *,
         title: str,
-    ) -> str | None:
+    ) -> tuple[str | None, str | None]:
         current_work_id = self._extract_work_id(work.get("id"))
         search_title = " ".join(title.split()).strip()
         normalized_title = normalize_title_for_matching(search_title)
         if not current_work_id or not normalized_title:
-            return None
+            return None, None
 
         payload = await self._get_json(
             OPENALEX_WORKS_URL,
@@ -77,7 +77,7 @@ class OpenAlexClient:
         )
         results = payload.get("results")
         if not isinstance(results, list):
-            return None
+            return None, None
 
         for candidate in results:
             if not isinstance(candidate, dict):
@@ -87,15 +87,24 @@ class OpenAlexClient:
             if current_work_id and candidate_work_id == current_work_id:
                 continue
 
-            candidate_title = candidate.get("display_name") or candidate.get("title") or ""
+            candidate_title = " ".join(str(candidate.get("display_name") or candidate.get("title") or "").split()).strip()
             if normalize_title_for_matching(candidate_title) != normalized_title:
                 continue
 
             canonical_arxiv_url = self._canonical_arxiv_url(candidate)
             if canonical_arxiv_url:
-                return canonical_arxiv_url
+                return canonical_arxiv_url, candidate_title or search_title
 
-        return None
+        return None, None
+
+    async def find_related_work_preprint_arxiv_url(
+        self,
+        work: dict[str, Any],
+        *,
+        title: str,
+    ) -> str | None:
+        arxiv_url, _resolved_title = await self.find_related_work_preprint_match(work, title=title)
+        return arxiv_url
 
     async def fetch_referenced_works(self, work: dict[str, Any]) -> list[dict[str, Any]]:
         referenced = work.get("referenced_works") or []

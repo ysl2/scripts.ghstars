@@ -50,19 +50,25 @@ def normalize_title_for_matching(title: str) -> str:
 
 
 def extract_best_arxiv_id_from_feed(feed_xml: str, title_query: str) -> tuple[str | None, str | None]:
+    arxiv_id, source, _matched_title = extract_best_arxiv_match_from_feed(feed_xml, title_query)
+    return arxiv_id, source
+
+
+def extract_best_arxiv_match_from_feed(feed_xml: str, title_query: str) -> tuple[str | None, str | None, str | None]:
     if not feed_xml or not title_query:
-        return None, None
+        return None, None, None
 
     ns = {"a": "http://www.w3.org/2005/Atom"}
     try:
         root = ET.fromstring(feed_xml)
     except ET.ParseError:
-        return None, None
+        return None, None, None
 
     title_query_norm = normalize_title_for_matching(title_query)
     best_id = None
     best_score = -1
     best_source = None
+    best_title = None
 
     for entry in root.findall("a:entry", ns):
         title_el = entry.find("a:title", ns)
@@ -93,8 +99,9 @@ def extract_best_arxiv_id_from_feed(feed_xml: str, title_query: str) -> tuple[st
             best_score = score
             best_id = arxiv_id
             best_source = source
+            best_title = _strip_html_text("".join(title_el.itertext())) or None
 
-    return best_id, best_source
+    return best_id, best_source, best_title
 
 
 def extract_best_arxiv_id_from_search_html(search_html: str, title_query: str) -> tuple[str | None, str | None]:
@@ -377,8 +384,15 @@ class ArxivClient:
         self,
         title: str,
     ) -> tuple[str | None, str | None, str | None]:
+        arxiv_id, matched_title, source, error = await self.get_arxiv_match_by_title_from_api(title)
+        return arxiv_id, source, error
+
+    async def get_arxiv_match_by_title_from_api(
+        self,
+        title: str,
+    ) -> tuple[str | None, str | None, str | None, str | None]:
         if not title:
-            return None, None, "Missing title"
+            return None, None, None, "Missing title"
 
         feed_xml, error = await self._request_text(
             "https://export.arxiv.org/api/query",
@@ -390,12 +404,12 @@ class ArxivClient:
             retry_prefix="arXiv metadata query",
         )
         if error:
-            return None, None, error
+            return None, None, None, error
 
-        arxiv_id, source = extract_best_arxiv_id_from_feed(feed_xml, title)
+        arxiv_id, source, matched_title = extract_best_arxiv_match_from_feed(feed_xml, title)
         if not arxiv_id:
-            return None, None, "No arXiv ID found from title search"
-        return arxiv_id, source, None
+            return None, None, None, "No arXiv ID found from title search"
+        return arxiv_id, matched_title, source, None
 
 
 def _strip_html_text(text: str) -> str:

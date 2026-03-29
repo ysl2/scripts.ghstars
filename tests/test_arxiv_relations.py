@@ -20,17 +20,27 @@ class FakeRelationResolutionCache:
         self.entries = entries or {}
         self.get_calls: list[tuple[str, str]] = []
         self.record_calls: list[tuple[str, str, str | None]] = []
+        self.record_detail_calls: list[tuple[str, str, str | None, str | None]] = []
 
     def get(self, key_type: str, key_value: str):
         self.get_calls.append((key_type, key_value))
         return self.entries.get((key_type, key_value))
 
-    def record_resolution(self, *, key_type: str, key_value: str, arxiv_url: str | None) -> None:
+    def record_resolution(
+        self,
+        *,
+        key_type: str,
+        key_value: str,
+        arxiv_url: str | None,
+        resolved_title: str | None = None,
+    ) -> None:
         self.record_calls.append((key_type, key_value, arxiv_url))
+        self.record_detail_calls.append((key_type, key_value, arxiv_url, resolved_title))
         self.entries[(key_type, key_value)] = SimpleNamespace(
             key_type=key_type,
             key_value=key_value,
             arxiv_url=arxiv_url,
+            resolved_title=resolved_title,
             checked_at=datetime.now(timezone.utc).isoformat(),
         )
 
@@ -230,15 +240,16 @@ async def test_normalize_related_works_maps_non_arxiv_title_hits_to_canonical_ar
         async def get_arxiv_id_by_title(self, title: str):
             raise AssertionError("Relation normalization should use the arXiv API title search path")
 
-        async def get_arxiv_id_by_title_from_api(self, title: str):
+        async def get_arxiv_match_by_title_from_api(self, title: str):
             if title == "Original OpenAlex Title":
-                return "2501.12345", "title_search_exact", None
+                return "2501.12345", "Mapped Arxiv Title", "title_search_exact", None
             raise AssertionError(f"Unexpected title search: {title}")
 
+        async def get_arxiv_id_by_title_from_api(self, title: str):
+            raise AssertionError("Optimized relation normalization should use the title-search helper result directly")
+
         async def get_title(self, arxiv_identifier: str):
-            if arxiv_identifier == "2501.12345":
-                return "Mapped Arxiv Title", None
-            raise AssertionError(f"Unexpected arXiv title lookup: {arxiv_identifier}")
+            raise AssertionError("Successful API title-search mappings should not do an extra arXiv title lookup")
 
     related_works = [{"id": "R1"}, {"id": "R2"}]
     seeds = await normalize_related_works_to_seeds(
@@ -254,7 +265,69 @@ async def test_normalize_related_works_maps_non_arxiv_title_hits_to_canonical_ar
 
 
 @pytest.mark.anyio
-async def test_normalize_related_works_uses_positive_cache_before_title_search():
+async def test_normalize_related_works_uses_cached_resolved_title_before_get_title_fallback():
+    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+
+    recent = datetime.now(timezone.utc).isoformat()
+    cache = FakeRelationResolutionCache(
+        {
+            ("openalex_work", "https://openalex.org/W9"): SimpleNamespace(
+                key_type="openalex_work",
+                key_value="https://openalex.org/W9",
+                arxiv_url="https://arxiv.org/abs/2312.00451",
+                resolved_title="Cached Arxiv Title",
+                checked_at=recent,
+            ),
+            ("doi", "https://doi.org/10.1007/978-3-031-72933-1_9"): SimpleNamespace(
+                key_type="doi",
+                key_value="https://doi.org/10.1007/978-3-031-72933-1_9",
+                arxiv_url=None,
+                resolved_title=None,
+                checked_at=recent,
+            ),
+        }
+    )
+
+    class FakeOpenAlexClient:
+        def build_related_work_candidate(self, work: dict):
+            return RelatedWorkCandidate(
+                title="Cached Candidate Title",
+                direct_arxiv_url=None,
+                doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
+                landing_page_url="https://publisher.example/cached",
+                openalex_url="https://openalex.org/W9",
+            )
+
+    class FakeArxivClient:
+        def __init__(self):
+            self.title_lookups: list[str] = []
+
+        async def get_arxiv_id_by_title(self, title: str):
+            raise AssertionError("HTML title search should not run when cache already has an arXiv URL")
+
+        async def get_arxiv_id_by_title_from_api(self, title: str):
+            raise AssertionError("API title search should not run when cache already has an arXiv URL")
+
+        async def get_title(self, arxiv_identifier: str):
+            self.title_lookups.append(arxiv_identifier)
+            raise AssertionError("Positive cache hits with resolved_title should not do an extra arXiv title lookup")
+
+    arxiv_client = FakeArxivClient()
+    seeds = await normalize_related_works_to_seeds(
+        [{"id": "R9"}],
+        openalex_client=FakeOpenAlexClient(),
+        arxiv_client=arxiv_client,
+        relation_resolution_cache=cache,
+        arxiv_relation_no_arxiv_recheck_days=30,
+    )
+
+    assert seeds == [PaperSeed(name="Cached Arxiv Title", url="https://arxiv.org/abs/2312.00451")]
+    assert cache.record_calls == []
+    assert arxiv_client.title_lookups == []
+
+
+@pytest.mark.anyio
+async def test_normalize_related_works_falls_back_to_get_title_for_legacy_positive_cache_entries():
     from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
 
     recent = datetime.now(timezone.utc).isoformat()
@@ -298,7 +371,7 @@ async def test_normalize_related_works_uses_positive_cache_before_title_search()
         async def get_title(self, arxiv_identifier: str):
             self.title_lookups.append(arxiv_identifier)
             if arxiv_identifier in {"2312.00451", "https://arxiv.org/abs/2312.00451"}:
-                return "Cached Arxiv Title", None
+                return "Legacy Cached Arxiv Title", None
             raise AssertionError(f"Unexpected arXiv title lookup: {arxiv_identifier}")
 
     arxiv_client = FakeArxivClient()
@@ -310,7 +383,7 @@ async def test_normalize_related_works_uses_positive_cache_before_title_search()
         arxiv_relation_no_arxiv_recheck_days=30,
     )
 
-    assert seeds == [PaperSeed(name="Cached Arxiv Title", url="https://arxiv.org/abs/2312.00451")]
+    assert seeds == [PaperSeed(name="Legacy Cached Arxiv Title", url="https://arxiv.org/abs/2312.00451")]
     assert cache.record_calls == []
     assert arxiv_client.title_lookups == ["https://arxiv.org/abs/2312.00451"]
 
@@ -471,11 +544,14 @@ async def test_normalize_related_works_uses_openalex_crosswalk_before_arxiv_and_
                 openalex_url="https://openalex.org/WX1",
             )
 
-        async def find_related_work_preprint_arxiv_url(self, work: dict, *, title: str):
+        async def find_related_work_preprint_match(self, work: dict, *, title: str):
             events.append(("openalex_crosswalk", title))
             assert work["id"] == "https://openalex.org/WX1"
             assert work["display_name"] == "Example Published Paper"
-            return "https://arxiv.org/abs/2401.12345"
+            return "https://arxiv.org/abs/2401.12345", "Example Preprint Title"
+
+        async def find_related_work_preprint_arxiv_url(self, work: dict, *, title: str):
+            raise AssertionError("Optimized relation normalization should use the richer OpenAlex crosswalk helper")
 
     class FakeArxivClient:
         async def get_arxiv_id_by_title(self, title: str):
@@ -485,9 +561,7 @@ async def test_normalize_related_works_uses_openalex_crosswalk_before_arxiv_and_
             raise AssertionError("OpenAlex crosswalk hits should bypass arXiv title search")
 
         async def get_title(self, arxiv_identifier: str):
-            events.append(("title_lookup", arxiv_identifier))
-            assert arxiv_identifier == "https://arxiv.org/abs/2401.12345"
-            return "Example Preprint Title", None
+            raise AssertionError("OpenAlex crosswalk hits should not do an extra arXiv title lookup")
 
     class FakeDiscoveryClient:
         huggingface_token = "hf-token"
@@ -496,9 +570,21 @@ async def test_normalize_related_works_uses_openalex_crosswalk_before_arxiv_and_
             raise AssertionError("OpenAlex crosswalk hits should bypass Hugging Face fallback")
 
     class TrackingRelationResolutionCache(FakeRelationResolutionCache):
-        def record_resolution(self, *, key_type: str, key_value: str, arxiv_url: str | None) -> None:
+        def record_resolution(
+            self,
+            *,
+            key_type: str,
+            key_value: str,
+            arxiv_url: str | None,
+            resolved_title: str | None = None,
+        ) -> None:
             events.append(("cache_record", key_type, key_value, arxiv_url))
-            super().record_resolution(key_type=key_type, key_value=key_value, arxiv_url=arxiv_url)
+            super().record_resolution(
+                key_type=key_type,
+                key_value=key_value,
+                arxiv_url=arxiv_url,
+                resolved_title=resolved_title,
+            )
 
     cache = TrackingRelationResolutionCache()
     seeds = await normalize_related_works_to_seeds(
@@ -520,9 +606,10 @@ async def test_normalize_related_works_uses_openalex_crosswalk_before_arxiv_and_
         ("openalex_work", "https://openalex.org/WX1", "https://arxiv.org/abs/2401.12345"),
         ("doi", "https://doi.org/10.1145/example", "https://arxiv.org/abs/2401.12345"),
     ]
+    assert cache.entries[("openalex_work", "https://openalex.org/WX1")].resolved_title == "Example Preprint Title"
+    assert cache.entries[("doi", "https://doi.org/10.1145/example")].resolved_title == "Example Preprint Title"
     assert events == [
         ("openalex_crosswalk", "Example Published Paper"),
-        ("title_lookup", "https://arxiv.org/abs/2401.12345"),
         ("cache_record", "openalex_work", "https://openalex.org/WX1", "https://arxiv.org/abs/2401.12345"),
         ("cache_record", "doi", "https://doi.org/10.1145/example", "https://arxiv.org/abs/2401.12345"),
     ]
@@ -568,9 +655,21 @@ async def test_normalize_related_works_openalex_crosswalk_miss_runs_before_arxiv
             return [], None
 
     class TrackingRelationResolutionCache(FakeRelationResolutionCache):
-        def record_resolution(self, *, key_type: str, key_value: str, arxiv_url: str | None) -> None:
+        def record_resolution(
+            self,
+            *,
+            key_type: str,
+            key_value: str,
+            arxiv_url: str | None,
+            resolved_title: str | None = None,
+        ) -> None:
             events.append(("cache_record", key_type, key_value, arxiv_url))
-            super().record_resolution(key_type=key_type, key_value=key_value, arxiv_url=arxiv_url)
+            super().record_resolution(
+                key_type=key_type,
+                key_value=key_value,
+                arxiv_url=arxiv_url,
+                resolved_title=resolved_title,
+            )
 
     cache = TrackingRelationResolutionCache()
     seeds = await normalize_related_works_to_seeds(
@@ -690,9 +789,21 @@ async def test_normalize_related_works_uses_hf_fallback_after_arxiv_api_miss():
             )
 
     class TrackingRelationResolutionCache(FakeRelationResolutionCache):
-        def record_resolution(self, *, key_type: str, key_value: str, arxiv_url: str | None) -> None:
+        def record_resolution(
+            self,
+            *,
+            key_type: str,
+            key_value: str,
+            arxiv_url: str | None,
+            resolved_title: str | None = None,
+        ) -> None:
             events.append(("cache_record", key_type, key_value, arxiv_url))
-            super().record_resolution(key_type=key_type, key_value=key_value, arxiv_url=arxiv_url)
+            super().record_resolution(
+                key_type=key_type,
+                key_value=key_value,
+                arxiv_url=arxiv_url,
+                resolved_title=resolved_title,
+            )
 
     cache = TrackingRelationResolutionCache()
     seeds = await normalize_related_works_to_seeds(
@@ -714,6 +825,14 @@ async def test_normalize_related_works_uses_hf_fallback_after_arxiv_api_miss():
         ("openalex_work", "https://openalex.org/WFSGS", "https://arxiv.org/abs/2312.00451"),
         ("doi", "https://doi.org/10.1007/978-3-031-72933-1_9", "https://arxiv.org/abs/2312.00451"),
     ]
+    assert (
+        cache.entries[("openalex_work", "https://openalex.org/WFSGS")].resolved_title
+        == "FSGS: Real-Time Few-shot View Synthesis using Gaussian Splatting"
+    )
+    assert (
+        cache.entries[("doi", "https://doi.org/10.1007/978-3-031-72933-1_9")].resolved_title
+        == "FSGS: Real-Time Few-shot View Synthesis using Gaussian Splatting"
+    )
     assert events == [
         ("arxiv_api_miss", "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting"),
         ("hf_search_json", "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting", 1),
@@ -770,9 +889,21 @@ async def test_normalize_related_works_uses_hf_fallback_after_arxiv_api_transien
             )
 
     class TrackingRelationResolutionCache(FakeRelationResolutionCache):
-        def record_resolution(self, *, key_type: str, key_value: str, arxiv_url: str | None) -> None:
+        def record_resolution(
+            self,
+            *,
+            key_type: str,
+            key_value: str,
+            arxiv_url: str | None,
+            resolved_title: str | None = None,
+        ) -> None:
             events.append(("cache_record", key_type, key_value, arxiv_url))
-            super().record_resolution(key_type=key_type, key_value=key_value, arxiv_url=arxiv_url)
+            super().record_resolution(
+                key_type=key_type,
+                key_value=key_value,
+                arxiv_url=arxiv_url,
+                resolved_title=resolved_title,
+            )
 
     cache = TrackingRelationResolutionCache()
     seeds = await normalize_related_works_to_seeds(
@@ -1142,9 +1273,21 @@ async def test_normalize_related_works_negative_caches_only_after_arxiv_and_hf_b
             return [], None
 
     class TrackingRelationResolutionCache(FakeRelationResolutionCache):
-        def record_resolution(self, *, key_type: str, key_value: str, arxiv_url: str | None) -> None:
+        def record_resolution(
+            self,
+            *,
+            key_type: str,
+            key_value: str,
+            arxiv_url: str | None,
+            resolved_title: str | None = None,
+        ) -> None:
             events.append(("cache_record", key_type, key_value, arxiv_url))
-            super().record_resolution(key_type=key_type, key_value=key_value, arxiv_url=arxiv_url)
+            super().record_resolution(
+                key_type=key_type,
+                key_value=key_value,
+                arxiv_url=arxiv_url,
+                resolved_title=resolved_title,
+            )
 
     cache = TrackingRelationResolutionCache()
     await normalize_related_works_to_seeds(
@@ -1202,15 +1345,16 @@ async def test_normalize_related_works_rechecks_stale_negative_and_backfills_all
         async def get_arxiv_id_by_title(self, title: str):
             raise AssertionError("Legacy HTML title search should not run in the relation cache pipeline")
 
-        async def get_arxiv_id_by_title_from_api(self, title: str):
+        async def get_arxiv_match_by_title_from_api(self, title: str):
             self.api_title_searches.append(title)
-            return "2312.00451", "title_search_exact", None
+            return "2312.00451", "Mapped Arxiv Title", "title_search_exact", None
+
+        async def get_arxiv_id_by_title_from_api(self, title: str):
+            raise AssertionError("Optimized backfill should use the title-search helper result directly")
 
         async def get_title(self, arxiv_identifier: str):
             self.title_lookups.append(arxiv_identifier)
-            if arxiv_identifier == "2312.00451":
-                return "Mapped Arxiv Title", None
-            raise AssertionError(f"Unexpected arXiv title lookup: {arxiv_identifier}")
+            raise AssertionError("Successful API backfills should not do an extra arXiv title lookup")
 
     arxiv_client = FakeArxivClient()
     seeds = await normalize_related_works_to_seeds(
@@ -1223,11 +1367,16 @@ async def test_normalize_related_works_rechecks_stale_negative_and_backfills_all
 
     assert seeds == [PaperSeed(name="Mapped Arxiv Title", url="https://arxiv.org/abs/2312.00451")]
     assert arxiv_client.api_title_searches == ["Backfilled Paper"]
-    assert arxiv_client.title_lookups == ["2312.00451"]
+    assert arxiv_client.title_lookups == []
     assert cache.record_calls == [
         ("openalex_work", "https://openalex.org/W11", "https://arxiv.org/abs/2312.00451"),
         ("doi", "https://doi.org/10.1007/978-3-031-72933-1_9", "https://arxiv.org/abs/2312.00451"),
     ]
+    assert cache.entries[("openalex_work", "https://openalex.org/W11")].resolved_title == "Mapped Arxiv Title"
+    assert (
+        cache.entries[("doi", "https://doi.org/10.1007/978-3-031-72933-1_9")].resolved_title
+        == "Mapped Arxiv Title"
+    )
 
 
 @pytest.mark.anyio
@@ -1238,7 +1387,14 @@ async def test_normalize_related_works_direct_arxiv_rows_bypass_cache_and_search
         def get(self, key_type: str, key_value: str):
             raise AssertionError("Direct arXiv rows should not consult the relation-resolution cache")
 
-        def record_resolution(self, *, key_type: str, key_value: str, arxiv_url: str | None) -> None:
+        def record_resolution(
+            self,
+            *,
+            key_type: str,
+            key_value: str,
+            arxiv_url: str | None,
+            resolved_title: str | None = None,
+        ) -> None:
             raise AssertionError("Direct arXiv rows should not update the relation-resolution cache")
 
         @staticmethod
@@ -1376,11 +1532,14 @@ async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_ret
         async def get_arxiv_id_by_title(self, title: str):
             raise AssertionError("Relation export should use the arXiv API title search path")
 
-        async def get_arxiv_id_by_title_from_api(self, title: str):
+        async def get_arxiv_match_by_title_from_api(self, title: str):
             self.api_title_searches.append(title)
             if title == "Reference Needs Mapping":
-                return "2501.00002", "title_search_exact", None
+                return "2501.00002", "Mapped Reference", "title_search_exact", None
             raise AssertionError(f"Unexpected title search: {title}")
+
+        async def get_arxiv_id_by_title_from_api(self, title: str):
+            raise AssertionError("Optimized relation export should use the title-search helper result directly")
 
     class FakeOpenAlexClient:
         def __init__(self):
@@ -1489,7 +1648,7 @@ async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_ret
         status_callback=statuses.append,
     )
 
-    assert arxiv_client.calls == ["https://arxiv.org/abs/2603.23502", "2501.00002"]
+    assert arxiv_client.calls == ["https://arxiv.org/abs/2603.23502"]
     assert arxiv_client.api_title_searches == ["Reference Needs Mapping"]
     assert openalex_client.title_queries == ["Target Paper"]
     assert openalex_client.reference_work_queries == [{"id": "https://openalex.org/W0"}]

@@ -113,7 +113,9 @@ async def _resolve_related_work_row(
     )
     positive_entry = next((entry for entry in cached_entries if entry and entry.arxiv_url), None)
     if positive_entry is not None:
-        cached_title, _ = await arxiv_client.get_title(positive_entry.arxiv_url)
+        cached_title = getattr(positive_entry, "resolved_title", None)
+        if not cached_title:
+            cached_title, _ = await arxiv_client.get_title(positive_entry.arxiv_url)
         original_title = candidate.title or cached_title or positive_entry.arxiv_url
         return NormalizedRelatedRow(
             title=cached_title or candidate.title or positive_entry.arxiv_url,
@@ -155,6 +157,7 @@ async def _resolve_related_work_row(
                     key_type=key_type,
                     key_value=key_value,
                     arxiv_url=resolution.arxiv_url,
+                    resolved_title=resolution.resolved_title,
                 )
         resolved_title = resolution.resolved_title or candidate.title or resolution.arxiv_url
         original_title = candidate.title or resolution.resolved_title or resolution.arxiv_url
