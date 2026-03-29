@@ -46,6 +46,8 @@ OPENALEX_API_KEY=
 ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS=30
 ```
 
+`OPENALEX_API_KEY` is optional but recommended for single-paper relation export. Even with a key, OpenAlex can still return budget-exhausted `429` responses; the client honors `Retry-After` / `retryAfter` signals and avoids long pointless retry loops when the server asks for a much later retry.
+
 `ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS` controls how long single-paper relation mode keeps a cached "no arXiv match found" result before retrying arXiv title search.
 
 ### Optional override only for Semantic Scholar URL mode
@@ -72,6 +74,15 @@ DATABASE_ID=
 
 ## Usage
 
+### Shared enrichment behavior
+
+CSV update, collection URL export, and single-paper relation export reuse the same downstream enrichment path once a row has a canonical arXiv URL.
+
+- GitHub discovery checks `cache.db` first, then does one Hugging Face exact lookup on cache miss when discovery is allowed
+- when a row ends with both a canonical arXiv URL and a valid GitHub repo URL, local `overview` / `abs` markdown is ensured under `./cache/overview/<arxiv_id>.md` and `./cache/abs/<arxiv_id>.md`
+- existing local content files are reused; only missing files are fetched
+- overview uses AlphaXiv's public overview API; abs uses AlphaXiv's public paper API
+
 ### Notion mode
 
 Runs the original Notion sync flow.
@@ -96,10 +107,7 @@ CSV mode behavior:
 - if `Github` is blank, discovery checks `cache.db` first, then does one Hugging Face exact lookup on cache miss
 - missing `Github` or `Stars` columns are added automatically at the end of the CSV
 - existing custom columns are left untouched, including any preexisting `Overview` / `Abs` columns
-- cached overview / abs markdown is fetched only when the cache file is missing
-- cached content is stored on disk under `./cache/overview/<arxiv_id>.md` and `./cache/abs/<arxiv_id>.md` in the current working directory
-- the helper may return a path string relative to the CSV directory, but current CSV mode does not write those returned paths back into the CSV
-- overview uses AlphaXiv's public overview API; abs uses AlphaXiv's public paper API
+- current CSV mode does not write content-cache paths back into the CSV
 - writes use a temp file and atomic replace
 
 ### Collection URL to CSV mode
@@ -287,7 +295,8 @@ Single-paper mode behavior:
 - resolves the input paper title from arXiv metadata first, then searches OpenAlex by title
 - accepts the first OpenAlex work returned by relevance order
 - keeps direct arXiv-backed related works as canonical, versionless arXiv `abs` rows
-- otherwise tries arXiv API title search first and takes the first most relevant hit
+- otherwise first tries an OpenAlex exact-title preprint/sibling crosswalk on the related work itself
+- on crosswalk miss, tries arXiv API title search and takes the first most relevant hit
 - after an arXiv API title-search miss, may try Hugging Face Papers title search when `HUGGINGFACE_TOKEN` is configured
 - mapped rows use the matched arXiv title and canonical arXiv `abs` URL
 - when `HUGGINGFACE_TOKEN` is absent, the Hugging Face fallback is skipped silently and unresolved rows keep the current retained-row behavior
@@ -296,8 +305,9 @@ Single-paper mode behavior:
 - cached positive matches store canonical arXiv `abs` URLs; cached negative matches are written only after the active relation-resolution ladder for the current environment confirms no accepted arXiv match, then retried after `ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS`
 - referenced and citing works are deduplicated by final normalized URL before export
 - both CSVs use the standard columns: `Name`, `Url`, `Github`, `Stars`
-- shared GitHub discovery and star enrichment are reused, so resolved and unresolved rows remain in the CSV even when no repo is found; in that case `Github` and `Stars` are left blank
+- shared GitHub discovery, local overview / abs cache warming, and star enrichment are reused, so resolved and unresolved rows remain in the CSV even when no repo is found; in that case `Github` and `Stars` are left blank
 - a missing OpenAlex detail record for one referenced work currently causes that one related work to be skipped while the rest of the export continues
+- a budget-exhausted OpenAlex `429` can still fail the run even with `OPENALEX_API_KEY`; the client respects upstream retry signals instead of looping on very long waits
 - the CLI reports success only after both CSV files are written; other arXiv or OpenAlex hard failures still return a nonzero exit code
 
 ## Notion expectations
