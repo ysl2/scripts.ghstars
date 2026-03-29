@@ -552,3 +552,84 @@ async def test_run_notion_mode_builds_and_passes_content_cache(monkeypatch):
     assert exit_code == 0
     assert received["page"]["id"] == "page-1"
     assert received["content_cache"] is not None
+
+
+@pytest.mark.anyio
+async def test_run_notion_mode_limits_started_pages_to_notion_concurrent_limit(monkeypatch):
+    monkeypatch.setenv("NOTION_TOKEN", "notion_xxx")
+    monkeypatch.setenv("DATABASE_ID", "db_123")
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_xxx")
+    monkeypatch.setenv("HUGGINGFACE_TOKEN", "hf_xxx")
+    monkeypatch.setattr(notion_runner, "NOTION_CONCURRENT_LIMIT", 2)
+
+    release = asyncio.Event()
+    started: list[int] = []
+
+    async def fake_process_page(page, index, total, **kwargs):
+        started.append(index)
+        await release.wait()
+
+    monkeypatch.setattr(notion_runner, "process_page", fake_process_page)
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeArxivClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeDiscoveryClient:
+        def __init__(self, session, *, huggingface_token="", repo_cache=None, hf_exact_no_repo_recheck_days=0, max_concurrent=0, min_interval=0):
+            self.session = session
+            self.huggingface_token = huggingface_token
+
+    class FakeGitHubClient:
+        def __init__(self, session, *, github_token="", max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeContentClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeNotionClient:
+        def __init__(self, token, max_concurrent):
+            self.token = token
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get_data_source_id(self, database_id):
+            return "data-source-1"
+
+        async def ensure_sync_properties(self, data_source_id):
+            return None
+
+        async def query_pages(self, data_source_id):
+            return [{"id": f"page-{index}", "url": f"https://notion.so/page-{index}", "properties": {}} for index in range(1, 6)]
+
+    notion_task = asyncio.create_task(
+        run_notion_mode(
+            session_factory=lambda **kwargs: FakeSession(),
+            arxiv_client_cls=FakeArxivClient,
+            discovery_client_cls=FakeDiscoveryClient,
+            github_client_cls=FakeGitHubClient,
+            notion_client_cls=FakeNotionClient,
+            content_client_cls=FakeContentClient,
+        )
+    )
+
+    try:
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert started == [1, 2]
+    finally:
+        release.set()
+
+    assert await notion_task == 0

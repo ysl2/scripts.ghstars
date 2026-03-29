@@ -2,13 +2,16 @@ import asyncio
 import csv
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from src.csv_update.pipeline import build_csv_row_outcome, update_csv_file
+import src.csv_update.pipeline as csv_update_pipeline
+from src.csv_update.pipeline import CsvRowOutcome, build_csv_row_outcome, update_csv_file
 from src.csv_update.runner import run_csv_mode
 from src.shared.paper_content import PaperContentCache
 from src.shared.paper_identity import extract_arxiv_id
+from src.shared.papers import PaperRecord
 
 
 class FakeContentCache:
@@ -337,6 +340,71 @@ async def test_update_csv_file_skips_content_updates_when_github_discovery_misse
         }
     ]
     assert content_cache.calls == []
+
+
+@pytest.mark.anyio
+async def test_update_csv_file_limits_started_tasks_to_worker_count(tmp_path: Path, monkeypatch):
+    csv_path = tmp_path / "papers.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "Name,Url",
+                "Paper 1,https://arxiv.org/abs/2501.00001",
+                "Paper 2,https://arxiv.org/abs/2501.00002",
+                "Paper 3,https://arxiv.org/abs/2501.00003",
+                "Paper 4,https://arxiv.org/abs/2501.00004",
+                "Paper 5,https://arxiv.org/abs/2501.00005",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    release = asyncio.Event()
+    started: list[int] = []
+
+    async def fake_build_csv_row_outcome(index, row, **kwargs):
+        started.append(index)
+        await release.wait()
+        return (
+            index - 1,
+            dict(row),
+            CsvRowOutcome(
+                index=index,
+                record=PaperRecord(
+                    name=row["Name"],
+                    url=row["Url"],
+                    github="",
+                    stars="",
+                ),
+                current_stars=None,
+                reason=None,
+                source_label=None,
+                github_url_set=None,
+            ),
+        )
+
+    monkeypatch.setattr(csv_update_pipeline, "build_csv_row_outcome", fake_build_csv_row_outcome)
+
+    client = SimpleNamespace(semaphore=asyncio.Semaphore(2))
+    update_task = asyncio.create_task(
+        update_csv_file(
+            csv_path,
+            discovery_client=client,
+            github_client=client,
+            content_cache=FakeContentCache(),
+        )
+    )
+
+    try:
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert started == [1, 2]
+    finally:
+        release.set()
+
+    result = await update_task
+    assert result.updated == 5
 
 
 @pytest.mark.anyio

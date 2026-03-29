@@ -1,9 +1,9 @@
-import asyncio
 import csv
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.shared.async_batch import iter_bounded_as_completed, resolve_worker_count
 from src.shared.paper_enrichment import PaperEnrichmentRequest, process_single_paper
 from src.shared.papers import PaperRecord
 
@@ -44,29 +44,30 @@ async def update_csv_file(
     csv_path = Path(csv_path)
     rows, fieldnames = _read_csv_rows(csv_path)
     total = len(rows)
+    worker_count = resolve_worker_count(discovery_client, github_client)
     if callable(status_callback):
         status_callback(f"📝 Found {total} rows")
-
-    tasks = [
-        asyncio.create_task(
-            build_csv_row_outcome(
-                index,
-                row,
-                discovery_client=discovery_client,
-                github_client=github_client,
-                content_cache=content_cache,
-                csv_dir=csv_path.parent,
-            )
-        )
-        for index, row in enumerate(rows, 1)
-    ]
 
     updated_rows: list[dict[str, str] | None] = [None] * total
     updated = 0
     skipped = []
 
-    for task in asyncio.as_completed(tasks):
-        row_index, updated_row, outcome = await task
+    async def build_outcome(item: tuple[int, dict[str, str]]) -> tuple[int, dict[str, str], CsvRowOutcome]:
+        index, row = item
+        return await build_csv_row_outcome(
+            index,
+            row,
+            discovery_client=discovery_client,
+            github_client=github_client,
+            content_cache=content_cache,
+            csv_dir=csv_path.parent,
+        )
+
+    async for row_index, updated_row, outcome in iter_bounded_as_completed(
+        enumerate(rows, 1),
+        build_outcome,
+        max_concurrent=worker_count,
+    ):
         updated_rows[row_index] = updated_row
         if outcome.reason is None:
             updated += 1

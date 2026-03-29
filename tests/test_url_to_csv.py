@@ -1,3 +1,4 @@
+import asyncio
 import csv
 import html
 import json
@@ -8,8 +9,10 @@ import pytest
 
 from src.shared.paper_content import PaperContentCache
 from src.shared.settings import ABS_CACHE_SUBDIR, OVERVIEW_CACHE_SUBDIR
+from src.shared.papers import PaperSeed
 from src.url_to_csv.arxivxplorer import TooManyPagesError, output_csv_path_for_arxivxplorer_url, parse_arxivxplorer_url
-from src.url_to_csv.pipeline import fetch_paper_seeds_from_url, export_url_to_csv
+import src.url_to_csv.pipeline as url_pipeline
+from src.url_to_csv.pipeline import fetch_paper_seeds_from_url, export_url_to_csv, normalize_paper_seeds_to_arxiv
 from src.url_to_csv.runner import run_url_mode
 
 
@@ -353,6 +356,45 @@ async def test_export_url_to_csv_defaults_to_output_directory_and_creates_it(tmp
             "Github": "https://github.com/foo/bar",
             "Stars": "11",
         }
+    ]
+
+
+@pytest.mark.anyio
+async def test_normalize_paper_seeds_to_arxiv_limits_started_tasks_to_worker_count(monkeypatch):
+    release = asyncio.Event()
+    started: list[int] = []
+
+    async def fake_normalize_seed_to_arxiv(seed, **kwargs):
+        started.append(int(seed.name.split()[-1]))
+        await release.wait()
+        return PaperSeed(name=seed.name, url=f"https://arxiv.org/abs/2501.0000{seed.name.split()[-1]}")
+
+    monkeypatch.setattr(url_pipeline, "_normalize_seed_to_arxiv", fake_normalize_seed_to_arxiv)
+
+    seeds = [PaperSeed(name=f"Paper {index}", url=f"https://example.com/{index}") for index in range(1, 6)]
+    client = SimpleNamespace(semaphore=asyncio.Semaphore(2))
+    normalize_task = asyncio.create_task(
+        normalize_paper_seeds_to_arxiv(
+            seeds,
+            discovery_client=client,
+            arxiv_client=client,
+        )
+    )
+
+    try:
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert started == [1, 2]
+    finally:
+        release.set()
+
+    resolved = await normalize_task
+    assert [seed.url for seed in resolved] == [
+        "https://arxiv.org/abs/2501.00001",
+        "https://arxiv.org/abs/2501.00002",
+        "https://arxiv.org/abs/2501.00003",
+        "https://arxiv.org/abs/2501.00004",
+        "https://arxiv.org/abs/2501.00005",
     ]
 
 

@@ -1,6 +1,6 @@
-import asyncio
 from pathlib import Path
 
+from src.shared.async_batch import iter_bounded_as_completed, resolve_worker_count
 from src.shared.discovery import resolve_arxiv_id_by_title
 from src.shared.paper_export import export_paper_seeds_to_csv
 from src.shared.paper_identity import build_arxiv_abs_url, extract_arxiv_id, normalize_arxiv_url
@@ -128,21 +128,28 @@ async def normalize_paper_seeds_to_arxiv(
     status_callback=None,
 ) -> list[PaperSeed]:
     total = len(seeds)
+    worker_count = resolve_worker_count(discovery_client, arxiv_client)
     needs_resolution = any(not extract_arxiv_id(seed.url) for seed in seeds)
     if needs_resolution and callable(status_callback):
         status_callback("🔎 Normalizing to arXiv-backed papers")
 
-    tasks = [
-        asyncio.create_task(
-            _normalize_seed_to_arxiv(
-                seed,
-                discovery_client=discovery_client,
-                arxiv_client=arxiv_client,
-            )
+    resolved: list[PaperSeed | None] = [None] * total
+
+    async def normalize_seed(item: tuple[int, PaperSeed]) -> tuple[int, PaperSeed | None]:
+        index, seed = item
+        normalized = await _normalize_seed_to_arxiv(
+            seed,
+            discovery_client=discovery_client,
+            arxiv_client=arxiv_client,
         )
-        for seed in seeds
-    ]
-    resolved = await asyncio.gather(*tasks)
+        return index, normalized
+
+    async for index, normalized_seed in iter_bounded_as_completed(
+        enumerate(seeds),
+        normalize_seed,
+        max_concurrent=worker_count,
+    ):
+        resolved[index] = normalized_seed
 
     output: list[PaperSeed] = []
     seen_urls: set[str] = set()

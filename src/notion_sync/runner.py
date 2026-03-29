@@ -8,6 +8,7 @@ from src.notion_sync.notion_client import NotionClient
 from src.notion_sync.pipeline import process_page
 from src.shared.alphaxiv_content import AlphaXivContentClient
 from src.shared.arxiv import ArxivClient
+from src.shared.async_batch import iter_bounded_as_completed
 from src.shared.discovery import DiscoveryClient
 from src.shared.github import GitHubClient, resolve_github_min_interval
 from src.shared.paper_content import PaperContentCache
@@ -87,8 +88,10 @@ async def run_notion_mode(
 
             results = {"updated": 0, "skipped": []}
             lock = asyncio.Lock()
-            tasks = [
-                process_page(
+
+            async def process_page_item(item: tuple[int, dict]) -> None:
+                i, page = item
+                await process_page(
                     page,
                     i,
                     len(pages),
@@ -100,9 +103,13 @@ async def run_notion_mode(
                     arxiv_client=arxiv_client,
                     content_cache=content_cache,
                 )
-                for i, page in enumerate(pages, 1)
-            ]
-            await asyncio.gather(*tasks)
+
+            async for _ in iter_bounded_as_completed(
+                enumerate(pages, 1),
+                process_page_item,
+                max_concurrent=NOTION_CONCURRENT_LIMIT,
+            ):
+                pass
 
     print_summary(
         "Updated",

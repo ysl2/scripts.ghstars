@@ -1,10 +1,9 @@
-import asyncio
 from pathlib import Path
 
+from src.shared.async_batch import iter_bounded_as_completed, resolve_worker_count
 from src.shared.csv_io import write_records_to_csv_path
 from src.shared.paper_enrichment import PaperEnrichmentRequest, process_single_paper
 from src.shared.papers import ConversionResult, PaperOutcome, PaperRecord, PaperSeed
-from src.shared.settings import DEFAULT_CONCURRENT_LIMIT
 
 
 async def build_paper_outcome(
@@ -52,30 +51,29 @@ async def export_paper_seeds_to_csv(
     progress_callback=None,
 ) -> ConversionResult:
     total = len(seeds)
+    worker_count = resolve_worker_count(discovery_client, github_client)
     if callable(status_callback):
         status_callback(f"📝 Found {total} papers")
-        status_callback(
-            f"🔄 Starting concurrent enrichment ({_resolve_worker_count(discovery_client, github_client)} workers)"
-        )
+        status_callback(f"🔄 Starting concurrent enrichment ({worker_count} workers)")
 
-    tasks = [
-        asyncio.create_task(
-            build_paper_outcome(
-                index,
-                seed,
-                discovery_client=discovery_client,
-                github_client=github_client,
-                content_cache=content_cache,
-            )
+    async def build_seed_outcome(item: tuple[int, PaperSeed]) -> PaperOutcome:
+        index, seed = item
+        return await build_paper_outcome(
+            index,
+            seed,
+            discovery_client=discovery_client,
+            github_client=github_client,
+            content_cache=content_cache,
         )
-        for index, seed in enumerate(seeds, 1)
-    ]
 
     records = []
     resolved = 0
     skipped = []
-    for task in asyncio.as_completed(tasks):
-        outcome = await task
+    async for outcome in iter_bounded_as_completed(
+        enumerate(seeds, 1),
+        build_seed_outcome,
+        max_concurrent=worker_count,
+    ):
         records.append(outcome.record)
         if outcome.reason is None:
             resolved += 1
@@ -96,12 +94,3 @@ async def export_paper_seeds_to_csv(
         resolved=resolved,
         skipped=skipped,
     )
-
-
-def _resolve_worker_count(discovery_client, github_client) -> int:
-    for client in (discovery_client, github_client):
-        semaphore = getattr(client, "semaphore", None)
-        value = getattr(semaphore, "_value", None)
-        if isinstance(value, int) and value > 0:
-            return value
-    return DEFAULT_CONCURRENT_LIMIT
