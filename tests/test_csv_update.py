@@ -166,7 +166,7 @@ async def test_update_csv_file_rewrites_doi_to_arxiv_when_openalex_crosswalk_res
 
 
 @pytest.mark.anyio
-async def test_update_csv_file_uses_arxiv_title_api_after_openalex_exact_miss(tmp_path: Path):
+async def test_update_csv_file_uses_arxiv_html_title_search_after_openalex_exact_miss(tmp_path: Path):
     csv_path = tmp_path / "papers.csv"
     csv_path.write_text(
         "\n".join(
@@ -183,9 +183,10 @@ async def test_update_csv_file_uses_arxiv_title_api_after_openalex_exact_miss(tm
         find_exact_arxiv_match_by_identifier=AsyncMock(return_value=(None, "DOI Paper"))
     )
     arxiv_client = SimpleNamespace(
+        get_arxiv_id_by_title=AsyncMock(return_value=("2501.54321", "title_search_exact", None)),
         get_arxiv_match_by_title_from_api=AsyncMock(
-            return_value=("2501.54321", "DOI Paper On arXiv", "title_search_exact", None)
-        )
+            return_value=("2999.99999", "Wrong API Match", "title_search_exact", None)
+        ),
     )
     crossref_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock())
     datacite_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock())
@@ -223,7 +224,8 @@ async def test_update_csv_file_uses_arxiv_title_api_after_openalex_exact_miss(tm
             "Stars": "7",
         }
     ]
-    arxiv_client.get_arxiv_match_by_title_from_api.assert_awaited_once_with("DOI Paper")
+    arxiv_client.get_arxiv_id_by_title.assert_awaited_once_with("DOI Paper")
+    arxiv_client.get_arxiv_match_by_title_from_api.assert_not_awaited()
     crossref_client.find_arxiv_match_by_doi.assert_not_awaited()
     datacite_client.find_arxiv_match_by_doi.assert_not_awaited()
 

@@ -124,7 +124,7 @@ async def test_resolve_arxiv_url_uses_openalex_exact_before_all_fallbacks():
             return_value=("https://arxiv.org/abs/2501.12345", "Mapped")
         )
     )
-    arxiv_client = SimpleNamespace(get_arxiv_match_by_title_from_api=AsyncMock())
+    arxiv_client = SimpleNamespace(get_arxiv_id_by_title=AsyncMock())
     crossref_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock())
     datacite_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock())
 
@@ -139,20 +139,49 @@ async def test_resolve_arxiv_url_uses_openalex_exact_before_all_fallbacks():
     )
 
     assert result.canonical_arxiv_url == "https://arxiv.org/abs/2501.12345"
+    arxiv_client.get_arxiv_id_by_title.assert_not_awaited()
+    crossref_client.find_arxiv_match_by_doi.assert_not_awaited()
+    datacite_client.find_arxiv_match_by_doi.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_resolve_arxiv_url_prefers_html_title_search_over_api_title_search():
+    openalex_client = SimpleNamespace(
+        find_exact_arxiv_match_by_identifier=AsyncMock(return_value=(None, "Published Paper"))
+    )
+    arxiv_client = SimpleNamespace(
+        get_arxiv_id_by_title=AsyncMock(return_value=("2501.54321", "title_search_exact", None)),
+        get_arxiv_match_by_title_from_api=AsyncMock(
+            return_value=("2999.99999", "Wrong API Match", "title_search_exact", None)
+        ),
+    )
+    crossref_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock())
+    datacite_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock())
+
+    result = await resolve_arxiv_url(
+        title="Published Paper",
+        raw_url="https://doi.org/10.1145/example",
+        openalex_client=openalex_client,
+        arxiv_client=arxiv_client,
+        crossref_client=crossref_client,
+        datacite_client=datacite_client,
+        allow_title_search=True,
+    )
+
+    assert result.canonical_arxiv_url == "https://arxiv.org/abs/2501.54321"
+    arxiv_client.get_arxiv_id_by_title.assert_awaited_once_with("Published Paper")
     arxiv_client.get_arxiv_match_by_title_from_api.assert_not_awaited()
     crossref_client.find_arxiv_match_by_doi.assert_not_awaited()
     datacite_client.find_arxiv_match_by_doi.assert_not_awaited()
 
 
 @pytest.mark.anyio
-async def test_resolve_arxiv_url_runs_crossref_then_datacite_after_title_api_fails_without_hf():
+async def test_resolve_arxiv_url_runs_crossref_then_datacite_after_html_title_search_fails_without_hf():
     openalex_client = SimpleNamespace(
         find_exact_arxiv_match_by_identifier=AsyncMock(return_value=(None, "Published Paper"))
     )
     arxiv_client = SimpleNamespace(
-        get_arxiv_match_by_title_from_api=AsyncMock(
-            return_value=(None, None, None, "No arXiv ID found from title search")
-        )
+        get_arxiv_id_by_title=AsyncMock(return_value=(None, None, "No arXiv ID found from title search"))
     )
     crossref_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock(return_value=(None, "Published Paper")))
     datacite_client = SimpleNamespace(

@@ -1970,6 +1970,7 @@ async def test_export_arxiv_relations_to_csv_warms_content_for_arxiv_rows_and_pr
 
     class FakeArxivClient:
         def __init__(self):
+            self.html_title_searches: list[str] = []
             self.api_title_searches: list[str] = []
 
         async def get_title(self, arxiv_identifier: str):
@@ -1978,7 +1979,8 @@ async def test_export_arxiv_relations_to_csv_warms_content_for_arxiv_rows_and_pr
             raise AssertionError(f"Unexpected arXiv title lookup: {arxiv_identifier}")
 
         async def get_arxiv_id_by_title(self, title: str):
-            raise AssertionError("Relation export should use the arXiv API title search path")
+            self.html_title_searches.append(title)
+            return None, None, "No arXiv ID found from title search"
 
         async def get_arxiv_match_by_title_from_api(self, title: str):
             self.api_title_searches.append(title)
@@ -2041,10 +2043,11 @@ async def test_export_arxiv_relations_to_csv_warms_content_for_arxiv_rows_and_pr
             }
             return mapping[(owner, repo)]
 
+    arxiv_client = FakeArxivClient()
     content_cache = RecordingContentCache()
     result = await export_arxiv_relations_to_csv(
         "https://arxiv.org/abs/2603.23502",
-        arxiv_client=FakeArxivClient(),
+        arxiv_client=arxiv_client,
         openalex_client=FakeOpenAlexClient(),
         discovery_client=FakeDiscoveryClient(),
         github_client=FakeGitHubClient(),
@@ -2083,6 +2086,8 @@ async def test_export_arxiv_relations_to_csv_warms_content_for_arxiv_rows_and_pr
         "https://arxiv.org/abs/2501.00001",
         "https://arxiv.org/abs/2502.00002",
     ]
+    assert arxiv_client.html_title_searches == ["Retained DOI Reference"]
+    assert arxiv_client.api_title_searches == ["Retained DOI Reference"]
     assert result.references.resolved == 1
     assert result.references.skipped == [
         {

@@ -220,11 +220,13 @@ async def _resolve_by_title(
     matched_title = None
     error = None
 
-    arxiv_title_match = getattr(arxiv_client, "get_arxiv_match_by_title_from_api", None)
-    if callable(arxiv_title_match):
-        arxiv_id, matched_title, _source, error = await arxiv_title_match(title)
-    elif arxiv_client is not None:
-        arxiv_id, _source, error = await arxiv_client.get_arxiv_id_by_title(title)
+    arxiv_title_search = getattr(arxiv_client, "get_arxiv_id_by_title", None)
+    if callable(arxiv_title_search):
+        arxiv_id, _source, error = await arxiv_title_search(title)
+    else:
+        arxiv_title_match = getattr(arxiv_client, "get_arxiv_match_by_title_from_api", None)
+        if callable(arxiv_title_match):
+            arxiv_id, matched_title, _source, error = await arxiv_title_match(title)
 
     if arxiv_id:
         canonical_arxiv_url = build_arxiv_abs_url(arxiv_id)

@@ -443,9 +443,7 @@ async def test_normalize_paper_seeds_to_arxiv_uses_datacite_after_crossref_miss(
         find_exact_arxiv_match_by_identifier=AsyncMock(return_value=(None, "Published Paper"))
     )
     arxiv_client = SimpleNamespace(
-        get_arxiv_match_by_title_from_api=AsyncMock(
-            return_value=(None, None, None, "No arXiv ID found from title search")
-        )
+        get_arxiv_id_by_title=AsyncMock(return_value=(None, None, "No arXiv ID found from title search"))
     )
     crossref_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock(return_value=(None, "Published Paper")))
     datacite_client = SimpleNamespace(

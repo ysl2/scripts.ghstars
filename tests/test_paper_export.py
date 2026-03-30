@@ -103,11 +103,12 @@ async def test_build_paper_outcome_threads_metadata_clients_to_process_single_pa
 
 
 @pytest.mark.anyio
-async def test_build_paper_outcome_uses_arxiv_title_api_after_openalex_exact_miss():
+async def test_build_paper_outcome_uses_arxiv_html_title_search_after_openalex_exact_miss():
     arxiv_client = SimpleNamespace(
+        get_arxiv_id_by_title=AsyncMock(return_value=("2501.54321", "title_search_exact", None)),
         get_arxiv_match_by_title_from_api=AsyncMock(
-            return_value=("2501.54321", "Paper A On arXiv", "title_search_exact", None)
-        )
+            return_value=("2999.99999", "Wrong API Match", "title_search_exact", None)
+        ),
     )
     openalex_client = SimpleNamespace(
         find_exact_arxiv_match_by_identifier=AsyncMock(return_value=(None, "Paper A"))
@@ -140,6 +141,7 @@ async def test_build_paper_outcome_uses_arxiv_title_api_after_openalex_exact_mis
     assert outcome.record.url == "https://arxiv.org/abs/2501.54321"
     assert outcome.record.github == "https://github.com/foo/bar"
     assert outcome.record.stars == 12
-    arxiv_client.get_arxiv_match_by_title_from_api.assert_awaited_once_with("Paper A")
+    arxiv_client.get_arxiv_id_by_title.assert_awaited_once_with("Paper A")
+    arxiv_client.get_arxiv_match_by_title_from_api.assert_not_awaited()
     crossref_client.find_arxiv_match_by_doi.assert_not_awaited()
     datacite_client.find_arxiv_match_by_doi.assert_not_awaited()
