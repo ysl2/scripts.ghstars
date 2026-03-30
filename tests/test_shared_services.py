@@ -5,8 +5,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.legacy.alphaxiv import find_github_url_in_alphaxiv_legacy_payload
+import src.shared.alphaxiv as alphaxiv
 from src.shared.discovery import (
+    DiscoveryClient,
     find_huggingface_paper_id_in_search_html,
     find_github_url_in_huggingface_paper_html,
     resolve_arxiv_id_by_title,
@@ -66,7 +67,11 @@ def test_find_github_url_in_huggingface_paper_html_ignores_arbitrary_discussion_
     assert find_github_url_in_huggingface_paper_html(html) is None
 
 
-def test_find_github_url_in_alphaxiv_legacy_payload_prefers_known_fields():
+def test_alphaxiv_module_no_longer_exposes_legacy_client():
+    assert not hasattr(alphaxiv, "AlphaXivLegacyClient")
+
+
+def test_find_github_url_in_alphaxiv_payload_prefers_known_fields():
     payload = {
         "paper": {
             "implementation": "https://github.com/foo/bar",
@@ -76,7 +81,7 @@ def test_find_github_url_in_alphaxiv_legacy_payload_prefers_known_fields():
         }
     }
 
-    assert find_github_url_in_alphaxiv_legacy_payload(payload) == "https://github.com/foo/bar"
+    assert alphaxiv.find_github_url_in_alphaxiv_payload(payload) == "https://github.com/foo/bar"
 
 
 def test_find_huggingface_paper_id_in_search_html_matches_exact_title_from_payload():
@@ -106,11 +111,49 @@ def test_find_huggingface_paper_id_in_search_html_matches_exact_title_from_paylo
 
 
 def test_discovery_client_enforces_huggingface_rate_limit_floor():
-    from src.shared.discovery import DiscoveryClient
-
     client = DiscoveryClient(session=object(), min_interval=0.2)
 
     assert client.rate_limiter.min_interval == 0.5
+
+
+@pytest.mark.anyio
+async def test_discovery_client_queries_public_alphaxiv_paper_endpoint():
+    class FakeResponse:
+        status = 404
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {}
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, headers=None, params=None):
+            self.calls.append((url, headers, params))
+            return FakeResponse()
+
+    session = FakeSession()
+    client = DiscoveryClient(session=session)
+
+    payload, error = await client.get_alphaxiv_paper_payload_by_arxiv_id("2603.18493")
+
+    assert (payload, error) == (None, None)
+    assert session.calls == [
+        (
+            "https://api.alphaxiv.org/papers/v3/2603.18493",
+            {
+                "Accept": "application/json",
+                "User-Agent": "scripts.ghstars",
+            },
+            None,
+        )
+    ]
 
 
 @pytest.mark.anyio
@@ -174,6 +217,9 @@ async def test_resolve_github_url_uses_huggingface_exact_api_payload_before_sear
         async def get_huggingface_search_html(self, title):
             raise AssertionError("legacy Hugging Face HTML search should not run")
 
+        async def get_alphaxiv_paper_payload_by_arxiv_id(self, arxiv_id):
+            raise AssertionError("AlphaXiv should not run when HF exact already has the repo")
+
     client = FakeDiscoveryClient()
     github_url = await resolve_github_url(
         FakeSeed(name="Paper Title", url="https://arxiv.org/abs/2603.18493"),
@@ -187,6 +233,110 @@ async def test_resolve_github_url_uses_huggingface_exact_api_payload_before_sear
 
 
 @pytest.mark.anyio
+async def test_resolve_github_url_falls_back_to_alphaxiv_after_hf_exact_no_repo():
+    class FakeRepoCache:
+        def __init__(self):
+            self.found_calls = []
+            self.no_repo_calls = []
+
+        def get(self, arxiv_url):
+            return None
+
+        def record_found_repo(self, arxiv_url, github_url):
+            self.found_calls.append((arxiv_url, github_url))
+
+        def record_exact_no_repo(self, arxiv_url):
+            self.no_repo_calls.append(arxiv_url)
+
+    class FakeDiscoveryClient:
+        def __init__(self):
+            self.huggingface_token = "hf_token"
+            self.calls = []
+            self.repo_cache = FakeRepoCache()
+
+        async def get_huggingface_paper_payload_by_arxiv_id(self, arxiv_id):
+            self.calls.append(("hf_paper_api", arxiv_id))
+            return {"id": arxiv_id, "githubRepo": None}, None
+
+        async def get_alphaxiv_paper_payload_by_arxiv_id(self, arxiv_id):
+            self.calls.append(("alphaxiv_paper_api", arxiv_id))
+            return {
+                "paper": {
+                    "implementation": "https://github.com/foo/bar",
+                }
+            }, None
+
+    client = FakeDiscoveryClient()
+    github_url = await resolve_github_url(
+        FakeSeed(name="Paper Title", url="https://arxiv.org/abs/2603.18493"),
+        client,
+    )
+
+    assert github_url == "https://github.com/foo/bar"
+    assert client.calls == [
+        ("hf_paper_api", "2603.18493"),
+        ("alphaxiv_paper_api", "2603.18493"),
+    ]
+    assert client.repo_cache.found_calls == [
+        ("https://arxiv.org/abs/2603.18493", "https://github.com/foo/bar"),
+    ]
+    assert client.repo_cache.no_repo_calls == []
+
+
+@pytest.mark.anyio
+async def test_resolve_github_url_falls_back_to_alphaxiv_after_hf_exact_404():
+    class FakeRepoCache:
+        def __init__(self):
+            self.found_calls = []
+            self.no_repo_calls = []
+
+        def get(self, arxiv_url):
+            return None
+
+        def record_found_repo(self, arxiv_url, github_url):
+            self.found_calls.append((arxiv_url, github_url))
+
+        def record_exact_no_repo(self, arxiv_url):
+            self.no_repo_calls.append(arxiv_url)
+
+    class FakeDiscoveryClient:
+        def __init__(self):
+            self.huggingface_token = "hf_token"
+            self.calls = []
+            self.repo_cache = FakeRepoCache()
+
+        async def get_huggingface_paper_payload_by_arxiv_id(self, arxiv_id):
+            self.calls.append(("hf_paper_api", arxiv_id))
+            return None, None
+
+        async def get_alphaxiv_paper_payload_by_arxiv_id(self, arxiv_id):
+            self.calls.append(("alphaxiv_paper_api", arxiv_id))
+            return {
+                "paper": {
+                    "resources": [
+                        {"url": "https://github.com/foo/bar"},
+                    ]
+                }
+            }, None
+
+    client = FakeDiscoveryClient()
+    github_url = await resolve_github_url(
+        FakeSeed(name="Paper Title", url="https://arxiv.org/abs/2603.18493"),
+        client,
+    )
+
+    assert github_url == "https://github.com/foo/bar"
+    assert client.calls == [
+        ("hf_paper_api", "2603.18493"),
+        ("alphaxiv_paper_api", "2603.18493"),
+    ]
+    assert client.repo_cache.found_calls == [
+        ("https://arxiv.org/abs/2603.18493", "https://github.com/foo/bar"),
+    ]
+    assert client.repo_cache.no_repo_calls == []
+
+
+@pytest.mark.anyio
 async def test_resolve_github_url_uses_cached_repo_before_hf_exact():
     class FakeDiscoveryClient:
         def __init__(self):
@@ -196,7 +346,7 @@ async def test_resolve_github_url_uses_cached_repo_before_hf_exact():
                     github_url="https://github.com/foo/bar",
                     created_at="2026-03-27T00:00:00+00:00",
                     updated_at="2026-03-27T00:00:00+00:00",
-                    last_hf_exact_checked_at="2026-03-27T00:00:00+00:00",
+                    last_repo_discovery_checked_at="2026-03-27T00:00:00+00:00",
                 )
             )
 
@@ -224,10 +374,10 @@ async def test_resolve_github_url_skips_hf_exact_when_cached_no_repo_is_still_fr
                     github_url=None,
                     created_at=recent,
                     updated_at=recent,
-                    last_hf_exact_checked_at=recent,
+                    last_repo_discovery_checked_at=recent,
                 )
             )
-            self.hf_exact_no_repo_recheck_days = 7
+            self.repo_discovery_no_repo_recheck_days = 7
 
         async def get_huggingface_paper_payload_by_arxiv_id(self, arxiv_id):
             raise AssertionError("HF exact should not run while cached no-repo entry is still fresh")
@@ -256,13 +406,13 @@ async def test_resolve_github_url_queries_hf_exact_when_cached_no_repo_entry_is_
                 github_url=None,
                 created_at=stale,
                 updated_at=stale,
-                last_hf_exact_checked_at=stale,
+                last_repo_discovery_checked_at=stale,
             )
 
         def record_found_repo(self, arxiv_url, github_url):
             self.found_calls.append((arxiv_url, github_url))
 
-        def record_exact_no_repo(self, arxiv_url):
+        def record_discovery_no_repo(self, arxiv_url):
             self.no_repo_calls.append(arxiv_url)
 
     class FakeDiscoveryClient:
@@ -270,7 +420,7 @@ async def test_resolve_github_url_queries_hf_exact_when_cached_no_repo_entry_is_
             self.huggingface_token = "hf_token"
             self.calls = []
             self.repo_cache = FakeRepoCache()
-            self.hf_exact_no_repo_recheck_days = 7
+            self.repo_discovery_no_repo_recheck_days = 7
 
         async def get_huggingface_paper_payload_by_arxiv_id(self, arxiv_id):
             self.calls.append(("hf_paper_api", arxiv_id))
@@ -299,7 +449,7 @@ async def test_resolve_github_url_records_successful_exact_no_repo_in_cache():
         def get(self, arxiv_url):
             return None
 
-        def record_exact_no_repo(self, arxiv_url):
+        def record_discovery_no_repo(self, arxiv_url):
             self.no_repo_calls.append(arxiv_url)
 
     class FakeDiscoveryClient:
@@ -309,6 +459,9 @@ async def test_resolve_github_url_records_successful_exact_no_repo_in_cache():
 
         async def get_huggingface_paper_payload_by_arxiv_id(self, arxiv_id):
             return {"id": arxiv_id, "githubRepo": None}, None
+
+        async def get_alphaxiv_paper_payload_by_arxiv_id(self, arxiv_id):
+            return {"paper": {"resources": []}}, None
 
     client = FakeDiscoveryClient()
     github_url = await resolve_github_url(
@@ -329,7 +482,7 @@ async def test_resolve_github_url_does_not_record_no_repo_when_exact_api_errors(
         def get(self, arxiv_url):
             return None
 
-        def record_exact_no_repo(self, arxiv_url):
+        def record_discovery_no_repo(self, arxiv_url):
             self.no_repo_calls.append(arxiv_url)
 
     class FakeDiscoveryClient:
@@ -339,6 +492,42 @@ async def test_resolve_github_url_does_not_record_no_repo_when_exact_api_errors(
 
         async def get_huggingface_paper_payload_by_arxiv_id(self, arxiv_id):
             return None, "Hugging Face Papers API timeout"
+
+        async def get_alphaxiv_paper_payload_by_arxiv_id(self, arxiv_id):
+            return {"paper": {"resources": []}}, None
+
+    client = FakeDiscoveryClient()
+    github_url = await resolve_github_url(
+        FakeSeed(name="Paper Title", url="https://arxiv.org/abs/2603.18493"),
+        client,
+    )
+
+    assert github_url is None
+    assert client.repo_cache.no_repo_calls == []
+
+
+@pytest.mark.anyio
+async def test_resolve_github_url_does_not_record_no_repo_when_alphaxiv_errors_after_hf_no_repo():
+    class FakeRepoCache:
+        def __init__(self):
+            self.no_repo_calls = []
+
+        def get(self, arxiv_url):
+            return None
+
+        def record_discovery_no_repo(self, arxiv_url):
+            self.no_repo_calls.append(arxiv_url)
+
+    class FakeDiscoveryClient:
+        def __init__(self):
+            self.huggingface_token = "hf_token"
+            self.repo_cache = FakeRepoCache()
+
+        async def get_huggingface_paper_payload_by_arxiv_id(self, arxiv_id):
+            return {"id": arxiv_id, "githubRepo": None}, None
+
+        async def get_alphaxiv_paper_payload_by_arxiv_id(self, arxiv_id):
+            return None, "AlphaXiv paper API timeout"
 
     client = FakeDiscoveryClient()
     github_url = await resolve_github_url(

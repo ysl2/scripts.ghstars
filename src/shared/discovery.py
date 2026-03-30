@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import dataclass
 import html as html_lib
 import json
 import re
@@ -6,12 +7,13 @@ from datetime import datetime, timedelta, timezone
 
 import aiohttp
 
+from src.shared.alphaxiv import find_github_url_in_alphaxiv_payload
 from src.shared.arxiv import normalize_title_for_matching
 from src.shared.github import normalize_github_url
 from src.shared.headless_browser import dump_rendered_html
 from src.shared.http import MAX_RETRIES, RateLimiter
 from src.shared.paper_identity import extract_arxiv_id, normalize_arxiv_url, normalize_semanticscholar_paper_url
-from src.shared.settings import HF_EXACT_NO_REPO_RECHECK_DAYS
+from src.shared.settings import REPO_DISCOVERY_NO_REPO_RECHECK_DAYS
 
 
 HUGGINGFACE_PAPER_ID_PATTERN = re.compile(r"^[0-9]{4}\.[0-9]{4,5}$")
@@ -27,6 +29,12 @@ class _DiscoveryRequestGate:
 
 def resolve_huggingface_min_interval(requested_min_interval: float) -> float:
     return max(requested_min_interval, HUGGINGFACE_API_MIN_INTERVAL)
+
+
+@dataclass(frozen=True)
+class RepoDiscoveryAttempt:
+    github_url: str | None
+    checked: bool
 
 
 def find_github_url_in_text(text: str) -> str | None:
@@ -79,6 +87,10 @@ def find_github_url_in_huggingface_paper_payload(payload) -> str | None:
         return None
 
     return normalize_github_url(github_url)
+
+
+def find_github_url_in_alphaxiv_paper_payload(payload) -> str | None:
+    return find_github_url_in_alphaxiv_payload(payload)
 
 
 def find_github_url_in_semanticscholar_paper_html(html: str) -> str | None:
@@ -197,16 +209,21 @@ class DiscoveryClient:
         *,
         huggingface_token: str = "",
         repo_cache=None,
-        hf_exact_no_repo_recheck_days: int = HF_EXACT_NO_REPO_RECHECK_DAYS,
+        repo_discovery_no_repo_recheck_days: int = REPO_DISCOVERY_NO_REPO_RECHECK_DAYS,
+        hf_exact_no_repo_recheck_days: int | None = None,
         max_concurrent: int = 5,
         min_interval: float = 0.2,
     ):
         self.session = session
         self.huggingface_token = huggingface_token
         self.repo_cache = repo_cache
-        self.hf_exact_no_repo_recheck_days = hf_exact_no_repo_recheck_days
+        if hf_exact_no_repo_recheck_days is not None:
+            repo_discovery_no_repo_recheck_days = hf_exact_no_repo_recheck_days
+        self.repo_discovery_no_repo_recheck_days = repo_discovery_no_repo_recheck_days
+        self.hf_exact_no_repo_recheck_days = repo_discovery_no_repo_recheck_days
         self._huggingface_gate = _DiscoveryRequestGate(max_concurrent, resolve_huggingface_min_interval(min_interval))
         self._huggingface_search_semaphore = asyncio.Semaphore(HUGGINGFACE_SEARCH_MAX_CONCURRENT)
+        self._alphaxiv_gate = _DiscoveryRequestGate(max_concurrent, min_interval)
         self._semanticscholar_gate = _DiscoveryRequestGate(max_concurrent, min_interval)
         self.semaphore = self._huggingface_gate.semaphore
         self.rate_limiter = self._huggingface_gate.rate_limiter
@@ -281,6 +298,19 @@ class DiscoveryClient:
             expect="text",
             retry_prefix="Hugging Face Papers",
             gate=self._huggingface_gate,
+        )
+
+    async def get_alphaxiv_paper_payload_by_arxiv_id(self, arxiv_id: str):
+        return await self._request(
+            f"https://api.alphaxiv.org/papers/v3/{arxiv_id}",
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "scripts.ghstars",
+            },
+            expect="json",
+            retry_prefix="AlphaXiv paper API",
+            gate=self._alphaxiv_gate,
+            allow_statuses={404},
         )
 
     async def get_huggingface_search_html(self, title: str):
@@ -382,24 +412,83 @@ async def resolve_github_url(seed, client) -> str | None:
             if cached.github_url:
                 return cached.github_url
 
-            recheck_days = getattr(client, "hf_exact_no_repo_recheck_days", HF_EXACT_NO_REPO_RECHECK_DAYS)
-            if _should_skip_negative_cache_recheck(cached.last_hf_exact_checked_at, recheck_days):
+            recheck_days = getattr(
+                client,
+                "repo_discovery_no_repo_recheck_days",
+                getattr(client, "hf_exact_no_repo_recheck_days", REPO_DISCOVERY_NO_REPO_RECHECK_DAYS),
+            )
+            last_checked_at = getattr(
+                cached,
+                "last_repo_discovery_checked_at",
+                getattr(cached, "last_hf_exact_checked_at", None),
+            )
+            if _should_skip_negative_cache_recheck(last_checked_at, recheck_days):
                 return None
 
-    exact_fetcher = getattr(client, "get_huggingface_paper_payload_by_arxiv_id", None)
-    if callable(exact_fetcher):
-        payload, error = await exact_fetcher(arxiv_id)
-        if not error:
-            github_url = find_github_url_in_huggingface_paper_payload(payload)
-            if github_url:
-                if repo_cache is not None and normalized_arxiv_url:
-                    repo_cache.record_found_repo(normalized_arxiv_url, github_url)
-                return github_url
-            if repo_cache is not None and normalized_arxiv_url:
-                repo_cache.record_exact_no_repo(normalized_arxiv_url)
-        return None
+    github_url, chain_fully_checked = await _resolve_arxiv_backed_repo_via_providers(arxiv_id, client)
+    if github_url:
+        if repo_cache is not None and normalized_arxiv_url:
+            repo_cache.record_found_repo(normalized_arxiv_url, github_url)
+        return github_url
+
+    if (
+        repo_cache is not None
+        and normalized_arxiv_url
+        and chain_fully_checked
+    ):
+        recorder = getattr(repo_cache, "record_discovery_no_repo", None)
+        if callable(recorder):
+            recorder(normalized_arxiv_url)
+        else:
+            repo_cache.record_exact_no_repo(normalized_arxiv_url)
 
     return None
+
+
+async def _resolve_arxiv_backed_repo_via_providers(arxiv_id: str, client) -> tuple[str | None, bool]:
+    providers = (
+        _discover_repo_from_huggingface_exact,
+        _discover_repo_from_alphaxiv,
+    )
+
+    chain_fully_checked = True
+    for provider in providers:
+        attempt = await provider(arxiv_id, client)
+        chain_fully_checked = chain_fully_checked and attempt.checked
+        if attempt.github_url:
+            return attempt.github_url, chain_fully_checked
+
+    return None, chain_fully_checked
+
+
+async def _discover_repo_from_huggingface_exact(arxiv_id: str, client) -> RepoDiscoveryAttempt:
+    fetcher = getattr(client, "get_huggingface_paper_payload_by_arxiv_id", None)
+    if not callable(fetcher):
+        return RepoDiscoveryAttempt(github_url=None, checked=False)
+
+    payload, error = await fetcher(arxiv_id)
+    if error:
+        return RepoDiscoveryAttempt(github_url=None, checked=False)
+
+    return RepoDiscoveryAttempt(
+        github_url=find_github_url_in_huggingface_paper_payload(payload),
+        checked=True,
+    )
+
+
+async def _discover_repo_from_alphaxiv(arxiv_id: str, client) -> RepoDiscoveryAttempt:
+    fetcher = getattr(client, "get_alphaxiv_paper_payload_by_arxiv_id", None)
+    if not callable(fetcher):
+        return RepoDiscoveryAttempt(github_url=None, checked=False)
+
+    payload, error = await fetcher(arxiv_id)
+    if error:
+        return RepoDiscoveryAttempt(github_url=None, checked=False)
+
+    return RepoDiscoveryAttempt(
+        github_url=find_github_url_in_alphaxiv_paper_payload(payload),
+        checked=True,
+    )
 
 
 def _should_skip_negative_cache_recheck(last_checked_at: str | None, recheck_days: int) -> bool:

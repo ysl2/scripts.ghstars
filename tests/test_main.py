@@ -12,7 +12,7 @@ def test_load_runtime_config_reads_only_optional_tokens():
         {
             "GITHUB_TOKEN": "gh_token",
             "HUGGINGFACE_TOKEN": "hf_token",
-            "HF_EXACT_NO_REPO_RECHECK_DAYS": "7",
+            "REPO_DISCOVERY_NO_REPO_RECHECK_DAYS": "7",
         }
     )
 
@@ -21,7 +21,7 @@ def test_load_runtime_config_reads_only_optional_tokens():
         "huggingface_token": "hf_token",
         "openalex_api_key": "",
         "arxiv_relation_no_arxiv_recheck_days": 30,
-        "hf_exact_no_repo_recheck_days": 7,
+        "repo_discovery_no_repo_recheck_days": 7,
     }
 
 
@@ -31,12 +31,27 @@ def test_load_runtime_config_defaults_missing_values_to_empty_strings():
         "huggingface_token": "",
         "openalex_api_key": "",
         "arxiv_relation_no_arxiv_recheck_days": 30,
-        "hf_exact_no_repo_recheck_days": 7,
+        "repo_discovery_no_repo_recheck_days": 7,
     }
 
 
+def test_load_runtime_config_prefers_generic_repo_discovery_recheck_days():
+    config = load_runtime_config(
+        {
+            "REPO_DISCOVERY_NO_REPO_RECHECK_DAYS": "5",
+            "HF_EXACT_NO_REPO_RECHECK_DAYS": "9",
+        }
+    )
+
+    assert config["repo_discovery_no_repo_recheck_days"] == 5
+
+
+def test_load_runtime_config_accepts_legacy_hf_exact_recheck_days_alias():
+    assert load_runtime_config({"HF_EXACT_NO_REPO_RECHECK_DAYS": "8"})["repo_discovery_no_repo_recheck_days"] == 8
+
+
 def test_load_runtime_config_falls_back_to_default_recheck_days_for_invalid_value():
-    assert load_runtime_config({"HF_EXACT_NO_REPO_RECHECK_DAYS": "abc"})["hf_exact_no_repo_recheck_days"] == 7
+    assert load_runtime_config({"REPO_DISCOVERY_NO_REPO_RECHECK_DAYS": "abc"})["repo_discovery_no_repo_recheck_days"] == 7
 
 
 def test_load_runtime_config_reads_optional_openalex_token():
@@ -80,14 +95,14 @@ class FakeDiscoveryClient:
         *,
         huggingface_token="",
         repo_cache=None,
-        hf_exact_no_repo_recheck_days=0,
+        repo_discovery_no_repo_recheck_days=0,
         max_concurrent=0,
         min_interval=0,
     ):
         self.session = session
         self.huggingface_token = huggingface_token
         self.repo_cache = repo_cache
-        self.hf_exact_no_repo_recheck_days = hf_exact_no_repo_recheck_days
+        self.repo_discovery_no_repo_recheck_days = repo_discovery_no_repo_recheck_days
         self.max_concurrent = max_concurrent
         self.min_interval = min_interval
 
@@ -110,7 +125,7 @@ async def test_open_runtime_clients_builds_shared_clients_without_alphaxiv_token
         {
             "GITHUB_TOKEN": "gh_token",
             "HUGGINGFACE_TOKEN": "hf_token",
-            "HF_EXACT_NO_REPO_RECHECK_DAYS": "9",
+            "REPO_DISCOVERY_NO_REPO_RECHECK_DAYS": "9",
             "ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS": "31",
         }
     )
@@ -128,7 +143,7 @@ async def test_open_runtime_clients_builds_shared_clients_without_alphaxiv_token
         assert isinstance(runtime.relation_resolution_cache, RelationResolutionCacheStore)
         assert runtime.discovery_client.huggingface_token == "hf_token"
         assert runtime.discovery_client.repo_cache is runtime.repo_cache
-        assert runtime.discovery_client.hf_exact_no_repo_recheck_days == 9
+        assert runtime.discovery_client.repo_discovery_no_repo_recheck_days == 9
         assert runtime.discovery_client.max_concurrent == 7
         assert runtime.discovery_client.min_interval == 0.3
         assert runtime.github_client.github_token == "gh_token"
@@ -162,7 +177,7 @@ async def test_open_runtime_clients_leaves_relation_cache_disabled_by_default_fo
             github_url TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            last_hf_exact_checked_at TEXT
+            last_repo_discovery_checked_at TEXT
         )
         """
     )

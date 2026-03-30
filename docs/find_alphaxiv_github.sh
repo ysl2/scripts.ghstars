@@ -105,11 +105,11 @@ echo "[2/3] 查询 AlphaXiv 论文 JSON..."
 if [ -n "${ALPHAXIV_TOKEN:-}" ]; then
   curl -fsSL \
     -H "Authorization: Bearer ${ALPHAXIV_TOKEN}" \
-    "${ALPHAXIV_API_BASE}/papers/v3/legacy/${ARXIV_ID}" \
+    "${ALPHAXIV_API_BASE}/papers/v3/${ARXIV_ID}" \
     > "$ALPHAXIV_JSON"
 else
   curl -fsSL \
-    "${ALPHAXIV_API_BASE}/papers/v3/legacy/${ARXIV_ID}" \
+    "${ALPHAXIV_API_BASE}/papers/v3/${ARXIV_ID}" \
     > "$ALPHAXIV_JSON"
 fi
 

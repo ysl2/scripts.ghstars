@@ -12,3 +12,15 @@ def test_pyproject_uses_scripts_ghstars_project_name():
     pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
 
     assert 'name = "scripts.ghstars"' in pyproject
+
+
+def test_alphaxiv_doc_uses_public_paper_endpoint():
+    script = Path("docs/find_alphaxiv_github.sh").read_text(encoding="utf-8")
+
+    assert "/papers/v3/legacy/" not in script
+    assert "/papers/v3/" in script
+
+
+def test_alphaxiv_helper_lives_under_shared_modules():
+    assert Path("src/shared/alphaxiv.py").exists()
+    assert not Path("src/legacy/alphaxiv.py").exists()

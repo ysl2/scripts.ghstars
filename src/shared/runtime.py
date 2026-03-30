@@ -8,7 +8,7 @@ from src.shared.relation_resolution_cache import RelationResolutionCacheStore
 from src.shared.repo_cache import RepoCacheStore
 from src.shared.settings import (
     ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS,
-    HF_EXACT_NO_REPO_RECHECK_DAYS,
+    REPO_DISCOVERY_NO_REPO_RECHECK_DAYS,
     REPO_CACHE_DB_PATH,
 )
 
@@ -23,6 +23,10 @@ class RuntimeClients:
 
 
 def load_runtime_config(env: dict[str, str]) -> dict[str, str | int]:
+    repo_discovery_recheck_days_raw = (
+        env.get("REPO_DISCOVERY_NO_REPO_RECHECK_DAYS")
+        or env.get("HF_EXACT_NO_REPO_RECHECK_DAYS")
+    )
     return {
         "github_token": (env.get("GITHUB_TOKEN") or "").strip(),
         "huggingface_token": (env.get("HUGGINGFACE_TOKEN") or "").strip(),
@@ -31,9 +35,9 @@ def load_runtime_config(env: dict[str, str]) -> dict[str, str | int]:
             env.get("ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS"),
             default=ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS,
         ),
-        "hf_exact_no_repo_recheck_days": _parse_positive_int(
-            env.get("HF_EXACT_NO_REPO_RECHECK_DAYS"),
-            default=HF_EXACT_NO_REPO_RECHECK_DAYS,
+        "repo_discovery_no_repo_recheck_days": _parse_positive_int(
+            repo_discovery_recheck_days_raw,
+            default=REPO_DISCOVERY_NO_REPO_RECHECK_DAYS,
         ),
     }
 
@@ -59,7 +63,7 @@ def load_notion_config(env: dict[str, str]) -> dict[str, str | int]:
         "database_id": database_id,
         "huggingface_token": runtime_config["huggingface_token"],
         "openalex_api_key": runtime_config["openalex_api_key"],
-        "hf_exact_no_repo_recheck_days": runtime_config["hf_exact_no_repo_recheck_days"],
+        "repo_discovery_no_repo_recheck_days": runtime_config["repo_discovery_no_repo_recheck_days"],
     }
 
 
@@ -103,7 +107,8 @@ async def open_runtime_clients(
                 session,
                 huggingface_token=config["huggingface_token"],
                 repo_cache=repo_cache,
-                hf_exact_no_repo_recheck_days=config["hf_exact_no_repo_recheck_days"],
+                repo_discovery_no_repo_recheck_days=config["repo_discovery_no_repo_recheck_days"],
+                hf_exact_no_repo_recheck_days=config["repo_discovery_no_repo_recheck_days"],
                 max_concurrent=concurrent_limit,
                 min_interval=request_delay,
             )

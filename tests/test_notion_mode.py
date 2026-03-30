@@ -30,7 +30,7 @@ def test_load_config_accepts_env_values():
             "GITHUB_TOKEN": "ghp_xxx",
             "DATABASE_ID": "db_123",
             "HUGGINGFACE_TOKEN": "hf_test",
-            "HF_EXACT_NO_REPO_RECHECK_DAYS": "7",
+            "REPO_DISCOVERY_NO_REPO_RECHECK_DAYS": "7",
         }
     )
 
@@ -40,7 +40,7 @@ def test_load_config_accepts_env_values():
         "database_id": "db_123",
         "huggingface_token": "hf_test",
         "openalex_api_key": "",
-        "hf_exact_no_repo_recheck_days": 7,
+        "repo_discovery_no_repo_recheck_days": 7,
     }
 
 

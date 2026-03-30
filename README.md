@@ -11,7 +11,8 @@ Repository discovery for arXiv-backed papers now uses:
 
 - shared `./cache.db` in the current working directory first
 - Hugging Face exact API `GET /api/papers/{arxiv_id}` on cache miss
-- no Hugging Face search fallback for GitHub repo discovery
+- AlphaXiv paper API on Hugging Face exact misses
+- no additional search fallback for GitHub repo discovery
 
 GitHub and star lookup use normalized, versionless arXiv URLs as the paper identity.
 
@@ -32,12 +33,13 @@ Copy `.env.example` to `.env` and fill in the variables you need.
 ```bash
 GITHUB_TOKEN=
 HUGGINGFACE_TOKEN=
-HF_EXACT_NO_REPO_RECHECK_DAYS=7
+REPO_DISCOVERY_NO_REPO_RECHECK_DAYS=7
 ```
 
 `HUGGINGFACE_TOKEN` enables both Hugging Face exact repo discovery and the optional single-paper relation-mode title-search fallback.
 
 `cache.db` is created automatically in the current working directory and shared across URL, CSV, and Notion runs.
+`HF_EXACT_NO_REPO_RECHECK_DAYS` is still accepted as a backward-compatible alias, but `REPO_DISCOVERY_NO_REPO_RECHECK_DAYS` is the preferred name.
 
 ### Optional only for single-paper arXiv relation mode
 
@@ -79,6 +81,7 @@ DATABASE_ID=
 CSV update, collection URL export, and single-paper relation export reuse the same downstream enrichment path once a row has a canonical arXiv URL.
 
 - GitHub discovery checks `cache.db` first, then does one Hugging Face exact lookup on cache miss when discovery is allowed
+- when Hugging Face exact returns no repo, discovery does one AlphaXiv paper lookup before giving up
 - when a row ends with both a canonical arXiv URL and a valid GitHub repo URL, local `overview` / `abs` markdown is ensured under `./cache/overview/<arxiv_id>.md` and `./cache/abs/<arxiv_id>.md`
 - existing local content files are reused; only missing files are fetched
 - overview uses AlphaXiv's public overview API; abs uses AlphaXiv's public paper API
@@ -105,6 +108,7 @@ CSV mode behavior:
 - requires `Url`; `Name` is optional
 - if `Github` is already present and valid, only `Stars` is refreshed
 - if `Github` is blank, discovery checks `cache.db` first, then does one Hugging Face exact lookup on cache miss
+- if Hugging Face exact returns no repo, discovery does one AlphaXiv paper lookup before leaving `Github` blank
 - missing `Github` or `Stars` columns are added automatically at the end of the CSV
 - existing custom columns are left untouched, including any preexisting `Overview` / `Abs` columns
 - current CSV mode does not write content-cache paths back into the CSV
@@ -335,10 +339,11 @@ When `Github` is empty, the sync flow:
 2. uses that canonical arXiv URL as the paper identity for repo discovery and stars lookup
 3. checks `cache.db` for that canonical arXiv URL
 4. if needed, calls Hugging Face exact paper API for that arXiv id
-5. stores confirmed repos in `cache.db`
+5. if Hugging Face exact misses, calls AlphaXiv paper API for the same arXiv id
+6. stores confirmed repos in `cache.db`
 
-When Hugging Face exact responds successfully but without a `githubRepo`, the cache stores the successful check timestamp.
-`HF_EXACT_NO_REPO_RECHECK_DAYS` controls how many days to wait before re-checking that no-repo cache entry again.
+When the full arXiv repo-discovery chain completes successfully but finds no repo, the cache stores the successful check timestamp.
+`REPO_DISCOVERY_NO_REPO_RECHECK_DAYS` controls how many days to wait before re-checking that no-repo cache entry again. `HF_EXACT_NO_REPO_RECHECK_DAYS` remains accepted as a legacy alias.
 
 Notion page updates still target the original page id; only the paper-identity portion of discovery uses canonical arXiv URLs.
 
