@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import aiohttp
 
-from src.shared.alphaxiv import find_github_url_in_alphaxiv_payload
+from src.shared.alphaxiv import find_github_url_in_alphaxiv_html, find_github_url_in_alphaxiv_payload
 from src.shared.arxiv import normalize_title_for_matching
 from src.shared.github import normalize_github_url
 from src.shared.headless_browser import dump_rendered_html
@@ -281,9 +281,9 @@ class DiscoveryClient:
             headers["Authorization"] = f"Bearer {self.huggingface_token}"
         return headers
 
-    def _build_alphaxiv_headers(self) -> dict[str, str]:
+    def _build_alphaxiv_headers(self, accept: str = "application/json") -> dict[str, str]:
         headers = {
-            "Accept": "application/json",
+            "Accept": accept,
             "User-Agent": "scripts.ghstars",
         }
         if self.alphaxiv_token:
@@ -317,6 +317,16 @@ class DiscoveryClient:
             headers=self._build_alphaxiv_headers(),
             expect="json",
             retry_prefix="AlphaXiv paper API",
+            gate=self._alphaxiv_gate,
+            allow_statuses={404},
+        )
+
+    async def get_alphaxiv_paper_html_by_arxiv_id(self, arxiv_id: str):
+        return await self._request(
+            f"https://www.alphaxiv.org/abs/{arxiv_id}",
+            headers=self._build_alphaxiv_headers("text/html,application/xhtml+xml"),
+            expect="text",
+            retry_prefix="AlphaXiv paper page",
             gate=self._alphaxiv_gate,
             allow_statuses={404},
         )
@@ -457,6 +467,7 @@ async def _resolve_arxiv_backed_repo_via_providers(arxiv_id: str, client) -> tup
     providers = (
         _discover_repo_from_huggingface_exact,
         _discover_repo_from_alphaxiv,
+        _discover_repo_from_alphaxiv_html,
     )
 
     chain_fully_checked = True
@@ -495,6 +506,21 @@ async def _discover_repo_from_alphaxiv(arxiv_id: str, client) -> RepoDiscoveryAt
 
     return RepoDiscoveryAttempt(
         github_url=find_github_url_in_alphaxiv_paper_payload(payload),
+        checked=True,
+    )
+
+
+async def _discover_repo_from_alphaxiv_html(arxiv_id: str, client) -> RepoDiscoveryAttempt:
+    fetcher = getattr(client, "get_alphaxiv_paper_html_by_arxiv_id", None)
+    if not callable(fetcher):
+        return RepoDiscoveryAttempt(github_url=None, checked=False)
+
+    html, error = await fetcher(arxiv_id)
+    if error:
+        return RepoDiscoveryAttempt(github_url=None, checked=False)
+
+    return RepoDiscoveryAttempt(
+        github_url=find_github_url_in_alphaxiv_html(html),
         checked=True,
     )
 

@@ -85,6 +85,31 @@ def test_find_github_url_in_alphaxiv_payload_prefers_known_fields():
     assert alphaxiv.find_github_url_in_alphaxiv_payload(payload) == "https://github.com/foo/bar"
 
 
+def test_find_github_url_in_alphaxiv_page_html_prefers_embedded_resource_repo_over_feedback_link():
+    html = """
+    <a href="https://github.com/alphaxiv/feedback">Feedback</a>
+    <script>
+      resources:$R[1123]={github:$R[1124]={url:"https://github.com/YOUNG-bit/open_semantic_slam",description:"ICRA2025 repo"}}
+    </script>
+    """
+
+    assert (
+        alphaxiv.find_github_url_in_alphaxiv_page_html(html)
+        == "https://github.com/YOUNG-bit/open_semantic_slam"
+    )
+
+
+def test_find_github_url_in_alphaxiv_html_reads_github_resource_from_page_state():
+    html = """
+    resources:$R[1123]={github:$R[1124]={url:"https://github.com/YOUNG-bit/open_semantic_slam",description:"ICRA2025"}}
+    """
+
+    assert (
+        alphaxiv.find_github_url_in_alphaxiv_html(html)
+        == "https://github.com/YOUNG-bit/open_semantic_slam"
+    )
+
+
 def test_find_huggingface_paper_id_in_search_html_matches_exact_title_from_payload():
     html = """
     <div
@@ -192,6 +217,46 @@ async def test_discovery_client_adds_bearer_token_to_alphaxiv_paper_endpoint():
                 "Accept": "application/json",
                 "User-Agent": "scripts.ghstars",
                 "Authorization": "Bearer ax_token",
+            },
+            None,
+        )
+    ]
+
+
+@pytest.mark.anyio
+async def test_discovery_client_queries_public_alphaxiv_page_endpoint():
+    class FakeResponse:
+        status = 404
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def text(self):
+            return ""
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, headers=None, params=None):
+            self.calls.append((url, headers, params))
+            return FakeResponse()
+
+    session = FakeSession()
+    client = DiscoveryClient(session=session)
+
+    html, error = await client.get_alphaxiv_paper_html_by_arxiv_id("2603.18493")
+
+    assert (html, error) == (None, None)
+    assert session.calls == [
+        (
+            "https://www.alphaxiv.org/abs/2603.18493",
+            {
+                "Accept": "text/html,application/xhtml+xml",
+                "User-Agent": "scripts.ghstars",
             },
             None,
         )
@@ -406,6 +471,9 @@ async def test_resolve_github_url_falls_back_to_alphaxiv_after_hf_exact_no_repo(
                 }
             }, None
 
+        async def get_alphaxiv_paper_html_by_arxiv_id(self, arxiv_id):
+            raise AssertionError("AlphaXiv page HTML should not run when API payload already has the repo")
+
     client = FakeDiscoveryClient()
     github_url = await resolve_github_url(
         FakeSeed(name="Paper Title", url="https://arxiv.org/abs/2603.18493"),
@@ -459,6 +527,9 @@ async def test_resolve_github_url_falls_back_to_alphaxiv_after_hf_exact_404():
                 }
             }, None
 
+        async def get_alphaxiv_paper_html_by_arxiv_id(self, arxiv_id):
+            raise AssertionError("AlphaXiv page HTML should not run when API payload already has the repo")
+
     client = FakeDiscoveryClient()
     github_url = await resolve_github_url(
         FakeSeed(name="Paper Title", url="https://arxiv.org/abs/2603.18493"),
@@ -472,6 +543,120 @@ async def test_resolve_github_url_falls_back_to_alphaxiv_after_hf_exact_404():
     ]
     assert client.repo_cache.found_calls == [
         ("https://arxiv.org/abs/2603.18493", "https://github.com/foo/bar"),
+    ]
+    assert client.repo_cache.no_repo_calls == []
+
+
+@pytest.mark.anyio
+async def test_resolve_github_url_falls_back_to_alphaxiv_page_html_after_api_no_repo():
+    class FakeRepoCache:
+        def __init__(self):
+            self.found_calls = []
+            self.no_repo_calls = []
+
+        def get(self, arxiv_url):
+            return None
+
+        def record_found_repo(self, arxiv_url, github_url):
+            self.found_calls.append((arxiv_url, github_url))
+
+        def record_exact_no_repo(self, arxiv_url):
+            self.no_repo_calls.append(arxiv_url)
+
+    class FakeDiscoveryClient:
+        def __init__(self):
+            self.huggingface_token = "hf_token"
+            self.calls = []
+            self.repo_cache = FakeRepoCache()
+
+        async def get_huggingface_paper_payload_by_arxiv_id(self, arxiv_id):
+            self.calls.append(("hf_paper_api", arxiv_id))
+            return {"id": arxiv_id, "githubRepo": None}, None
+
+        async def get_alphaxiv_paper_payload_by_arxiv_id(self, arxiv_id):
+            self.calls.append(("alphaxiv_paper_api", arxiv_id))
+            return {
+                "title": "OpenGS-SLAM",
+                "resources": [],
+            }, None
+
+        async def get_alphaxiv_paper_html_by_arxiv_id(self, arxiv_id):
+            self.calls.append(("alphaxiv_paper_html", arxiv_id))
+            return (
+                '<a href="https://github.com/alphaxiv/feedback">Feedback</a>'
+                'resources:$R[1123]={github:$R[1124]={url:"https://github.com/YOUNG-bit/open_semantic_slam",description:"ICRA2025 repo"}}',
+                None,
+            )
+
+    client = FakeDiscoveryClient()
+    github_url = await resolve_github_url(
+        FakeSeed(name="OpenGS-SLAM", url="https://arxiv.org/abs/2503.01646"),
+        client,
+    )
+
+    assert github_url == "https://github.com/YOUNG-bit/open_semantic_slam"
+    assert client.calls == [
+        ("hf_paper_api", "2503.01646"),
+        ("alphaxiv_paper_api", "2503.01646"),
+        ("alphaxiv_paper_html", "2503.01646"),
+    ]
+    assert client.repo_cache.found_calls == [
+        ("https://arxiv.org/abs/2503.01646", "https://github.com/YOUNG-bit/open_semantic_slam"),
+    ]
+    assert client.repo_cache.no_repo_calls == []
+
+
+@pytest.mark.anyio
+async def test_resolve_github_url_falls_back_to_alphaxiv_html_after_api_miss():
+    class FakeRepoCache:
+        def __init__(self):
+            self.found_calls = []
+            self.no_repo_calls = []
+
+        def get(self, arxiv_url):
+            return None
+
+        def record_found_repo(self, arxiv_url, github_url):
+            self.found_calls.append((arxiv_url, github_url))
+
+        def record_exact_no_repo(self, arxiv_url):
+            self.no_repo_calls.append(arxiv_url)
+
+    class FakeDiscoveryClient:
+        def __init__(self):
+            self.huggingface_token = "hf_token"
+            self.calls = []
+            self.repo_cache = FakeRepoCache()
+
+        async def get_huggingface_paper_payload_by_arxiv_id(self, arxiv_id):
+            self.calls.append(("hf_paper_api", arxiv_id))
+            return {"id": arxiv_id, "githubRepo": None}, None
+
+        async def get_alphaxiv_paper_payload_by_arxiv_id(self, arxiv_id):
+            self.calls.append(("alphaxiv_paper_api", arxiv_id))
+            return {"resources": []}, None
+
+        async def get_alphaxiv_paper_html_by_arxiv_id(self, arxiv_id):
+            self.calls.append(("alphaxiv_paper_html", arxiv_id))
+            return (
+                'resources:$R[1123]={github:$R[1124]={url:"https://github.com/YOUNG-bit/open_semantic_slam"}}',
+                None,
+            )
+
+    client = FakeDiscoveryClient()
+    github_url = await resolve_github_url(
+        FakeSeed(name="Paper Title", url="https://arxiv.org/abs/2603.18493"),
+        client,
+    )
+
+    assert github_url == "https://github.com/YOUNG-bit/open_semantic_slam"
+    assert client.calls == [
+        ("hf_paper_api", "2603.18493"),
+        ("alphaxiv_paper_api", "2603.18493"),
+        ("alphaxiv_paper_html", "2603.18493"),
+    ]
+    assert client.repo_cache.found_calls == [
+        ("https://arxiv.org/abs/2603.18493", "https://github.com/YOUNG-bit/open_semantic_slam"),
     ]
     assert client.repo_cache.no_repo_calls == []
 
@@ -603,6 +788,9 @@ async def test_resolve_github_url_records_successful_exact_no_repo_in_cache():
         async def get_alphaxiv_paper_payload_by_arxiv_id(self, arxiv_id):
             return {"paper": {"resources": []}}, None
 
+        async def get_alphaxiv_paper_html_by_arxiv_id(self, arxiv_id):
+            return '<a href="https://github.com/alphaxiv/feedback">Feedback</a>', None
+
     client = FakeDiscoveryClient()
     github_url = await resolve_github_url(
         FakeSeed(name="Paper Title", url="https://arxiv.org/abs/2603.18493"),
@@ -635,6 +823,9 @@ async def test_resolve_github_url_does_not_record_no_repo_when_exact_api_errors(
 
         async def get_alphaxiv_paper_payload_by_arxiv_id(self, arxiv_id):
             return {"paper": {"resources": []}}, None
+
+        async def get_alphaxiv_paper_html_by_arxiv_id(self, arxiv_id):
+            return '<a href="https://github.com/alphaxiv/feedback">Feedback</a>', None
 
     client = FakeDiscoveryClient()
     github_url = await resolve_github_url(
@@ -672,6 +863,42 @@ async def test_resolve_github_url_does_not_record_no_repo_when_alphaxiv_errors_a
     client = FakeDiscoveryClient()
     github_url = await resolve_github_url(
         FakeSeed(name="Paper Title", url="https://arxiv.org/abs/2603.18493"),
+        client,
+    )
+
+    assert github_url is None
+    assert client.repo_cache.no_repo_calls == []
+
+
+@pytest.mark.anyio
+async def test_resolve_github_url_does_not_record_no_repo_when_alphaxiv_page_errors_after_api_no_repo():
+    class FakeRepoCache:
+        def __init__(self):
+            self.no_repo_calls = []
+
+        def get(self, arxiv_url):
+            return None
+
+        def record_discovery_no_repo(self, arxiv_url):
+            self.no_repo_calls.append(arxiv_url)
+
+    class FakeDiscoveryClient:
+        def __init__(self):
+            self.huggingface_token = "hf_token"
+            self.repo_cache = FakeRepoCache()
+
+        async def get_huggingface_paper_payload_by_arxiv_id(self, arxiv_id):
+            return {"id": arxiv_id, "githubRepo": None}, None
+
+        async def get_alphaxiv_paper_payload_by_arxiv_id(self, arxiv_id):
+            return {"title": "OpenGS-SLAM", "resources": []}, None
+
+        async def get_alphaxiv_paper_html_by_arxiv_id(self, arxiv_id):
+            return None, "AlphaXiv page timeout"
+
+    client = FakeDiscoveryClient()
+    github_url = await resolve_github_url(
+        FakeSeed(name="OpenGS-SLAM", url="https://arxiv.org/abs/2503.01646"),
         client,
     )
 
