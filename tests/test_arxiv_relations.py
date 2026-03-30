@@ -1624,6 +1624,8 @@ async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_ret
         crossref_client=None,
         datacite_client=None,
         content_cache=None,
+        relation_resolution_cache=None,
+        arxiv_relation_no_arxiv_recheck_days=30,
         status_callback=None,
         progress_callback=None,
     ):
@@ -1634,6 +1636,8 @@ async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_ret
                 "discovery_client": discovery_client,
                 "github_client": github_client,
                 "content_cache": content_cache,
+                "relation_resolution_cache": relation_resolution_cache,
+                "arxiv_relation_no_arxiv_recheck_days": arxiv_relation_no_arxiv_recheck_days,
             }
         )
         return ConversionResult(csv_path=csv_path, resolved=len(seeds), skipped=[])
@@ -1676,8 +1680,12 @@ async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_ret
 
     assert export_calls[0]["discovery_client"] is discovery_client
     assert export_calls[0]["github_client"] is github_client
+    assert export_calls[0]["relation_resolution_cache"] is relation_resolution_cache
+    assert export_calls[0]["arxiv_relation_no_arxiv_recheck_days"] == 30
     assert export_calls[1]["discovery_client"] is discovery_client
     assert export_calls[1]["github_client"] is github_client
+    assert export_calls[1]["relation_resolution_cache"] is relation_resolution_cache
+    assert export_calls[1]["arxiv_relation_no_arxiv_recheck_days"] == 30
 
     assert result.references.csv_path.name == "arxiv-2603.23502-references-20260326113045.csv"
     assert result.citations.csv_path.name == "arxiv-2603.23502-citations-20260326113045.csv"
@@ -1785,6 +1793,8 @@ async def test_export_arxiv_relations_to_csv_uses_hf_fallback_for_unresolved_rel
         crossref_client=None,
         datacite_client=None,
         content_cache=None,
+        relation_resolution_cache=None,
+        arxiv_relation_no_arxiv_recheck_days=30,
         status_callback=None,
         progress_callback=None,
     ):
@@ -1886,6 +1896,8 @@ async def test_export_arxiv_relations_to_csv_uses_shared_openalex_retry_after_ha
         crossref_client=None,
         datacite_client=None,
         content_cache=None,
+        relation_resolution_cache=None,
+        arxiv_relation_no_arxiv_recheck_days=30,
         status_callback=None,
         progress_callback=None,
     ):
@@ -2535,6 +2547,8 @@ async def test_export_arxiv_relations_to_csv_threads_metadata_clients_to_shared_
         crossref_client=None,
         datacite_client=None,
         content_cache=None,
+        relation_resolution_cache=None,
+        arxiv_relation_no_arxiv_recheck_days=30,
         status_callback=None,
         progress_callback=None,
     ):
@@ -2545,6 +2559,8 @@ async def test_export_arxiv_relations_to_csv_threads_metadata_clients_to_shared_
                 "arxiv_client": arxiv_client,
                 "crossref_client": crossref_client,
                 "datacite_client": datacite_client,
+                "relation_resolution_cache": relation_resolution_cache,
+                "arxiv_relation_no_arxiv_recheck_days": arxiv_relation_no_arxiv_recheck_days,
             }
         )
         return ConversionResult(csv_path=csv_path, resolved=0, skipped=[])
@@ -2560,6 +2576,7 @@ async def test_export_arxiv_relations_to_csv_threads_metadata_clients_to_shared_
 
     crossref_client = SimpleNamespace(name="crossref")
     datacite_client = SimpleNamespace(name="datacite")
+    relation_resolution_cache = SimpleNamespace(name="relation-cache")
     result = await export_arxiv_relations_to_csv(
         "https://arxiv.org/abs/2603.23502",
         arxiv_client=FakeArxivClient(),
@@ -2568,6 +2585,8 @@ async def test_export_arxiv_relations_to_csv_threads_metadata_clients_to_shared_
         datacite_client=datacite_client,
         discovery_client=SimpleNamespace(),
         github_client=SimpleNamespace(),
+        relation_resolution_cache=relation_resolution_cache,
+        arxiv_relation_no_arxiv_recheck_days=17,
         output_dir=tmp_path,
     )
 
@@ -2576,6 +2595,10 @@ async def test_export_arxiv_relations_to_csv_threads_metadata_clients_to_shared_
     assert export_calls[0]["arxiv_client"] is not None
     assert export_calls[0]["crossref_client"] is crossref_client
     assert export_calls[0]["datacite_client"] is datacite_client
+    assert export_calls[0]["relation_resolution_cache"] is relation_resolution_cache
+    assert export_calls[0]["arxiv_relation_no_arxiv_recheck_days"] == 17
     assert export_calls[1]["arxiv_client"] is not None
     assert export_calls[1]["crossref_client"] is crossref_client
     assert export_calls[1]["datacite_client"] is datacite_client
+    assert export_calls[1]["relation_resolution_cache"] is relation_resolution_cache
+    assert export_calls[1]["arxiv_relation_no_arxiv_recheck_days"] == 17

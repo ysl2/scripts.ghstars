@@ -312,6 +312,8 @@ async def export_arxiv_relations_to_csv(
         crossref_client=crossref_client,
         datacite_client=datacite_client,
         content_cache=content_cache,
+        relation_resolution_cache=relation_resolution_cache,
+        arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
         status_callback=status_callback,
         progress_callback=progress_callback,
     )
@@ -325,6 +327,8 @@ async def export_arxiv_relations_to_csv(
         crossref_client=crossref_client,
         datacite_client=datacite_client,
         content_cache=content_cache,
+        relation_resolution_cache=relation_resolution_cache,
+        arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
         status_callback=status_callback,
         progress_callback=progress_callback,
     )

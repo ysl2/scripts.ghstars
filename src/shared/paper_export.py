@@ -17,6 +17,8 @@ async def build_paper_outcome(
     crossref_client=None,
     datacite_client=None,
     content_cache=None,
+    relation_resolution_cache=None,
+    arxiv_relation_no_arxiv_recheck_days: int = 30,
 ) -> PaperOutcome:
     enrichment = await process_single_paper(
         PaperEnrichmentRequest(
@@ -33,6 +35,8 @@ async def build_paper_outcome(
         crossref_client=crossref_client,
         datacite_client=datacite_client,
         content_cache=content_cache,
+        relation_resolution_cache=relation_resolution_cache,
+        arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
     )
 
     return PaperOutcome(
@@ -59,6 +63,8 @@ async def export_paper_seeds_to_csv(
     crossref_client=None,
     datacite_client=None,
     content_cache=None,
+    relation_resolution_cache=None,
+    arxiv_relation_no_arxiv_recheck_days: int = 30,
     status_callback=None,
     progress_callback=None,
 ) -> ConversionResult:
@@ -80,6 +86,8 @@ async def export_paper_seeds_to_csv(
             crossref_client=crossref_client,
             datacite_client=datacite_client,
             content_cache=content_cache,
+            relation_resolution_cache=relation_resolution_cache,
+            arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
         )
 
     records = []

@@ -61,6 +61,8 @@ async def test_build_paper_outcome_threads_metadata_clients_to_process_single_pa
         received["arxiv_client"] = kwargs.get("arxiv_client")
         received["crossref_client"] = kwargs.get("crossref_client")
         received["datacite_client"] = kwargs.get("datacite_client")
+        received["relation_resolution_cache"] = kwargs.get("relation_resolution_cache")
+        received["arxiv_relation_no_arxiv_recheck_days"] = kwargs.get("arxiv_relation_no_arxiv_recheck_days")
         received["allow_title_search"] = request.allow_title_search
         return SimpleNamespace(
             title=request.title,
@@ -78,6 +80,7 @@ async def test_build_paper_outcome_threads_metadata_clients_to_process_single_pa
     arxiv_client = SimpleNamespace()
     crossref_client = SimpleNamespace()
     datacite_client = SimpleNamespace()
+    relation_resolution_cache = SimpleNamespace(name="relation-cache")
     outcome = await paper_export.build_paper_outcome(
         1,
         PaperSeed(name="Paper A", url="https://doi.org/10.1145/example"),
@@ -86,12 +89,16 @@ async def test_build_paper_outcome_threads_metadata_clients_to_process_single_pa
         arxiv_client=arxiv_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
+        relation_resolution_cache=relation_resolution_cache,
+        arxiv_relation_no_arxiv_recheck_days=17,
     )
 
     assert outcome.record.url == "https://arxiv.org/abs/2501.00001"
     assert received["arxiv_client"] is arxiv_client
     assert received["crossref_client"] is crossref_client
     assert received["datacite_client"] is datacite_client
+    assert received["relation_resolution_cache"] is relation_resolution_cache
+    assert received["arxiv_relation_no_arxiv_recheck_days"] == 17
     assert received["allow_title_search"] is True
 
 
