@@ -14,6 +14,14 @@ def test_pyproject_uses_scripts_ghstars_project_name():
     assert 'name = "scripts.ghstars"' in pyproject
 
 
+def test_readme_does_not_link_maintainer_docs_from_top_level_usage_flow():
+    readme = Path("README.md").read_text(encoding="utf-8")
+
+    assert "Maintainer-oriented docs:" not in readme
+    assert "- [`ARCHITECTURE.md`](ARCHITECTURE.md)" not in readme
+    assert "- [`docs/README.md`](docs/README.md)" not in readme
+
+
 def test_alphaxiv_doc_uses_public_paper_endpoint():
     script = Path("docs/find_alphaxiv_github.sh").read_text(encoding="utf-8")
 
