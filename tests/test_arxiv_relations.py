@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import aiohttp
 import pytest
 
-from src.arxiv_relations.pipeline import ArxivRelationsExportResult
+from src.arxiv_relations.pipeline import ArxivRelationsExportResult, export_arxiv_relations_to_csv
 from src.shared.openalex import RelatedWorkCandidate
 from src.shared.papers import ConversionResult, PaperSeed
 from src.shared.papers import PaperRecord
@@ -1619,6 +1619,10 @@ async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_ret
         *,
         discovery_client,
         github_client,
+        arxiv_client=None,
+        openalex_client=None,
+        crossref_client=None,
+        datacite_client=None,
         content_cache=None,
         status_callback=None,
         progress_callback=None,
@@ -1776,6 +1780,10 @@ async def test_export_arxiv_relations_to_csv_uses_hf_fallback_for_unresolved_rel
         *,
         discovery_client,
         github_client,
+        arxiv_client=None,
+        openalex_client=None,
+        crossref_client=None,
+        datacite_client=None,
         content_cache=None,
         status_callback=None,
         progress_callback=None,
@@ -1873,6 +1881,10 @@ async def test_export_arxiv_relations_to_csv_uses_shared_openalex_retry_after_ha
         *,
         discovery_client,
         github_client,
+        arxiv_client=None,
+        openalex_client=None,
+        crossref_client=None,
+        datacite_client=None,
         content_cache=None,
         status_callback=None,
         progress_callback=None,
@@ -1956,9 +1968,9 @@ async def test_export_arxiv_relations_to_csv_warms_content_for_arxiv_rows_and_pr
         async def get_arxiv_id_by_title(self, title: str):
             raise AssertionError("Relation export should use the arXiv API title search path")
 
-        async def get_arxiv_id_by_title_from_api(self, title: str):
+        async def get_arxiv_match_by_title_from_api(self, title: str):
             self.api_title_searches.append(title)
-            return None, None, "No arXiv ID found from title search"
+            return None, None, None, "No arXiv ID found from title search"
 
     class FakeOpenAlexClient:
         async def search_first_work(self, title: str):
@@ -2352,6 +2364,16 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
             self.min_interval = min_interval
             constructed["openalex_client"] = self
 
+    class FakeCrossrefClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+            constructed["crossref_client"] = self
+
+    class FakeDataCiteClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+            constructed["datacite_client"] = self
+
     class FakeDiscoveryClient:
         def __init__(
             self,
@@ -2383,6 +2405,8 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
         output_dir: Path | None = None,
         arxiv_client,
         openalex_client,
+        crossref_client,
+        datacite_client,
         discovery_client,
         github_client,
         content_cache,
@@ -2397,6 +2421,8 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
                 "output_dir": output_dir,
                 "arxiv_client": arxiv_client,
                 "openalex_client": openalex_client,
+                "crossref_client": crossref_client,
+                "datacite_client": datacite_client,
                 "discovery_client": discovery_client,
                 "github_client": github_client,
                 "content_cache": content_cache,
@@ -2440,6 +2466,8 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
         session_factory=lambda **kwargs: FakeSession(),
         arxiv_client_cls=FakeArxivClient,
         openalex_client_cls=FakeOpenAlexClient,
+        crossref_client_cls=FakeCrossrefClient,
+        datacite_client_cls=FakeDataCiteClient,
         discovery_client_cls=FakeDiscoveryClient,
         github_client_cls=FakeGitHubClient,
         content_client_cls=FakeContentClient,
@@ -2454,6 +2482,8 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
     assert export_calls[0]["output_dir"] == tmp_path
     assert export_calls[0]["arxiv_client"] is constructed["arxiv_client"]
     assert export_calls[0]["openalex_client"] is constructed["openalex_client"]
+    assert export_calls[0]["crossref_client"] is constructed["crossref_client"]
+    assert export_calls[0]["datacite_client"] is constructed["datacite_client"]
     assert export_calls[0]["discovery_client"] is constructed["discovery_client"]
     assert export_calls[0]["github_client"] is constructed["github_client"]
     assert export_calls[0]["content_cache"] is not None
@@ -2469,3 +2499,83 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
     assert "Citations resolved: 2" in captured.out
     assert f"Wrote references CSV: {references_csv_path}" in captured.out
     assert f"Wrote citations CSV: {citations_csv_path}" in captured.out
+
+
+@pytest.mark.anyio
+async def test_export_arxiv_relations_to_csv_threads_metadata_clients_to_shared_export(monkeypatch, tmp_path: Path):
+    export_calls = []
+
+    class FakeArxivClient:
+        async def get_title(self, arxiv_url: str):
+            assert arxiv_url == "https://arxiv.org/abs/2603.23502"
+            return "Target Paper", None
+
+    class FakeOpenAlexClient:
+        async def search_first_work(self, title: str):
+            assert title == "Target Paper"
+            return {"id": "https://openalex.org/W1", "display_name": title}
+
+        async def fetch_referenced_works(self, work: dict):
+            return []
+
+        async def fetch_citations(self, work: dict):
+            return []
+
+    async def fake_normalize_related_works_to_seeds(*args, **kwargs):
+        return [PaperSeed(name="Mapped Related", url="https://doi.org/10.1145/example")]
+
+    async def fake_export_paper_seeds_to_csv(
+        seeds,
+        csv_path,
+        *,
+        discovery_client,
+        github_client,
+        arxiv_client=None,
+        openalex_client=None,
+        crossref_client=None,
+        datacite_client=None,
+        content_cache=None,
+        status_callback=None,
+        progress_callback=None,
+    ):
+        export_calls.append(
+            {
+                "seeds": seeds,
+                "csv_path": csv_path,
+                "arxiv_client": arxiv_client,
+                "crossref_client": crossref_client,
+                "datacite_client": datacite_client,
+            }
+        )
+        return ConversionResult(csv_path=csv_path, resolved=0, skipped=[])
+
+    monkeypatch.setattr(
+        "src.arxiv_relations.pipeline.normalize_related_works_to_seeds",
+        fake_normalize_related_works_to_seeds,
+    )
+    monkeypatch.setattr(
+        "src.arxiv_relations.pipeline.export_paper_seeds_to_csv",
+        fake_export_paper_seeds_to_csv,
+    )
+
+    crossref_client = SimpleNamespace(name="crossref")
+    datacite_client = SimpleNamespace(name="datacite")
+    result = await export_arxiv_relations_to_csv(
+        "https://arxiv.org/abs/2603.23502",
+        arxiv_client=FakeArxivClient(),
+        openalex_client=FakeOpenAlexClient(),
+        crossref_client=crossref_client,
+        datacite_client=datacite_client,
+        discovery_client=SimpleNamespace(),
+        github_client=SimpleNamespace(),
+        output_dir=tmp_path,
+    )
+
+    assert result.references.csv_path.parent == tmp_path
+    assert len(export_calls) == 2
+    assert export_calls[0]["arxiv_client"] is not None
+    assert export_calls[0]["crossref_client"] is crossref_client
+    assert export_calls[0]["datacite_client"] is datacite_client
+    assert export_calls[1]["arxiv_client"] is not None
+    assert export_calls[1]["crossref_client"] is crossref_client
+    assert export_calls[1]["datacite_client"] is datacite_client

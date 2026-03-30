@@ -6,6 +6,9 @@ import aiohttp
 
 from src.csv_update.pipeline import update_csv_file
 from src.shared.alphaxiv_content import AlphaXivContentClient
+from src.shared.arxiv import ArxivClient
+from src.shared.crossref import CrossrefClient
+from src.shared.datacite import DataCiteClient
 from src.shared.discovery import DiscoveryClient
 from src.shared.github import GitHubClient
 from src.shared.openalex import OpenAlexClient
@@ -24,9 +27,12 @@ async def run_csv_mode(
     csv_path: Path | str,
     *,
     session_factory=aiohttp.ClientSession,
+    arxiv_client_cls=ArxivClient,
     discovery_client_cls=DiscoveryClient,
     github_client_cls=GitHubClient,
     openalex_client_cls=OpenAlexClient,
+    crossref_client_cls=CrossrefClient,
+    datacite_client_cls=DataCiteClient,
     content_client_cls=AlphaXivContentClient,
     content_cache_root: Path | str | None = None,
 ) -> int:
@@ -45,10 +51,28 @@ async def run_csv_mode(
         request_delay=REQUEST_DELAY,
         enable_relation_resolution_cache=True,
     ) as runtime:
+        arxiv_client = build_client(
+            arxiv_client_cls,
+            runtime.session,
+            max_concurrent=CONCURRENT_LIMIT,
+            min_interval=REQUEST_DELAY,
+        )
         openalex_client = build_client(
             openalex_client_cls,
             runtime.session,
             openalex_api_key=config["openalex_api_key"],
+            max_concurrent=CONCURRENT_LIMIT,
+            min_interval=REQUEST_DELAY,
+        )
+        crossref_client = build_client(
+            crossref_client_cls,
+            runtime.session,
+            max_concurrent=CONCURRENT_LIMIT,
+            min_interval=REQUEST_DELAY,
+        )
+        datacite_client = build_client(
+            datacite_client_cls,
+            runtime.session,
             max_concurrent=CONCURRENT_LIMIT,
             min_interval=REQUEST_DELAY,
         )
@@ -67,7 +91,10 @@ async def run_csv_mode(
             csv_path,
             discovery_client=runtime.discovery_client,
             github_client=runtime.github_client,
+            arxiv_client=arxiv_client,
             openalex_client=openalex_client,
+            crossref_client=crossref_client,
+            datacite_client=datacite_client,
             content_cache=content_cache,
             relation_resolution_cache=runtime.relation_resolution_cache,
             arxiv_relation_no_arxiv_recheck_days=config["arxiv_relation_no_arxiv_recheck_days"],

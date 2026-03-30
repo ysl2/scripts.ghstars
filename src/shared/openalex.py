@@ -96,6 +96,18 @@ class OpenAlexClient:
 
         return None
 
+    async def find_exact_arxiv_match_by_identifier(
+        self,
+        identifier: str,
+        *,
+        title: str | None = None,
+    ) -> tuple[str | None, str | None]:
+        work = await self.fetch_work_by_identifier(identifier)
+        if not isinstance(work, dict):
+            return None, None
+
+        return self._resolve_exact_match(work, title=title)
+
     async def find_preprint_match_by_identifier(
         self,
         identifier: str,
@@ -106,12 +118,11 @@ class OpenAlexClient:
         if not isinstance(work, dict):
             return None, None
 
-        direct_arxiv_url = self._canonical_arxiv_url(work)
-        resolved_title = " ".join(str(work.get("display_name") or work.get("title") or title or "").split()).strip()
+        direct_arxiv_url, resolved_title = self._resolve_exact_match(work, title=title)
         if direct_arxiv_url:
             return direct_arxiv_url, resolved_title or title
 
-        search_title = " ".join(str(title or resolved_title).split()).strip()
+        search_title = " ".join(str(title or resolved_title or "").split()).strip()
         if not search_title:
             return None, resolved_title or None
 
@@ -341,6 +352,16 @@ class OpenAlexClient:
     def _build_headers(self) -> dict[str, str]:
         headers = {"User-Agent": "scripts.ghstars"}
         return headers
+
+    def _resolve_exact_match(
+        self,
+        work: dict[str, Any],
+        *,
+        title: str | None = None,
+    ) -> tuple[str | None, str | None]:
+        direct_arxiv_url = self._canonical_arxiv_url(work)
+        resolved_title = " ".join(str(work.get("display_name") or work.get("title") or title or "").split()).strip()
+        return direct_arxiv_url, resolved_title or title
 
     def _canonical_arxiv_url(self, work: dict[str, Any]) -> str | None:
         ids = work.get("ids") or {}

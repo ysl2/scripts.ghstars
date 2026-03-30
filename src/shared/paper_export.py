@@ -12,6 +12,10 @@ async def build_paper_outcome(
     *,
     discovery_client,
     github_client,
+    arxiv_client=None,
+    openalex_client=None,
+    crossref_client=None,
+    datacite_client=None,
     content_cache=None,
 ) -> PaperOutcome:
     enrichment = await process_single_paper(
@@ -19,11 +23,15 @@ async def build_paper_outcome(
             title=seed.name,
             raw_url=seed.url,
             existing_github_url=None,
-            allow_title_search=False,
+            allow_title_search=True,
             allow_github_discovery=True,
         ),
         discovery_client=discovery_client,
         github_client=github_client,
+        arxiv_client=arxiv_client,
+        openalex_client=openalex_client,
+        crossref_client=crossref_client,
+        datacite_client=datacite_client,
         content_cache=content_cache,
     )
 
@@ -46,6 +54,10 @@ async def export_paper_seeds_to_csv(
     *,
     discovery_client,
     github_client,
+    arxiv_client=None,
+    openalex_client=None,
+    crossref_client=None,
+    datacite_client=None,
     content_cache=None,
     status_callback=None,
     progress_callback=None,
@@ -63,6 +75,10 @@ async def export_paper_seeds_to_csv(
             seed,
             discovery_client=discovery_client,
             github_client=github_client,
+            arxiv_client=arxiv_client,
+            openalex_client=openalex_client,
+            crossref_client=crossref_client,
+            datacite_client=datacite_client,
             content_cache=content_cache,
         )
 

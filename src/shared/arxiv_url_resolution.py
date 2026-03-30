@@ -3,15 +3,12 @@ from dataclasses import dataclass
 
 import aiohttp
 
-from src.shared.discovery import (
-    extract_best_huggingface_paper_id_from_search_html,
-)
 from src.shared.paper_identity import (
     build_arxiv_abs_url,
     is_arxiv_hosted_url,
+    normalize_arxiv_url,
     normalize_doi_url,
     normalize_openalex_work_url,
-    normalize_arxiv_url,
 )
 
 
@@ -54,6 +51,8 @@ async def resolve_arxiv_url(
     *,
     arxiv_client=None,
     openalex_client=None,
+    crossref_client=None,
+    datacite_client=None,
     discovery_client=None,
     relation_resolution_cache=None,
     arxiv_relation_no_arxiv_recheck_days: int = 30,
@@ -102,14 +101,15 @@ async def resolve_arxiv_url(
                 script_derived=False,
             )
 
-    openalex_lookup = getattr(openalex_client, "find_preprint_match_by_identifier", None)
-    openalex_transient_failure = False
+    normalized_doi_key = next((key_value for key_type, key_value in cache_keys if key_type == "doi"), None)
+    openalex_lookup = getattr(openalex_client, "find_exact_arxiv_match_by_identifier", None)
+    metadata_transient_failure = False
     if callable(openalex_lookup):
         for key_type, key_value in cache_keys:
             try:
                 arxiv_url, resolved_title = await openalex_lookup(key_value, title=normalized_title or None)
             except (RuntimeError, aiohttp.ClientError, asyncio.TimeoutError):
-                openalex_transient_failure = True
+                metadata_transient_failure = True
                 continue
 
             if arxiv_url:
@@ -123,7 +123,7 @@ async def resolve_arxiv_url(
                     resolved_url=arxiv_url,
                     canonical_arxiv_url=arxiv_url,
                     resolved_title=resolved_title or normalized_title or arxiv_url,
-                    source=f"openalex_{key_type}",
+                    source=f"openalex_exact_{key_type}",
                     script_derived=True,
                 )
 
@@ -132,7 +132,6 @@ async def resolve_arxiv_url(
         title_resolution = await _resolve_by_title(
             normalized_title,
             arxiv_client=arxiv_client,
-            discovery_client=discovery_client,
         )
         if title_resolution.canonical_arxiv_url:
             _record_positive_resolution(
@@ -149,7 +148,51 @@ async def resolve_arxiv_url(
                 script_derived=True,
             )
 
-    should_record_negative = bool(cache_keys) and not openalex_transient_failure
+    crossref_lookup = getattr(crossref_client, "find_arxiv_match_by_doi", None)
+    if callable(crossref_lookup) and normalized_doi_key:
+        try:
+            arxiv_url, resolved_title = await crossref_lookup(normalized_doi_key)
+        except (RuntimeError, aiohttp.ClientError, asyncio.TimeoutError):
+            metadata_transient_failure = True
+        else:
+            if arxiv_url:
+                _record_positive_resolution(
+                    relation_resolution_cache,
+                    cache_keys,
+                    arxiv_url=arxiv_url,
+                    resolved_title=resolved_title or normalized_title or None,
+                )
+                return ArxivUrlResolutionResult(
+                    resolved_url=arxiv_url,
+                    canonical_arxiv_url=arxiv_url,
+                    resolved_title=resolved_title or normalized_title or arxiv_url,
+                    source="crossref",
+                    script_derived=True,
+                )
+
+    datacite_lookup = getattr(datacite_client, "find_arxiv_match_by_doi", None)
+    if callable(datacite_lookup) and normalized_doi_key:
+        try:
+            arxiv_url, resolved_title = await datacite_lookup(normalized_doi_key)
+        except (RuntimeError, aiohttp.ClientError, asyncio.TimeoutError):
+            metadata_transient_failure = True
+        else:
+            if arxiv_url:
+                _record_positive_resolution(
+                    relation_resolution_cache,
+                    cache_keys,
+                    arxiv_url=arxiv_url,
+                    resolved_title=resolved_title or normalized_title or None,
+                )
+                return ArxivUrlResolutionResult(
+                    resolved_url=arxiv_url,
+                    canonical_arxiv_url=arxiv_url,
+                    resolved_title=resolved_title or normalized_title or arxiv_url,
+                    source="datacite",
+                    script_derived=True,
+                )
+
+    should_record_negative = bool(cache_keys) and not metadata_transient_failure
     if allow_title_search:
         should_record_negative = should_record_negative and title_resolution.definitive_no_match
 
@@ -169,7 +212,6 @@ async def _resolve_by_title(
     title: str,
     *,
     arxiv_client=None,
-    discovery_client=None,
 ) -> _TitleResolutionResult:
     if not title:
         return _TitleResolutionResult(canonical_arxiv_url=None, resolved_title=None, definitive_no_match=False)
@@ -196,96 +238,11 @@ async def _resolve_by_title(
 
     definitive_no_match = error == NO_MATCH_TITLE_SEARCH_ERROR
 
-    hf_token = getattr(discovery_client, "huggingface_token", "")
-    if not hf_token:
-        return _TitleResolutionResult(
-            canonical_arxiv_url=None,
-            resolved_title=None,
-            definitive_no_match=definitive_no_match,
-        )
-
-    hf_json_search = getattr(discovery_client, "get_huggingface_paper_search_results", None)
-    if callable(hf_json_search):
-        search_results, hf_error = await hf_json_search(title, limit=1)
-        if not hf_error and isinstance(search_results, list):
-            hf_arxiv_id, hf_title = _extract_best_huggingface_paper_id_from_search_results(search_results, title)
-            if hf_arxiv_id:
-                resolved_title = hf_title
-                if callable(getattr(arxiv_client, "get_title", None)):
-                    matched_title, _ = await arxiv_client.get_title(hf_arxiv_id)
-                    resolved_title = matched_title or resolved_title
-                return _TitleResolutionResult(
-                    canonical_arxiv_url=build_arxiv_abs_url(hf_arxiv_id),
-                    resolved_title=resolved_title or title,
-                    definitive_no_match=False,
-                )
-            definitive_no_match = definitive_no_match and not search_results
-
-    hf_html_search = getattr(discovery_client, "get_huggingface_search_html", None)
-    if callable(hf_html_search):
-        search_html, hf_error = await hf_html_search(title)
-        if not hf_error and isinstance(search_html, str):
-            hf_arxiv_id, _source = extract_best_huggingface_paper_id_from_search_html(search_html, title)
-            if hf_arxiv_id:
-                resolved_title = title
-                if callable(getattr(arxiv_client, "get_title", None)):
-                    matched_title, _ = await arxiv_client.get_title(hf_arxiv_id)
-                    resolved_title = matched_title or resolved_title
-                return _TitleResolutionResult(
-                    canonical_arxiv_url=build_arxiv_abs_url(hf_arxiv_id),
-                    resolved_title=resolved_title,
-                    definitive_no_match=False,
-                )
-
     return _TitleResolutionResult(
         canonical_arxiv_url=None,
         resolved_title=None,
         definitive_no_match=definitive_no_match,
     )
-
-
-def _extract_best_huggingface_paper_id_from_search_results(
-    search_results,
-    title_query: str,
-) -> tuple[str | None, str | None]:
-    if not isinstance(search_results, list) or not title_query:
-        return None, None
-
-    title_query_norm = " ".join(title_query.casefold().split())
-    best_id = None
-    best_title = None
-    best_score = -1
-
-    for item in search_results:
-        if not isinstance(item, dict):
-            continue
-        paper = item.get("paper", {})
-        if not isinstance(paper, dict):
-            continue
-
-        paper_id = str(paper.get("id") or "").strip()
-        raw_title = item.get("title")
-        if not isinstance(raw_title, str):
-            raw_title = paper.get("title")
-        title_text = " ".join(str(raw_title or "").split()).strip()
-        title_norm = " ".join(title_text.casefold().split())
-        if not paper_id or not title_norm:
-            continue
-
-        score = 0
-        if title_norm == title_query_norm:
-            score = 100
-        elif title_query_norm in title_norm:
-            score = 80
-        elif title_norm in title_query_norm:
-            score = 60
-
-        if score > best_score:
-            best_score = score
-            best_id = paper_id
-            best_title = title_text
-
-    return best_id, best_title
 
 
 def _record_positive_resolution(relation_resolution_cache, cache_keys, *, arxiv_url: str, resolved_title: str | None) -> None:

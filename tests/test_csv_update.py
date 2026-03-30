@@ -128,7 +128,7 @@ async def test_update_csv_file_rewrites_doi_to_arxiv_when_openalex_crosswalk_res
     )
 
     openalex_client = SimpleNamespace(
-        find_preprint_match_by_identifier=AsyncMock(
+        find_exact_arxiv_match_by_identifier=AsyncMock(
             return_value=("https://arxiv.org/abs/2501.12345", "Mapped Arxiv Title")
         )
     )
@@ -163,6 +163,155 @@ async def test_update_csv_file_rewrites_doi_to_arxiv_when_openalex_crosswalk_res
             "Stars": "7",
         }
     ]
+
+
+@pytest.mark.anyio
+async def test_update_csv_file_uses_arxiv_title_api_after_openalex_exact_miss(tmp_path: Path):
+    csv_path = tmp_path / "papers.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "Name,Url,Github,Stars",
+                "DOI Paper,https://doi.org/10.1145/example,,",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    openalex_client = SimpleNamespace(
+        find_exact_arxiv_match_by_identifier=AsyncMock(return_value=(None, "DOI Paper"))
+    )
+    arxiv_client = SimpleNamespace(
+        get_arxiv_match_by_title_from_api=AsyncMock(
+            return_value=("2501.54321", "DOI Paper On arXiv", "title_search_exact", None)
+        )
+    )
+    crossref_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock())
+    datacite_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock())
+
+    class FakeDiscoveryClient:
+        async def resolve_github_url(self, seed):
+            assert seed.url == "https://arxiv.org/abs/2501.54321"
+            return "https://github.com/foo/bar"
+
+    class FakeGitHubClient:
+        async def get_star_count(self, owner, repo):
+            assert (owner, repo) == ("foo", "bar")
+            return 7, None
+
+    result = await update_csv_file(
+        csv_path,
+        discovery_client=FakeDiscoveryClient(),
+        github_client=FakeGitHubClient(),
+        arxiv_client=arxiv_client,
+        openalex_client=openalex_client,
+        crossref_client=crossref_client,
+        datacite_client=datacite_client,
+        content_cache=FakeContentCache(),
+    )
+
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert result.updated == 1
+    assert rows == [
+        {
+            "Name": "DOI Paper",
+            "Url": "https://arxiv.org/abs/2501.54321",
+            "Github": "https://github.com/foo/bar",
+            "Stars": "7",
+        }
+    ]
+    arxiv_client.get_arxiv_match_by_title_from_api.assert_awaited_once_with("DOI Paper")
+    crossref_client.find_arxiv_match_by_doi.assert_not_awaited()
+    datacite_client.find_arxiv_match_by_doi.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_run_csv_mode_builds_and_passes_metadata_clients(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ALPHAXIV_TOKEN", "ax_token")
+    csv_path = tmp_path / "papers.csv"
+    csv_path.write_text("Name,Url,Github,Stars\nPaper A,https://arxiv.org/abs/2603.20000v2,,\n", encoding="utf-8")
+    received = {}
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeDiscoveryClient:
+        def __init__(self, session, *, huggingface_token="", max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeGitHubClient:
+        def __init__(self, session, *, github_token="", max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeOpenAlexClient:
+        def __init__(self, session, *, openalex_api_key="", max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeArxivClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+            received["arxiv_client"] = self
+
+    class FakeCrossrefClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+            received["crossref_client"] = self
+
+    class FakeDataCiteClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+            received["datacite_client"] = self
+
+    class FakeContentClient:
+        def __init__(self, session, *, alphaxiv_token="", max_concurrent=0, min_interval=0):
+            self.session = session
+
+    async def fake_update_csv_file(
+        path,
+        *,
+        discovery_client,
+        github_client,
+        arxiv_client=None,
+        openalex_client=None,
+        crossref_client=None,
+        datacite_client=None,
+        content_cache=None,
+        relation_resolution_cache=None,
+        arxiv_relation_no_arxiv_recheck_days=30,
+        status_callback=None,
+        progress_callback=None,
+    ):
+        received["arxiv_arg"] = arxiv_client
+        received["crossref_arg"] = crossref_client
+        received["datacite_arg"] = datacite_client
+        return SimpleNamespace(csv_path=path, updated=0, skipped=[])
+
+    monkeypatch.setattr("src.csv_update.runner.update_csv_file", fake_update_csv_file)
+
+    exit_code = await run_csv_mode(
+        csv_path,
+        session_factory=lambda **kwargs: FakeSession(),
+        arxiv_client_cls=FakeArxivClient,
+        discovery_client_cls=FakeDiscoveryClient,
+        github_client_cls=FakeGitHubClient,
+        openalex_client_cls=FakeOpenAlexClient,
+        crossref_client_cls=FakeCrossrefClient,
+        datacite_client_cls=FakeDataCiteClient,
+        content_client_cls=FakeContentClient,
+        content_cache_root=tmp_path / "cache",
+    )
+
+    assert exit_code == 0
+    assert received["arxiv_arg"] is received["arxiv_client"]
+    assert received["crossref_arg"] is received["crossref_client"]
+    assert received["datacite_arg"] is received["datacite_client"]
 
 
 @pytest.mark.anyio

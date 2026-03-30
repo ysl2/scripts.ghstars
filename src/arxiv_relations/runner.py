@@ -8,6 +8,8 @@ import aiohttp
 from src.arxiv_relations.pipeline import export_arxiv_relations_to_csv
 from src.shared.alphaxiv_content import AlphaXivContentClient
 from src.shared.arxiv import ArxivClient
+from src.shared.crossref import CrossrefClient
+from src.shared.datacite import DataCiteClient
 from src.shared.discovery import DiscoveryClient
 from src.shared.github import GitHubClient
 from src.shared.openalex import OpenAlexClient
@@ -29,6 +31,8 @@ async def run_arxiv_relations_mode(
     session_factory=aiohttp.ClientSession,
     arxiv_client_cls=ArxivClient,
     openalex_client_cls=OpenAlexClient,
+    crossref_client_cls=CrossrefClient,
+    datacite_client_cls=DataCiteClient,
     discovery_client_cls=DiscoveryClient,
     github_client_cls=GitHubClient,
     content_client_cls=AlphaXivContentClient,
@@ -57,6 +61,18 @@ async def run_arxiv_relations_mode(
                 max_concurrent=CONCURRENT_LIMIT,
                 min_interval=REQUEST_DELAY,
             )
+            crossref_client = build_client(
+                crossref_client_cls,
+                runtime.session,
+                max_concurrent=CONCURRENT_LIMIT,
+                min_interval=REQUEST_DELAY,
+            )
+            datacite_client = build_client(
+                datacite_client_cls,
+                runtime.session,
+                max_concurrent=CONCURRENT_LIMIT,
+                min_interval=REQUEST_DELAY,
+            )
             content_client = build_client(
                 content_client_cls,
                 runtime.session,
@@ -74,6 +90,8 @@ async def run_arxiv_relations_mode(
                 output_dir=output_dir,
                 arxiv_client=arxiv_client,
                 openalex_client=openalex_client,
+                crossref_client=crossref_client,
+                datacite_client=datacite_client,
                 discovery_client=runtime.discovery_client,
                 github_client=runtime.github_client,
                 content_cache=content_cache,

@@ -298,7 +298,7 @@ async def test_process_single_paper_resolves_doi_via_openalex_before_github_disc
 
     discovery_client = FakeDiscoveryClient()
     openalex_client = types.SimpleNamespace(
-        find_preprint_match_by_identifier=AsyncMock(
+        find_exact_arxiv_match_by_identifier=AsyncMock(
             return_value=("https://arxiv.org/abs/2501.12345", "Mapped Arxiv Title")
         )
     )
@@ -323,7 +323,60 @@ async def test_process_single_paper_resolves_doi_via_openalex_before_github_disc
     assert result.reason is None
     assert discovery_client.seen_urls == ["https://arxiv.org/abs/2501.12345"]
     assert content_cache.calls == ["https://arxiv.org/abs/2501.12345"]
-    openalex_client.find_preprint_match_by_identifier.assert_awaited_once_with(
+    openalex_client.find_exact_arxiv_match_by_identifier.assert_awaited_once_with(
         "https://doi.org/10.1007/978-3-031-72933-1_9",
         title="Published DOI Paper",
     )
+
+
+@pytest.mark.anyio
+async def test_process_single_paper_threads_crossref_after_openalex_and_title_miss():
+    github_client = types.SimpleNamespace(get_star_count=AsyncMock(return_value=(5, None)))
+    content_cache = RecordingContentCache()
+
+    class FakeDiscoveryClient:
+        def __init__(self):
+            self.seen_urls: list[str] = []
+
+        async def resolve_github_url(self, seed):
+            self.seen_urls.append(seed.url)
+            return "https://github.com/foo/from-crossref"
+
+    discovery_client = FakeDiscoveryClient()
+    openalex_client = types.SimpleNamespace(
+        find_exact_arxiv_match_by_identifier=AsyncMock(return_value=(None, "Published DOI Paper"))
+    )
+    arxiv_client = types.SimpleNamespace(
+        get_arxiv_match_by_title_from_api=AsyncMock(
+            return_value=(None, None, None, "No arXiv ID found from title search")
+        )
+    )
+    crossref_client = types.SimpleNamespace(
+        find_arxiv_match_by_doi=AsyncMock(return_value=("https://arxiv.org/abs/2501.54321", "Published DOI Paper"))
+    )
+    datacite_client = types.SimpleNamespace(find_arxiv_match_by_doi=AsyncMock())
+
+    result = await process_single_paper(
+        PaperEnrichmentRequest(
+            title="Published DOI Paper",
+            raw_url="https://doi.org/10.1145/example",
+            existing_github_url="",
+            allow_title_search=True,
+            allow_github_discovery=True,
+        ),
+        discovery_client=discovery_client,
+        github_client=github_client,
+        arxiv_client=arxiv_client,
+        openalex_client=openalex_client,
+        crossref_client=crossref_client,
+        datacite_client=datacite_client,
+        content_cache=content_cache,
+    )
+
+    assert result.normalized_url == "https://arxiv.org/abs/2501.54321"
+    assert result.canonical_arxiv_url == "https://arxiv.org/abs/2501.54321"
+    assert result.github_url == "https://github.com/foo/from-crossref"
+    assert result.reason is None
+    assert discovery_client.seen_urls == ["https://arxiv.org/abs/2501.54321"]
+    crossref_client.find_arxiv_match_by_doi.assert_awaited_once_with("https://doi.org/10.1145/example")
+    datacite_client.find_arxiv_match_by_doi.assert_not_awaited()

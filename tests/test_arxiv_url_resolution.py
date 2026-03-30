@@ -51,7 +51,7 @@ async def test_resolve_arxiv_url_preserves_existing_arxiv_value_without_cache_wr
 @pytest.mark.anyio
 async def test_resolve_arxiv_url_resolves_doi_via_openalex_and_records_positive_cache():
     openalex_client = SimpleNamespace(
-        find_preprint_match_by_identifier=AsyncMock(
+        find_exact_arxiv_match_by_identifier=AsyncMock(
             return_value=("https://arxiv.org/abs/2501.12345", "Mapped Arxiv Title")
         )
     )
@@ -70,7 +70,7 @@ async def test_resolve_arxiv_url_resolves_doi_via_openalex_and_records_positive_
     assert result.canonical_arxiv_url == "https://arxiv.org/abs/2501.12345"
     assert result.resolved_title == "Mapped Arxiv Title"
     assert result.script_derived is True
-    openalex_client.find_preprint_match_by_identifier.assert_awaited_once_with(
+    openalex_client.find_exact_arxiv_match_by_identifier.assert_awaited_once_with(
         "https://doi.org/10.1007/978-3-031-72933-1_9",
         title="Published Paper",
     )
@@ -98,7 +98,7 @@ async def test_resolve_arxiv_url_skips_openalex_when_fresh_negative_cache_exists
             )
         }
     )
-    openalex_client = SimpleNamespace(find_preprint_match_by_identifier=AsyncMock())
+    openalex_client = SimpleNamespace(find_exact_arxiv_match_by_identifier=AsyncMock())
     arxiv_client = SimpleNamespace(get_arxiv_id_by_title=AsyncMock())
 
     result = await resolve_arxiv_url(
@@ -113,5 +113,70 @@ async def test_resolve_arxiv_url_skips_openalex_when_fresh_negative_cache_exists
 
     assert result.resolved_url is None
     assert result.canonical_arxiv_url is None
-    openalex_client.find_preprint_match_by_identifier.assert_not_awaited()
+    openalex_client.find_exact_arxiv_match_by_identifier.assert_not_awaited()
     arxiv_client.get_arxiv_id_by_title.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_resolve_arxiv_url_uses_openalex_exact_before_all_fallbacks():
+    openalex_client = SimpleNamespace(
+        find_exact_arxiv_match_by_identifier=AsyncMock(
+            return_value=("https://arxiv.org/abs/2501.12345", "Mapped")
+        )
+    )
+    arxiv_client = SimpleNamespace(get_arxiv_match_by_title_from_api=AsyncMock())
+    crossref_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock())
+    datacite_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock())
+
+    result = await resolve_arxiv_url(
+        title="Published Paper",
+        raw_url="https://doi.org/10.1145/example",
+        openalex_client=openalex_client,
+        arxiv_client=arxiv_client,
+        crossref_client=crossref_client,
+        datacite_client=datacite_client,
+        allow_title_search=True,
+    )
+
+    assert result.canonical_arxiv_url == "https://arxiv.org/abs/2501.12345"
+    arxiv_client.get_arxiv_match_by_title_from_api.assert_not_awaited()
+    crossref_client.find_arxiv_match_by_doi.assert_not_awaited()
+    datacite_client.find_arxiv_match_by_doi.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_resolve_arxiv_url_runs_crossref_then_datacite_after_title_api_fails_without_hf():
+    openalex_client = SimpleNamespace(
+        find_exact_arxiv_match_by_identifier=AsyncMock(return_value=(None, "Published Paper"))
+    )
+    arxiv_client = SimpleNamespace(
+        get_arxiv_match_by_title_from_api=AsyncMock(
+            return_value=(None, None, None, "No arXiv ID found from title search")
+        )
+    )
+    crossref_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock(return_value=(None, "Published Paper")))
+    datacite_client = SimpleNamespace(
+        find_arxiv_match_by_doi=AsyncMock(return_value=("https://arxiv.org/abs/2501.12345", "Published Paper"))
+    )
+    discovery_client = SimpleNamespace(
+        huggingface_token="hf-token",
+        get_huggingface_paper_search_results=AsyncMock(),
+        get_huggingface_search_html=AsyncMock(),
+    )
+
+    result = await resolve_arxiv_url(
+        title="Published Paper",
+        raw_url="https://doi.org/10.1145/example",
+        openalex_client=openalex_client,
+        arxiv_client=arxiv_client,
+        crossref_client=crossref_client,
+        datacite_client=datacite_client,
+        discovery_client=discovery_client,
+        allow_title_search=True,
+    )
+
+    assert result.canonical_arxiv_url == "https://arxiv.org/abs/2501.12345"
+    crossref_client.find_arxiv_match_by_doi.assert_awaited_once_with("https://doi.org/10.1145/example")
+    datacite_client.find_arxiv_match_by_doi.assert_awaited_once_with("https://doi.org/10.1145/example")
+    discovery_client.get_huggingface_paper_search_results.assert_not_awaited()
+    discovery_client.get_huggingface_search_html.assert_not_awaited()

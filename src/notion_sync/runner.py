@@ -9,6 +9,8 @@ from src.notion_sync.pipeline import process_page
 from src.shared.alphaxiv_content import AlphaXivContentClient
 from src.shared.arxiv import ArxivClient
 from src.shared.async_batch import iter_bounded_as_completed
+from src.shared.crossref import CrossrefClient
+from src.shared.datacite import DataCiteClient
 from src.shared.discovery import DiscoveryClient
 from src.shared.github import GitHubClient, resolve_github_min_interval
 from src.shared.openalex import OpenAlexClient
@@ -34,6 +36,8 @@ async def run_notion_mode(
     discovery_client_cls=DiscoveryClient,
     github_client_cls=GitHubClient,
     openalex_client_cls=OpenAlexClient,
+    crossref_client_cls=CrossrefClient,
+    datacite_client_cls=DataCiteClient,
     notion_client_cls=NotionClient,
     content_client_cls=AlphaXivContentClient,
 ) -> int:
@@ -70,6 +74,18 @@ async def run_notion_mode(
             openalex_client_cls,
             runtime.session,
             openalex_api_key=config["openalex_api_key"],
+            max_concurrent=CONCURRENT_LIMIT,
+            min_interval=REQUEST_DELAY,
+        )
+        crossref_client = build_client(
+            crossref_client_cls,
+            runtime.session,
+            max_concurrent=CONCURRENT_LIMIT,
+            min_interval=REQUEST_DELAY,
+        )
+        datacite_client = build_client(
+            datacite_client_cls,
+            runtime.session,
             max_concurrent=CONCURRENT_LIMIT,
             min_interval=REQUEST_DELAY,
         )
@@ -113,6 +129,8 @@ async def run_notion_mode(
                     lock=lock,
                     arxiv_client=arxiv_client,
                     openalex_client=openalex_client,
+                    crossref_client=crossref_client,
+                    datacite_client=datacite_client,
                     content_cache=content_cache,
                     relation_resolution_cache=runtime.relation_resolution_cache,
                     arxiv_relation_no_arxiv_recheck_days=config["arxiv_relation_no_arxiv_recheck_days"],

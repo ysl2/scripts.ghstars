@@ -53,6 +53,56 @@ async def test_title_search_returns_first_result_by_relevance():
 
 
 @pytest.mark.anyio
+async def test_find_exact_arxiv_match_by_identifier_returns_direct_arxiv_without_followup_search():
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "id": "https://openalex.org/W1",
+                    "display_name": "Published Paper",
+                    "ids": {"arxiv": "2501.12345v2"},
+                }
+            )
+        ]
+    )
+    client = OpenAlexClient(session, min_interval=0, max_concurrent=1)
+
+    arxiv_url, resolved_title = await client.find_exact_arxiv_match_by_identifier(
+        "https://doi.org/10.48550/arXiv.2501.12345",
+        title="Published Paper",
+    )
+
+    assert arxiv_url == "https://arxiv.org/abs/2501.12345"
+    assert resolved_title == "Published Paper"
+    assert len(session.calls) == 1
+
+
+@pytest.mark.anyio
+async def test_find_exact_arxiv_match_by_identifier_does_not_run_same_title_sibling_search():
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "id": "https://openalex.org/W-published",
+                    "display_name": "Example Published Paper",
+                    "doi": "https://doi.org/10.1145/example",
+                }
+            )
+        ]
+    )
+    client = OpenAlexClient(session, min_interval=0, max_concurrent=1)
+
+    arxiv_url, resolved_title = await client.find_exact_arxiv_match_by_identifier(
+        "https://openalex.org/W-published",
+        title="Example Published Paper",
+    )
+
+    assert arxiv_url is None
+    assert resolved_title == "Example Published Paper"
+    assert len(session.calls) == 1
+
+
+@pytest.mark.anyio
 async def test_find_preprint_match_by_identifier_returns_direct_arxiv_for_doi():
     session = FakeSession(
         [

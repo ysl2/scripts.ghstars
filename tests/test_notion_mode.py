@@ -518,6 +518,8 @@ async def test_run_notion_mode_builds_and_passes_content_cache(monkeypatch):
 
     async def fake_process_page(page, index, total, **kwargs):
         received["content_cache"] = kwargs.get("content_cache")
+        received["crossref_client"] = kwargs.get("crossref_client")
+        received["datacite_client"] = kwargs.get("datacite_client")
         received["page"] = page
 
     monkeypatch.setattr(notion_runner, "process_page", fake_process_page)
@@ -530,6 +532,14 @@ async def test_run_notion_mode_builds_and_passes_content_cache(monkeypatch):
             return False
 
     class FakeArxivClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeCrossrefClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeDataCiteClient:
         def __init__(self, session, *, max_concurrent=0, min_interval=0):
             self.session = session
 
@@ -571,6 +581,8 @@ async def test_run_notion_mode_builds_and_passes_content_cache(monkeypatch):
         arxiv_client_cls=FakeArxivClient,
         discovery_client_cls=FakeDiscoveryClient,
         github_client_cls=FakeGitHubClient,
+        crossref_client_cls=FakeCrossrefClient,
+        datacite_client_cls=FakeDataCiteClient,
         notion_client_cls=FakeNotionClient,
         content_client_cls=FakeContentClient,
     )
@@ -579,6 +591,8 @@ async def test_run_notion_mode_builds_and_passes_content_cache(monkeypatch):
     assert received["page"]["id"] == "page-1"
     assert received["content_cache"] is not None
     assert received["content_cache"].content_client.alphaxiv_token == "ax_token"
+    assert isinstance(received["crossref_client"], FakeCrossrefClient)
+    assert isinstance(received["datacite_client"], FakeDataCiteClient)
 
 
 @pytest.mark.anyio

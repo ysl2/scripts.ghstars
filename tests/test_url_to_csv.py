@@ -417,7 +417,7 @@ async def test_normalize_paper_seeds_to_arxiv_preserves_existing_arxiv_urls_exac
 async def test_normalize_paper_seeds_to_arxiv_rewrites_doi_via_openalex_crosswalk():
     seeds = [PaperSeed(name="Published Paper", url="https://doi.org/10.1007/978-3-031-72933-1_9")]
     openalex_client = SimpleNamespace(
-        find_preprint_match_by_identifier=AsyncMock(
+        find_exact_arxiv_match_by_identifier=AsyncMock(
             return_value=("https://arxiv.org/abs/2501.12345", "Mapped Arxiv Title")
         )
     )
@@ -430,10 +430,40 @@ async def test_normalize_paper_seeds_to_arxiv_rewrites_doi_via_openalex_crosswal
     )
 
     assert resolved == [PaperSeed(name="Published Paper", url="https://arxiv.org/abs/2501.12345")]
-    openalex_client.find_preprint_match_by_identifier.assert_awaited_once_with(
+    openalex_client.find_exact_arxiv_match_by_identifier.assert_awaited_once_with(
         "https://doi.org/10.1007/978-3-031-72933-1_9",
         title="Published Paper",
     )
+
+
+@pytest.mark.anyio
+async def test_normalize_paper_seeds_to_arxiv_uses_datacite_after_crossref_miss():
+    seeds = [PaperSeed(name="Published Paper", url="https://doi.org/10.1145/example")]
+    openalex_client = SimpleNamespace(
+        find_exact_arxiv_match_by_identifier=AsyncMock(return_value=(None, "Published Paper"))
+    )
+    arxiv_client = SimpleNamespace(
+        get_arxiv_match_by_title_from_api=AsyncMock(
+            return_value=(None, None, None, "No arXiv ID found from title search")
+        )
+    )
+    crossref_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock(return_value=(None, "Published Paper")))
+    datacite_client = SimpleNamespace(
+        find_arxiv_match_by_doi=AsyncMock(return_value=("https://arxiv.org/abs/2501.54321", "Published Paper"))
+    )
+
+    resolved = await normalize_paper_seeds_to_arxiv(
+        seeds,
+        discovery_client=SimpleNamespace(huggingface_token=""),
+        arxiv_client=arxiv_client,
+        openalex_client=openalex_client,
+        crossref_client=crossref_client,
+        datacite_client=datacite_client,
+    )
+
+    assert resolved == [PaperSeed(name="Published Paper", url="https://arxiv.org/abs/2501.54321")]
+    crossref_client.find_arxiv_match_by_doi.assert_awaited_once_with("https://doi.org/10.1145/example")
+    datacite_client.find_arxiv_match_by_doi.assert_awaited_once_with("https://doi.org/10.1145/example")
 
 
 @pytest.mark.anyio
@@ -747,6 +777,20 @@ async def test_run_url_mode_builds_and_passes_content_cache(tmp_path: Path, monk
         def __init__(self, session, *, max_concurrent=0, min_interval=0):
             self.session = session
 
+    class FakeOpenAlexClient:
+        def __init__(self, session, *, openalex_api_key="", max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeCrossrefClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+            received["crossref_client"] = self
+
+    class FakeDataCiteClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+            received["datacite_client"] = self
+
     class FakeDiscoveryClient:
         def __init__(self, session, *, huggingface_token="", max_concurrent=0, min_interval=0):
             self.session = session
@@ -770,6 +814,8 @@ async def test_run_url_mode_builds_and_passes_content_cache(tmp_path: Path, monk
         semanticscholar_client=None,
         arxiv_client=None,
         openalex_client=None,
+        crossref_client=None,
+        datacite_client=None,
         discovery_client,
         github_client,
         content_cache=None,
@@ -781,6 +827,8 @@ async def test_run_url_mode_builds_and_passes_content_cache(tmp_path: Path, monk
     ):
         received["input_url"] = input_url
         received["content_cache"] = content_cache
+        received["crossref_arg"] = crossref_client
+        received["datacite_arg"] = datacite_client
         received["output_dir"] = output_dir
         return SimpleNamespace(csv_path=tmp_path / "papers.csv", resolved=1, skipped=[])
 
@@ -797,6 +845,9 @@ async def test_run_url_mode_builds_and_passes_content_cache(tmp_path: Path, monk
         semanticscholar_client_cls=FakeSemanticScholarClient,
         discovery_client_cls=FakeDiscoveryClient,
         github_client_cls=FakeGitHubClient,
+        openalex_client_cls=FakeOpenAlexClient,
+        crossref_client_cls=FakeCrossrefClient,
+        datacite_client_cls=FakeDataCiteClient,
         content_client_cls=FakeContentClient,
         content_cache_root=tmp_path / "cache",
     )
@@ -810,6 +861,8 @@ async def test_run_url_mode_builds_and_passes_content_cache(tmp_path: Path, monk
     assert received["content_cache"].cache_root == tmp_path / "cache"
     assert received["content_cache"].content_client is received["content_client"]
     assert received["content_client"].alphaxiv_token == "ax_token"
+    assert received["crossref_arg"] is received["crossref_client"]
+    assert received["datacite_arg"] is received["datacite_client"]
 
 
 @pytest.mark.anyio
