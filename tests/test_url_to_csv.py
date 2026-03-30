@@ -679,6 +679,7 @@ async def test_export_url_to_csv_warms_content_and_reuses_cached_files(tmp_path:
 
 @pytest.mark.anyio
 async def test_run_url_mode_builds_and_passes_content_cache(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ALPHAXIV_TOKEN", "ax_token")
     received = {}
 
     class FakeSession:
@@ -717,8 +718,9 @@ async def test_run_url_mode_builds_and_passes_content_cache(tmp_path: Path, monk
             self.session = session
 
     class FakeContentClient:
-        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+        def __init__(self, session, *, alphaxiv_token="", max_concurrent=0, min_interval=0):
             self.session = session
+            self.alphaxiv_token = alphaxiv_token
             received["content_client"] = self
 
     async def fake_export(
@@ -766,6 +768,7 @@ async def test_run_url_mode_builds_and_passes_content_cache(tmp_path: Path, monk
     assert received["content_cache"] is not None
     assert received["content_cache"].cache_root == tmp_path / "cache"
     assert received["content_cache"].content_client is received["content_client"]
+    assert received["content_client"].alphaxiv_token == "ax_token"
 
 
 @pytest.mark.anyio

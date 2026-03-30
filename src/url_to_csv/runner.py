@@ -86,6 +86,7 @@ async def run_url_mode(
         content_client = build_client(
             content_client_cls,
             runtime.session,
+            alphaxiv_token=config["alphaxiv_token"],
             max_concurrent=CONCURRENT_LIMIT,
             min_interval=REQUEST_DELAY,
         )

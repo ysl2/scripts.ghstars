@@ -2324,6 +2324,7 @@ async def test_run_arxiv_relations_mode_returns_nonzero_on_pre_export_setup_fail
 async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and_summary_output(
     tmp_path: Path, monkeypatch, capsys
 ):
+    monkeypatch.setenv("ALPHAXIV_TOKEN", "ax_token")
     references_csv_path = tmp_path / "arxiv-2603.23502-references-20260326113045.csv"
     citations_csv_path = tmp_path / "arxiv-2603.23502-citations-20260326113045.csv"
     constructed = {}
@@ -2371,8 +2372,9 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
             constructed["github_client"] = self
 
     class FakeContentClient:
-        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+        def __init__(self, session, *, alphaxiv_token="", max_concurrent=0, min_interval=0):
             self.session = session
+            self.alphaxiv_token = alphaxiv_token
             constructed["content_client"] = self
 
     async def fake_export(
@@ -2456,6 +2458,7 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
     assert export_calls[0]["github_client"] is constructed["github_client"]
     assert export_calls[0]["content_cache"] is not None
     assert export_calls[0]["content_cache"].content_client is constructed["content_client"]
+    assert constructed["content_client"].alphaxiv_token == "ax_token"
     assert export_calls[0]["relation_resolution_cache"] is not None
     assert export_calls[0]["arxiv_relation_no_arxiv_recheck_days"] == 30
     assert "Starting relation export" in captured.out

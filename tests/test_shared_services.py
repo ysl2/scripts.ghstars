@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 import src.shared.alphaxiv as alphaxiv
+from src.shared.alphaxiv_content import AlphaXivContentClient
 from src.shared.discovery import (
     DiscoveryClient,
     find_huggingface_paper_id_in_search_html,
@@ -153,6 +154,145 @@ async def test_discovery_client_queries_public_alphaxiv_paper_endpoint():
             },
             None,
         )
+    ]
+
+
+@pytest.mark.anyio
+async def test_discovery_client_adds_bearer_token_to_alphaxiv_paper_endpoint():
+    class FakeResponse:
+        status = 404
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {}
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, headers=None, params=None):
+            self.calls.append((url, headers, params))
+            return FakeResponse()
+
+    session = FakeSession()
+    client = DiscoveryClient(session=session, alphaxiv_token="ax_token")
+
+    payload, error = await client.get_alphaxiv_paper_payload_by_arxiv_id("2603.18493")
+
+    assert (payload, error) == (None, None)
+    assert session.calls == [
+        (
+            "https://api.alphaxiv.org/papers/v3/2603.18493",
+            {
+                "Accept": "application/json",
+                "User-Agent": "scripts.ghstars",
+                "Authorization": "Bearer ax_token",
+            },
+            None,
+        )
+    ]
+
+
+@pytest.mark.anyio
+async def test_alphaxiv_content_client_keeps_anonymous_requests_without_token():
+    class FakeResponse:
+        status = 404
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {}
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, headers=None):
+            self.calls.append((url, headers))
+            return FakeResponse()
+
+    session = FakeSession()
+    client = AlphaXivContentClient(session=session)
+
+    paper_payload, paper_error = await client.get_paper_payload_by_arxiv_id("2603.18493")
+    overview_payload, overview_error = await client.get_overview_payload_by_version_id("v2603.18493")
+
+    assert (paper_payload, paper_error) == (None, None)
+    assert (overview_payload, overview_error) == (None, None)
+    assert session.calls == [
+        (
+            "https://api.alphaxiv.org/papers/v3/2603.18493",
+            {
+                "Accept": "application/json",
+                "User-Agent": "scripts.ghstars",
+            },
+        ),
+        (
+            "https://api.alphaxiv.org/papers/v3/v2603.18493/overview/en",
+            {
+                "Accept": "application/json",
+                "User-Agent": "scripts.ghstars",
+            },
+        ),
+    ]
+
+
+@pytest.mark.anyio
+async def test_alphaxiv_content_client_adds_bearer_token_when_configured():
+    class FakeResponse:
+        status = 404
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {}
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, headers=None):
+            self.calls.append((url, headers))
+            return FakeResponse()
+
+    session = FakeSession()
+    client = AlphaXivContentClient(session=session, alphaxiv_token="ax_token")
+
+    paper_payload, paper_error = await client.get_paper_payload_by_arxiv_id("2603.18493")
+    overview_payload, overview_error = await client.get_overview_payload_by_version_id("v2603.18493")
+
+    assert (paper_payload, paper_error) == (None, None)
+    assert (overview_payload, overview_error) == (None, None)
+    assert session.calls == [
+        (
+            "https://api.alphaxiv.org/papers/v3/2603.18493",
+            {
+                "Accept": "application/json",
+                "User-Agent": "scripts.ghstars",
+                "Authorization": "Bearer ax_token",
+            },
+        ),
+        (
+            "https://api.alphaxiv.org/papers/v3/v2603.18493/overview/en",
+            {
+                "Accept": "application/json",
+                "User-Agent": "scripts.ghstars",
+                "Authorization": "Bearer ax_token",
+            },
+        ),
     ]
 
 

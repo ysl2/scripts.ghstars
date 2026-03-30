@@ -30,6 +30,7 @@ def load_runtime_config(env: dict[str, str]) -> dict[str, str | int]:
     return {
         "github_token": (env.get("GITHUB_TOKEN") or "").strip(),
         "huggingface_token": (env.get("HUGGINGFACE_TOKEN") or "").strip(),
+        "alphaxiv_token": (env.get("ALPHAXIV_TOKEN") or "").strip(),
         "openalex_api_key": (env.get("OPENALEX_API_KEY") or "").strip(),
         "arxiv_relation_no_arxiv_recheck_days": _parse_positive_int(
             env.get("ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS"),
@@ -62,6 +63,7 @@ def load_notion_config(env: dict[str, str]) -> dict[str, str | int]:
         "github_token": runtime_config["github_token"],
         "database_id": database_id,
         "huggingface_token": runtime_config["huggingface_token"],
+        "alphaxiv_token": runtime_config["alphaxiv_token"],
         "openalex_api_key": runtime_config["openalex_api_key"],
         "repo_discovery_no_repo_recheck_days": runtime_config["repo_discovery_no_repo_recheck_days"],
     }
@@ -106,6 +108,7 @@ async def open_runtime_clients(
                 discovery_client_cls,
                 session,
                 huggingface_token=config["huggingface_token"],
+                alphaxiv_token=config["alphaxiv_token"],
                 repo_cache=repo_cache,
                 repo_discovery_no_repo_recheck_days=config["repo_discovery_no_repo_recheck_days"],
                 hf_exact_no_repo_recheck_days=config["repo_discovery_no_repo_recheck_days"],

@@ -12,6 +12,7 @@ def test_load_runtime_config_reads_only_optional_tokens():
         {
             "GITHUB_TOKEN": "gh_token",
             "HUGGINGFACE_TOKEN": "hf_token",
+            "ALPHAXIV_TOKEN": "ax_token",
             "REPO_DISCOVERY_NO_REPO_RECHECK_DAYS": "7",
         }
     )
@@ -19,6 +20,7 @@ def test_load_runtime_config_reads_only_optional_tokens():
     assert config == {
         "github_token": "gh_token",
         "huggingface_token": "hf_token",
+        "alphaxiv_token": "ax_token",
         "openalex_api_key": "",
         "arxiv_relation_no_arxiv_recheck_days": 30,
         "repo_discovery_no_repo_recheck_days": 7,
@@ -29,6 +31,7 @@ def test_load_runtime_config_defaults_missing_values_to_empty_strings():
     assert load_runtime_config({}) == {
         "github_token": "",
         "huggingface_token": "",
+        "alphaxiv_token": "",
         "openalex_api_key": "",
         "arxiv_relation_no_arxiv_recheck_days": 30,
         "repo_discovery_no_repo_recheck_days": 7,
@@ -94,6 +97,7 @@ class FakeDiscoveryClient:
         session,
         *,
         huggingface_token="",
+        alphaxiv_token="",
         repo_cache=None,
         repo_discovery_no_repo_recheck_days=0,
         max_concurrent=0,
@@ -101,6 +105,7 @@ class FakeDiscoveryClient:
     ):
         self.session = session
         self.huggingface_token = huggingface_token
+        self.alphaxiv_token = alphaxiv_token
         self.repo_cache = repo_cache
         self.repo_discovery_no_repo_recheck_days = repo_discovery_no_repo_recheck_days
         self.max_concurrent = max_concurrent
@@ -116,7 +121,7 @@ class FakeGitHubClient:
 
 
 @pytest.mark.anyio
-async def test_open_runtime_clients_builds_shared_clients_without_alphaxiv_token(
+async def test_open_runtime_clients_builds_shared_clients_with_optional_alphaxiv_token(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(runtime_module, "REPO_CACHE_DB_PATH", tmp_path / "cache.db")
@@ -125,6 +130,7 @@ async def test_open_runtime_clients_builds_shared_clients_without_alphaxiv_token
         {
             "GITHUB_TOKEN": "gh_token",
             "HUGGINGFACE_TOKEN": "hf_token",
+            "ALPHAXIV_TOKEN": "ax_token",
             "REPO_DISCOVERY_NO_REPO_RECHECK_DAYS": "9",
             "ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS": "31",
         }
@@ -142,6 +148,7 @@ async def test_open_runtime_clients_builds_shared_clients_without_alphaxiv_token
     ) as runtime:
         assert isinstance(runtime.relation_resolution_cache, RelationResolutionCacheStore)
         assert runtime.discovery_client.huggingface_token == "hf_token"
+        assert runtime.discovery_client.alphaxiv_token == "ax_token"
         assert runtime.discovery_client.repo_cache is runtime.repo_cache
         assert runtime.discovery_client.repo_discovery_no_repo_recheck_days == 9
         assert runtime.discovery_client.max_concurrent == 7

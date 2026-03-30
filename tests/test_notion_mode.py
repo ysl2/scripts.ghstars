@@ -30,6 +30,7 @@ def test_load_config_accepts_env_values():
             "GITHUB_TOKEN": "ghp_xxx",
             "DATABASE_ID": "db_123",
             "HUGGINGFACE_TOKEN": "hf_test",
+            "ALPHAXIV_TOKEN": "ax_token",
             "REPO_DISCOVERY_NO_REPO_RECHECK_DAYS": "7",
         }
     )
@@ -39,6 +40,7 @@ def test_load_config_accepts_env_values():
         "github_token": "ghp_xxx",
         "database_id": "db_123",
         "huggingface_token": "hf_test",
+        "alphaxiv_token": "ax_token",
         "openalex_api_key": "",
         "repo_discovery_no_repo_recheck_days": 7,
     }
@@ -488,6 +490,7 @@ async def test_run_notion_mode_builds_and_passes_content_cache(monkeypatch):
     monkeypatch.setenv("DATABASE_ID", "db_123")
     monkeypatch.setenv("GITHUB_TOKEN", "ghp_xxx")
     monkeypatch.setenv("HUGGINGFACE_TOKEN", "hf_xxx")
+    monkeypatch.setenv("ALPHAXIV_TOKEN", "ax_token")
 
     received = {}
 
@@ -518,8 +521,9 @@ async def test_run_notion_mode_builds_and_passes_content_cache(monkeypatch):
             self.session = session
 
     class FakeContentClient:
-        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+        def __init__(self, session, *, alphaxiv_token="", max_concurrent=0, min_interval=0):
             self.session = session
+            self.alphaxiv_token = alphaxiv_token
 
     class FakeNotionClient:
         def __init__(self, token, max_concurrent):
@@ -552,6 +556,7 @@ async def test_run_notion_mode_builds_and_passes_content_cache(monkeypatch):
     assert exit_code == 0
     assert received["page"]["id"] == "page-1"
     assert received["content_cache"] is not None
+    assert received["content_cache"].content_client.alphaxiv_token == "ax_token"
 
 
 @pytest.mark.anyio

@@ -549,7 +549,11 @@ async def test_paper_content_cache_writes_files_once_and_returns_paths_relative_
 
 
 @pytest.mark.anyio
-async def test_run_csv_mode_prints_progress_updates_file_and_writes_cached_markdown(tmp_path: Path, capsys):
+async def test_run_csv_mode_prints_progress_updates_file_and_writes_cached_markdown(
+    tmp_path: Path, capsys, monkeypatch
+):
+    monkeypatch.setenv("ALPHAXIV_TOKEN", "ax_token")
+    received = {}
     csv_path = tmp_path / "papers.csv"
     csv_path.write_text(
         "\n".join(
@@ -586,8 +590,10 @@ async def test_run_csv_mode_prints_progress_updates_file_and_writes_cached_markd
             return 11, None
 
     class FakeAlphaXivContentClient:
-        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+        def __init__(self, session, *, alphaxiv_token="", max_concurrent=0, min_interval=0):
             self.session = session
+            self.alphaxiv_token = alphaxiv_token
+            received["content_client"] = self
 
         async def get_paper_payload_by_arxiv_id(self, arxiv_id: str):
             assert arxiv_id == "2603.20000"
@@ -629,5 +635,6 @@ async def test_run_csv_mode_prints_progress_updates_file_and_writes_cached_markd
             "Stars": "11",
         }
     ]
+    assert received["content_client"].alphaxiv_token == "ax_token"
     assert (tmp_path / "cache" / "overview" / "2603.20000.md").read_text(encoding="utf-8").find("Overview body") != -1
     assert (tmp_path / "cache" / "abs" / "2603.20000.md").read_text(encoding="utf-8").find("Abstract body") != -1

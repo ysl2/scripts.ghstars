@@ -10,10 +10,12 @@ class AlphaXivContentClient:
         self,
         session: aiohttp.ClientSession,
         *,
+        alphaxiv_token: str = "",
         max_concurrent: int = 5,
         min_interval: float = 0.2,
     ):
         self.session = session
+        self.alphaxiv_token = alphaxiv_token
         self.semaphore = asyncio.Semaphore(max_concurrent)
         self.rate_limiter = RateLimiter(min_interval)
         self._paper_cache: dict[str, tuple[dict | None, str | None]] = {}
@@ -80,6 +82,8 @@ class AlphaXivContentClient:
             "Accept": "application/json",
             "User-Agent": "scripts.ghstars",
         }
+        if self.alphaxiv_token:
+            headers["Authorization"] = f"Bearer {self.alphaxiv_token}"
 
         for attempt in range(MAX_RETRIES + 1):
             async with self.semaphore:

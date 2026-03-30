@@ -208,6 +208,7 @@ class DiscoveryClient:
         session: aiohttp.ClientSession,
         *,
         huggingface_token: str = "",
+        alphaxiv_token: str = "",
         repo_cache=None,
         repo_discovery_no_repo_recheck_days: int = REPO_DISCOVERY_NO_REPO_RECHECK_DAYS,
         hf_exact_no_repo_recheck_days: int | None = None,
@@ -216,6 +217,7 @@ class DiscoveryClient:
     ):
         self.session = session
         self.huggingface_token = huggingface_token
+        self.alphaxiv_token = alphaxiv_token
         self.repo_cache = repo_cache
         if hf_exact_no_repo_recheck_days is not None:
             repo_discovery_no_repo_recheck_days = hf_exact_no_repo_recheck_days
@@ -279,6 +281,15 @@ class DiscoveryClient:
             headers["Authorization"] = f"Bearer {self.huggingface_token}"
         return headers
 
+    def _build_alphaxiv_headers(self) -> dict[str, str]:
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": "scripts.ghstars",
+        }
+        if self.alphaxiv_token:
+            headers["Authorization"] = f"Bearer {self.alphaxiv_token}"
+        return headers
+
     async def get_huggingface_paper_payload_by_arxiv_id(self, arxiv_id: str):
         return await self._request(
             f"https://huggingface.co/api/papers/{arxiv_id}",
@@ -303,10 +314,7 @@ class DiscoveryClient:
     async def get_alphaxiv_paper_payload_by_arxiv_id(self, arxiv_id: str):
         return await self._request(
             f"https://api.alphaxiv.org/papers/v3/{arxiv_id}",
-            headers={
-                "Accept": "application/json",
-                "User-Agent": "scripts.ghstars",
-            },
+            headers=self._build_alphaxiv_headers(),
             expect="json",
             retry_prefix="AlphaXiv paper API",
             gate=self._alphaxiv_gate,

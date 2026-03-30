@@ -33,10 +33,12 @@ Copy `.env.example` to `.env` and fill in the variables you need.
 ```bash
 GITHUB_TOKEN=
 HUGGINGFACE_TOKEN=
+ALPHAXIV_TOKEN=
 REPO_DISCOVERY_NO_REPO_RECHECK_DAYS=7
 ```
 
 `HUGGINGFACE_TOKEN` enables both Hugging Face exact repo discovery and the optional single-paper relation-mode title-search fallback.
+`ALPHAXIV_TOKEN` is optional. When set, AlphaXiv paper and overview requests send `Authorization: Bearer <token>`; when empty, they keep using the current anonymous public API behavior.
 
 `cache.db` is created automatically in the current working directory and shared across URL, CSV, and Notion runs.
 `HF_EXACT_NO_REPO_RECHECK_DAYS` is still accepted as a backward-compatible alias, but `REPO_DISCOVERY_NO_REPO_RECHECK_DAYS` is the preferred name.
@@ -84,7 +86,8 @@ CSV update, collection URL export, and single-paper relation export reuse the sa
 - when Hugging Face exact returns no repo, discovery does one AlphaXiv paper lookup before giving up
 - when a row ends with both a canonical arXiv URL and a valid GitHub repo URL, local `overview` / `abs` markdown is ensured under `./cache/overview/<arxiv_id>.md` and `./cache/abs/<arxiv_id>.md`
 - existing local content files are reused; only missing files are fetched
-- overview uses AlphaXiv's public overview API; abs uses AlphaXiv's public paper API
+- overview uses AlphaXiv's overview API; abs uses AlphaXiv's paper API
+- `ALPHAXIV_TOKEN` is optional for both repo discovery and content fetches; without it, the same anonymous AlphaXiv requests are used
 
 ### Cache maintenance
 
