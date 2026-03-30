@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import aiohttp
 
-from src.shared.alphaxiv import find_github_url_in_alphaxiv_html, find_github_url_in_alphaxiv_payload
+from src.shared.alphaxiv import find_github_url_in_alphaxiv_html
 from src.shared.arxiv import normalize_title_for_matching
 from src.shared.github import normalize_github_url
 from src.shared.headless_browser import dump_rendered_html
@@ -87,10 +87,6 @@ def find_github_url_in_huggingface_paper_payload(payload) -> str | None:
         return None
 
     return normalize_github_url(github_url)
-
-
-def find_github_url_in_alphaxiv_paper_payload(payload) -> str | None:
-    return find_github_url_in_alphaxiv_payload(payload)
 
 
 def find_github_url_in_semanticscholar_paper_html(html: str) -> str | None:
@@ -466,7 +462,6 @@ async def resolve_github_url(seed, client) -> str | None:
 async def _resolve_arxiv_backed_repo_via_providers(arxiv_id: str, client) -> tuple[str | None, bool]:
     providers = (
         _discover_repo_from_huggingface_exact,
-        _discover_repo_from_alphaxiv,
         _discover_repo_from_alphaxiv_html,
     )
 
@@ -491,21 +486,6 @@ async def _discover_repo_from_huggingface_exact(arxiv_id: str, client) -> RepoDi
 
     return RepoDiscoveryAttempt(
         github_url=find_github_url_in_huggingface_paper_payload(payload),
-        checked=True,
-    )
-
-
-async def _discover_repo_from_alphaxiv(arxiv_id: str, client) -> RepoDiscoveryAttempt:
-    fetcher = getattr(client, "get_alphaxiv_paper_payload_by_arxiv_id", None)
-    if not callable(fetcher):
-        return RepoDiscoveryAttempt(github_url=None, checked=False)
-
-    payload, error = await fetcher(arxiv_id)
-    if error:
-        return RepoDiscoveryAttempt(github_url=None, checked=False)
-
-    return RepoDiscoveryAttempt(
-        github_url=find_github_url_in_alphaxiv_paper_payload(payload),
         checked=True,
     )
 
