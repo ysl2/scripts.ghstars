@@ -128,3 +128,101 @@ def test_repo_cache_store_migrates_legacy_timestamp_column_name(tmp_path):
     assert entry.last_repo_discovery_checked_at == "2026-03-20T00:00:00+00:00"
     assert "last_repo_discovery_checked_at" in columns
     assert "last_hf_exact_checked_at" not in columns
+
+
+def test_repo_cache_store_reports_positive_and_negative_entry_counts(tmp_path):
+    store = RepoCacheStore(tmp_path / "cache.db")
+    store.record_found_repo("https://arxiv.org/abs/2603.18493", "https://github.com/foo/bar")
+    store.record_discovery_no_repo("https://arxiv.org/abs/2603.18494")
+    store.connection.execute(
+        """
+        INSERT INTO repo_cache (
+            arxiv_url, github_url, created_at, updated_at, last_repo_discovery_checked_at
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            "https://arxiv.org/abs/2603.18495",
+            "",
+            "2026-03-20T00:00:00+00:00",
+            "2026-03-20T00:00:00+00:00",
+            "2026-03-20T00:00:00+00:00",
+        ),
+    )
+    store.connection.commit()
+
+    stats = store.get_stats()
+
+    assert stats.total_entries == 3
+    assert stats.positive_entries == 1
+    assert stats.negative_entries == 2
+
+
+def test_repo_cache_store_delete_negative_entries_removes_only_negative_rows(tmp_path):
+    store = RepoCacheStore(tmp_path / "cache.db")
+    store.record_found_repo("https://arxiv.org/abs/2603.18493", "https://github.com/foo/bar")
+    store.record_discovery_no_repo("https://arxiv.org/abs/2603.18494")
+    store.connection.execute(
+        """
+        INSERT INTO repo_cache (
+            arxiv_url, github_url, created_at, updated_at, last_repo_discovery_checked_at
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            "https://arxiv.org/abs/2603.18495",
+            "",
+            "2026-03-20T00:00:00+00:00",
+            "2026-03-20T00:00:00+00:00",
+            "2026-03-20T00:00:00+00:00",
+        ),
+    )
+    store.connection.commit()
+
+    deleted = store.delete_negative_entries()
+    stats = store.get_stats()
+
+    assert deleted == 2
+    assert store.get("https://arxiv.org/abs/2603.18493") is not None
+    assert store.get("https://arxiv.org/abs/2603.18494") is None
+    assert store.get("https://arxiv.org/abs/2603.18495") is None
+    assert stats.total_entries == 1
+    assert stats.positive_entries == 1
+    assert stats.negative_entries == 0
+
+
+def test_repo_cache_store_counts_and_deletes_only_negative_discovery_cache_entries(tmp_path):
+    store = RepoCacheStore(tmp_path / "cache.db")
+    negative_url = "https://arxiv.org/abs/2603.18493"
+    positive_url = "https://arxiv.org/abs/2603.18494"
+    unchecked_url = "https://arxiv.org/abs/2603.18495"
+
+    store.record_discovery_no_repo(negative_url)
+    store.record_found_repo(positive_url, "https://github.com/foo/bar")
+    store.connection.execute(
+        """
+        INSERT INTO repo_cache (
+            arxiv_url,
+            github_url,
+            created_at,
+            updated_at,
+            last_repo_discovery_checked_at
+        )
+        VALUES (?, NULL, ?, ?, NULL)
+        """,
+        (
+            unchecked_url,
+            "2026-03-20T00:00:00+00:00",
+            "2026-03-20T00:00:00+00:00",
+        ),
+    )
+    store.connection.commit()
+
+    assert store.count_negative_repo_discovery_entries() == 1
+
+    deleted = store.delete_negative_repo_discovery_entries()
+
+    assert deleted == 1
+    assert store.get(negative_url) is None
+    assert store.get(positive_url) is not None
+    assert store.get(positive_url).github_url == "https://github.com/foo/bar"
+    assert store.get(unchecked_url) is not None
+    assert store.count_negative_repo_discovery_entries() == 0

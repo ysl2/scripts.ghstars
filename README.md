@@ -86,6 +86,33 @@ CSV update, collection URL export, and single-paper relation export reuse the sa
 - existing local content files are reused; only missing files are fetched
 - overview uses AlphaXiv's public overview API; abs uses AlphaXiv's public paper API
 
+### Cache maintenance
+
+Use the standalone cache maintenance script when you want to inspect or clear GitHub repo discovery negative cache entries from `cache.db`.
+
+A negative cache entry means:
+
+- `github_url` is `NULL` or blank
+- `last_repo_discovery_checked_at` is non-null
+
+The script is dry-run by default, so it prints how many negative entries would be deleted without changing the database.
+
+```bash
+uv run python cache.py
+```
+
+Delete all negative repo discovery cache entries while keeping positive cache rows:
+
+```bash
+uv run python cache.py --apply
+```
+
+Optional: point at a specific SQLite file instead of the current working directory's `./cache.db`.
+
+```bash
+uv run python cache.py --db /path/to/cache.db --apply
+```
+
 ### Notion mode
 
 Runs the original Notion sync flow.

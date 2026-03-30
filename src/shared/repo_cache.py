@@ -17,6 +17,13 @@ class RepoCacheEntry:
         return self.last_repo_discovery_checked_at
 
 
+@dataclass(frozen=True)
+class RepoCacheStats:
+    total_entries: int
+    positive_entries: int
+    negative_entries: int
+
+
 class RepoCacheStore:
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path).expanduser()
@@ -94,6 +101,61 @@ class RepoCacheStore:
 
     def record_exact_no_repo(self, arxiv_url: str) -> None:
         self.record_discovery_no_repo(arxiv_url)
+
+    def get_stats(self) -> RepoCacheStats:
+        row = self.connection.execute(
+            """
+            SELECT
+                COUNT(*) AS total_entries,
+                SUM(CASE WHEN github_url IS NOT NULL AND TRIM(github_url) <> '' THEN 1 ELSE 0 END) AS positive_entries,
+                SUM(
+                    CASE
+                        WHEN (github_url IS NULL OR TRIM(github_url) = '')
+                         AND last_repo_discovery_checked_at IS NOT NULL THEN 1
+                        ELSE 0
+                    END
+                ) AS negative_entries
+            FROM repo_cache
+            """
+        ).fetchone()
+        return RepoCacheStats(
+            total_entries=int(row["total_entries"] or 0),
+            positive_entries=int(row["positive_entries"] or 0),
+            negative_entries=int(row["negative_entries"] or 0),
+        )
+
+    def delete_negative_entries(self) -> int:
+        cursor = self.connection.execute(
+            """
+            DELETE FROM repo_cache
+            WHERE (github_url IS NULL OR TRIM(github_url) = '')
+              AND last_repo_discovery_checked_at IS NOT NULL
+            """
+        )
+        self.connection.commit()
+        return int(cursor.rowcount)
+
+    def count_negative_repo_discovery_entries(self) -> int:
+        row = self.connection.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM repo_cache
+            WHERE (github_url IS NULL OR TRIM(github_url) = '')
+              AND last_repo_discovery_checked_at IS NOT NULL
+            """
+        ).fetchone()
+        return int(row["count"]) if row is not None else 0
+
+    def delete_negative_repo_discovery_entries(self) -> int:
+        cursor = self.connection.execute(
+            """
+            DELETE FROM repo_cache
+            WHERE (github_url IS NULL OR TRIM(github_url) = '')
+              AND last_repo_discovery_checked_at IS NOT NULL
+            """
+        )
+        self.connection.commit()
+        return int(cursor.rowcount)
 
     def _initialize_schema(self) -> None:
         existing_columns = self._existing_columns()
