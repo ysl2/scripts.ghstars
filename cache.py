@@ -9,7 +9,7 @@ from src.shared.settings import REPO_CACHE_DB_PATH
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Inspect or clear negative GitHub repo discovery cache entries.",
+        description="Inspect or clear negative repo-discovery and relation-resolution cache entries.",
     )
     parser.add_argument(
         "--db",

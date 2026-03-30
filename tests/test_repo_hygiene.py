@@ -24,3 +24,15 @@ def test_alphaxiv_doc_uses_public_paper_endpoint():
 def test_alphaxiv_helper_lives_under_shared_modules():
     assert Path("src/shared/alphaxiv.py").exists()
     assert not Path("src/legacy/alphaxiv.py").exists()
+
+
+def test_no_python_source_files_live_under_src_legacy():
+    legacy_dir = Path("src/legacy")
+    if not legacy_dir.exists():
+        return
+
+    python_files = sorted(
+        path.relative_to(legacy_dir).as_posix()
+        for path in legacy_dir.rglob("*.py")
+    )
+    assert python_files == []

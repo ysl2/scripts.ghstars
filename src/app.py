@@ -53,9 +53,6 @@ def _is_url(raw_value: str) -> bool:
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
-ARXIV_ORG_HOSTS = {"arxiv.org", "www.arxiv.org"}
-
-
 def _is_arxiv_single_paper_url(raw_value: str) -> bool:
     parsed = urlparse(raw_value)
     if parsed.scheme not in {"http", "https"}:

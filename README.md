@@ -11,7 +11,7 @@ Repository discovery for arXiv-backed papers now uses:
 
 - shared `./cache.db` in the current working directory first
 - Hugging Face exact API `GET /api/papers/{arxiv_id}` on cache miss
-- AlphaXiv paper API on Hugging Face exact misses
+- AlphaXiv paper page HTML on Hugging Face exact misses
 - no additional search fallback for GitHub repo discovery
 
 GitHub and star lookup use normalized, versionless arXiv URLs as the paper identity.
@@ -38,7 +38,7 @@ REPO_DISCOVERY_NO_REPO_RECHECK_DAYS=7
 ```
 
 `HUGGINGFACE_TOKEN` enables both Hugging Face exact repo discovery and the optional single-paper relation-mode title-search fallback.
-`ALPHAXIV_TOKEN` is optional. When set, AlphaXiv paper and overview requests send `Authorization: Bearer <token>`; when empty, they keep using the current anonymous public API behavior.
+`ALPHAXIV_TOKEN` is optional. When set, AlphaXiv page fetches and API requests send `Authorization: Bearer <token>`; when empty, they keep using the current anonymous public behavior.
 
 `cache.db` is created automatically in the current working directory and shared across URL, CSV, and Notion runs.
 `HF_EXACT_NO_REPO_RECHECK_DAYS` is still accepted as a backward-compatible alias, but `REPO_DISCOVERY_NO_REPO_RECHECK_DAYS` is the preferred name.
@@ -83,7 +83,7 @@ DATABASE_ID=
 CSV update, collection URL export, and single-paper relation export reuse the same downstream enrichment path once a row has a canonical arXiv URL.
 
 - GitHub discovery checks `cache.db` first, then does one Hugging Face exact lookup on cache miss when discovery is allowed
-- when Hugging Face exact returns no repo, discovery does one AlphaXiv paper lookup before giving up
+- when Hugging Face exact returns no repo, discovery does one AlphaXiv paper-page HTML lookup before giving up
 - when a row ends with both a canonical arXiv URL and a valid GitHub repo URL, local `overview` / `abs` markdown is ensured under `./cache/overview/<arxiv_id>.md` and `./cache/abs/<arxiv_id>.md`
 - existing local content files are reused; only missing files are fetched
 - overview uses AlphaXiv's overview API; abs uses AlphaXiv's paper API
@@ -91,7 +91,7 @@ CSV update, collection URL export, and single-paper relation export reuse the sa
 
 ### Cache maintenance
 
-Use the standalone cache maintenance script when you want to inspect or clear GitHub repo discovery negative cache entries from `cache.db`.
+Use the standalone cache maintenance script when you want to inspect or clear negative cache entries from `cache.db`.
 
 A negative cache entry means:
 
@@ -106,19 +106,19 @@ It clears both negative cache families together:
 - URL-normalization negatives in `relation_resolution_cache`
 
 ```bash
-uv run python cache.py
+uv run cache.py
 ```
 
 Delete all negative cache entries while keeping positive cache rows:
 
 ```bash
-uv run python cache.py --apply
+uv run cache.py --apply
 ```
 
 Optional: point at a specific SQLite file instead of the current working directory's `./cache.db`.
 
 ```bash
-uv run python cache.py --db /path/to/cache.db --apply
+uv run cache.py --db /path/to/cache.db --apply
 ```
 
 ### Notion mode
@@ -140,11 +140,11 @@ uv run main.py /path/to/papers.csv
 CSV mode behavior:
 
 - if `Url` is already an arXiv URL, it is preserved exactly as-is
-- if `Url` is non-arXiv, the shared resolver first tries explicit DOI/OpenAlex metadata crosswalks and then title-based fallback to normalize it to arXiv when possible
+- if `Url` is non-arXiv, the shared resolver uses `cache -> OpenAlex exact -> arXiv HTML title search -> Crossref -> DataCite` to normalize it to arXiv when possible
 - requires `Url`; `Name` is optional
 - if `Github` is already present and valid, its exact value is preserved and only `Stars` is refreshed
 - if `Github` is blank, discovery checks `cache.db` first, then does one Hugging Face exact lookup on cache miss
-- if Hugging Face exact returns no repo, discovery does one AlphaXiv paper lookup before leaving `Github` blank
+- if Hugging Face exact returns no repo, discovery does one AlphaXiv paper-page HTML lookup before leaving `Github` blank
 - missing `Github` or `Stars` columns are added automatically at the end of the CSV
 - existing custom columns are left untouched, including any preexisting `Overview` / `Abs` columns
 - current CSV mode does not write content-cache paths back into the CSV
@@ -287,9 +287,10 @@ URL mode behavior:
 - Hugging Face Papers parses the collection page’s embedded papers payload from the frontend response
 - Semantic Scholar crawls the search result pages, then keeps only rows that can be normalized to canonical arXiv URLs
 - Semantic Scholar crawling requires a working local Chrome/Chromium binary as described above
-- all URL modes normalize rows to canonical, versionless arXiv URLs before downstream enrichment
+- URL modes use canonical, versionless arXiv URLs as internal identity and dedupe keys during downstream enrichment; existing arXiv URLs are preserved as-is in the final CSV, while non-arXiv rows are rewritten only when they are resolved to arXiv
 - rows that cannot be mapped to arXiv are dropped from the final CSV
 - repo discovery reuses the shared `cache.db` mapping of canonical arXiv URL to GitHub repo
+- the shared resolver uses `cache -> OpenAlex exact -> arXiv HTML title search -> Crossref -> DataCite` for non-arXiv rows before downstream repo discovery
 - downstream repository discovery, star lookup, sorting, progress printing, and CSV writing reuse the same shared export logic as CSV update mode where applicable
 
 ### Single-paper arXiv relation export mode
@@ -371,11 +372,11 @@ Optional arXiv source fields for fallback discovery:
 
 When `Github` is empty, the sync flow:
 
-1. resolves the paper to a canonical arXiv URL from URL fields first, then title search fallback
+1. resolves the paper to a canonical arXiv URL from URL fields first; for non-arXiv URLs, the shared resolver uses `cache -> OpenAlex exact -> arXiv HTML title search -> Crossref -> DataCite`
 2. uses that canonical arXiv URL as the paper identity for repo discovery and stars lookup
 3. checks `cache.db` for that canonical arXiv URL
 4. if needed, calls Hugging Face exact paper API for that arXiv id
-5. if Hugging Face exact misses, calls AlphaXiv paper API for the same arXiv id
+5. if Hugging Face exact misses, fetches the AlphaXiv paper page HTML for the same arXiv id
 6. stores confirmed repos in `cache.db`
 
 When the full arXiv repo-discovery chain completes successfully but finds no repo, the cache stores the successful check timestamp.
