@@ -258,23 +258,18 @@ These rules are cross-cutting. Preserve them when modifying any mode.
 
 - `ARCHITECTURE.md`
   Current runtime structure, shared rules, and extension guidance.
+- `docs/README.md`
+  Boundary map for current docs versus historical plans/specs.
 
-### Design records
-
-- `docs/superpowers/specs/`
-  Accepted design documents used to reason about larger changes.
-- `docs/superpowers/plans/`
-  Implementation plans for those changes.
-
-These are useful for rationale and change history, but they are not the final authority on current runtime behavior.
-
-### Historical / ad hoc docs
+### Historical docs and design records
 
 - `docs/plans/`
+- `docs/superpowers/plans/`
+- `docs/superpowers/specs/`
 - `docs/huggingface.md`
 - `docs/find_alphaxiv_github.sh`
 
-Treat these as historical notes, experiments, or migration-era materials unless they are explicitly brought back into active maintenance.
+Treat these as design history, research notes, or migration-era materials unless they are explicitly brought back into active maintenance. They are useful context, but not the primary source of truth for current runtime behavior.
 
 ## Safe Extension Points
 

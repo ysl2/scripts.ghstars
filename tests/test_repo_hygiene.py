@@ -36,3 +36,22 @@ def test_no_python_source_files_live_under_src_legacy():
         for path in legacy_dir.rglob("*.py")
     )
     assert python_files == []
+
+
+def test_docs_readme_explains_current_vs_historical_docs():
+    docs_readme = Path("docs/README.md")
+
+    assert docs_readme.exists()
+
+    content = docs_readme.read_text(encoding="utf-8")
+    assert "README.md" in content
+    assert "ARCHITECTURE.md" in content
+    assert "historical" in content.lower()
+
+
+def test_orphan_readme_asset_is_removed():
+    assert not Path(".assets/README/img/2026-03-01-16-02-06.png").exists()
+
+
+def test_src_legacy_directory_is_absent():
+    assert not Path("src/legacy").exists()
