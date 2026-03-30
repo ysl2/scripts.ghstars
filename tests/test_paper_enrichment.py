@@ -42,7 +42,8 @@ async def test_process_single_paper_prefers_existing_valid_github_and_warms_cont
 
     assert result.title == "Paper A"
     assert result.raw_url == "https://arxiv.org/pdf/2603.20000v2.pdf"
-    assert result.normalized_url == "https://arxiv.org/abs/2603.20000"
+    assert result.normalized_url == "https://arxiv.org/pdf/2603.20000v2.pdf"
+    assert result.canonical_arxiv_url == "https://arxiv.org/abs/2603.20000"
     assert result.github_url == "https://github.com/foo/bar"
     assert result.github_source == "existing"
     assert result.stars == 17
@@ -71,7 +72,8 @@ async def test_process_single_paper_discovers_github_when_allowed():
         github_client=github_client,
     )
 
-    assert result.normalized_url == "https://arxiv.org/abs/2603.10000"
+    assert result.normalized_url == "https://arxiv.org/abs/2603.10000v3"
+    assert result.canonical_arxiv_url == "https://arxiv.org/abs/2603.10000"
     assert result.github_url == "https://github.com/foo/discovered"
     assert result.github_source == "discovered"
     assert result.stars == 42
@@ -146,7 +148,8 @@ async def test_process_single_paper_reports_discovery_miss():
         content_cache=content_cache,
     )
 
-    assert result.normalized_url == "https://arxiv.org/abs/2603.10003"
+    assert result.normalized_url == "https://arxiv.org/abs/2603.10003v1"
+    assert result.canonical_arxiv_url == "https://arxiv.org/abs/2603.10003"
     assert result.github_url is None
     assert result.reason == "No Github URL found from discovery"
     assert content_cache.calls == []
@@ -180,6 +183,7 @@ async def test_process_single_paper_respects_title_search_flag(allow_title_searc
 
     if allow_title_search:
         assert result.normalized_url == "https://arxiv.org/abs/2603.10004"
+        assert result.canonical_arxiv_url == "https://arxiv.org/abs/2603.10004"
         assert result.github_url == "https://github.com/foo/from-title"
         assert result.reason is None
         discovery_client.resolve_github_url.assert_awaited_once()
@@ -277,3 +281,49 @@ async def test_process_single_paper_keeps_repo_and_stars_when_no_canonical_arxiv
     assert result.reason is None
     assert content_cache.calls == []
     github_client.get_star_count.assert_awaited_once_with("foo", "bar")
+
+
+@pytest.mark.anyio
+async def test_process_single_paper_resolves_doi_via_openalex_before_github_discovery():
+    github_client = types.SimpleNamespace(get_star_count=AsyncMock(return_value=(5, None)))
+    content_cache = RecordingContentCache()
+
+    class FakeDiscoveryClient:
+        def __init__(self):
+            self.seen_urls: list[str] = []
+
+        async def resolve_github_url(self, seed):
+            self.seen_urls.append(seed.url)
+            return "https://github.com/foo/from-doi"
+
+    discovery_client = FakeDiscoveryClient()
+    openalex_client = types.SimpleNamespace(
+        find_preprint_match_by_identifier=AsyncMock(
+            return_value=("https://arxiv.org/abs/2501.12345", "Mapped Arxiv Title")
+        )
+    )
+
+    result = await process_single_paper(
+        PaperEnrichmentRequest(
+            title="Published DOI Paper",
+            raw_url="https://doi.org/10.1007/978-3-031-72933-1_9",
+            existing_github_url="",
+            allow_title_search=False,
+            allow_github_discovery=True,
+        ),
+        discovery_client=discovery_client,
+        github_client=github_client,
+        openalex_client=openalex_client,
+        content_cache=content_cache,
+    )
+
+    assert result.normalized_url == "https://arxiv.org/abs/2501.12345"
+    assert result.canonical_arxiv_url == "https://arxiv.org/abs/2501.12345"
+    assert result.github_url == "https://github.com/foo/from-doi"
+    assert result.reason is None
+    assert discovery_client.seen_urls == ["https://arxiv.org/abs/2501.12345"]
+    assert content_cache.calls == ["https://arxiv.org/abs/2501.12345"]
+    openalex_client.find_preprint_match_by_identifier.assert_awaited_once_with(
+        "https://doi.org/10.1007/978-3-031-72933-1_9",
+        title="Published DOI Paper",
+    )

@@ -100,11 +100,16 @@ A negative cache entry means:
 
 The script is dry-run by default, so it prints how many negative entries would be deleted without changing the database.
 
+It clears both negative cache families together:
+
+- GitHub repo discovery negatives in `repo_cache`
+- URL-normalization negatives in `relation_resolution_cache`
+
 ```bash
 uv run python cache.py
 ```
 
-Delete all negative repo discovery cache entries while keeping positive cache rows:
+Delete all negative cache entries while keeping positive cache rows:
 
 ```bash
 uv run python cache.py --apply
@@ -134,9 +139,10 @@ uv run main.py /path/to/papers.csv
 
 CSV mode behavior:
 
-- uses canonical arXiv `Url` as the paper identity
+- if `Url` is already an arXiv URL, it is preserved exactly as-is
+- if `Url` is non-arXiv, the shared resolver first tries explicit DOI/OpenAlex metadata crosswalks and then title-based fallback to normalize it to arXiv when possible
 - requires `Url`; `Name` is optional
-- if `Github` is already present and valid, only `Stars` is refreshed
+- if `Github` is already present and valid, its exact value is preserved and only `Stars` is refreshed
 - if `Github` is blank, discovery checks `cache.db` first, then does one Hugging Face exact lookup on cache miss
 - if Hugging Face exact returns no repo, discovery does one AlphaXiv paper lookup before leaving `Github` blank
 - missing `Github` or `Stars` columns are added automatically at the end of the CSV

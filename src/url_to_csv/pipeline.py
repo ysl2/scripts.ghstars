@@ -1,9 +1,9 @@
 from pathlib import Path
 
 from src.shared.async_batch import iter_bounded_as_completed, resolve_worker_count
-from src.shared.discovery import resolve_arxiv_id_by_title
+from src.shared.arxiv_url_resolution import resolve_arxiv_url
 from src.shared.paper_export import export_paper_seeds_to_csv
-from src.shared.paper_identity import build_arxiv_abs_url, extract_arxiv_id, normalize_arxiv_url
+from src.shared.paper_identity import extract_arxiv_id
 from src.shared.papers import PaperSeed
 from src.url_to_csv.arxivxplorer import (
     fetch_paper_seeds_from_arxivxplorer_url,
@@ -30,6 +30,9 @@ async def fetch_paper_seeds_from_url(
     semanticscholar_client=None,
     discovery_client=None,
     arxiv_client=None,
+    openalex_client=None,
+    relation_resolution_cache=None,
+    arxiv_relation_no_arxiv_recheck_days: int = 30,
     output_dir: Path | None = None,
     status_callback=None,
 ) -> FetchedSeedsResult:
@@ -78,6 +81,9 @@ async def fetch_paper_seeds_from_url(
         fetched.seeds,
         discovery_client=discovery_client,
         arxiv_client=arxiv_client,
+        openalex_client=openalex_client,
+        relation_resolution_cache=relation_resolution_cache,
+        arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
         status_callback=status_callback,
     )
     return FetchedSeedsResult(seeds=normalized_seeds, csv_path=fetched.csv_path)
@@ -91,9 +97,12 @@ async def export_url_to_csv(
     huggingface_papers_client=None,
     semanticscholar_client=None,
     arxiv_client=None,
+    openalex_client=None,
     discovery_client,
     github_client,
     content_cache=None,
+    relation_resolution_cache=None,
+    arxiv_relation_no_arxiv_recheck_days: int = 30,
     output_dir: Path | None = None,
     status_callback=None,
     progress_callback=None,
@@ -106,6 +115,9 @@ async def export_url_to_csv(
         semanticscholar_client=semanticscholar_client,
         discovery_client=discovery_client,
         arxiv_client=arxiv_client,
+        openalex_client=openalex_client,
+        relation_resolution_cache=relation_resolution_cache,
+        arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
         output_dir=output_dir,
         status_callback=status_callback,
     )
@@ -125,6 +137,9 @@ async def normalize_paper_seeds_to_arxiv(
     *,
     discovery_client=None,
     arxiv_client=None,
+    openalex_client=None,
+    relation_resolution_cache=None,
+    arxiv_relation_no_arxiv_recheck_days: int = 30,
     status_callback=None,
 ) -> list[PaperSeed]:
     total = len(seeds)
@@ -133,32 +148,36 @@ async def normalize_paper_seeds_to_arxiv(
     if needs_resolution and callable(status_callback):
         status_callback("🔎 Normalizing to arXiv-backed papers")
 
-    resolved: list[PaperSeed | None] = [None] * total
+    resolved: list[tuple[PaperSeed | None, str | None]] = [(None, None)] * total
 
-    async def normalize_seed(item: tuple[int, PaperSeed]) -> tuple[int, PaperSeed | None]:
+    async def normalize_seed(item: tuple[int, PaperSeed]) -> tuple[int, PaperSeed | None, str | None]:
         index, seed = item
-        normalized = await _normalize_seed_to_arxiv(
+        normalized, canonical_arxiv_url = await _normalize_seed_to_arxiv(
             seed,
             discovery_client=discovery_client,
             arxiv_client=arxiv_client,
+            openalex_client=openalex_client,
+            relation_resolution_cache=relation_resolution_cache,
+            arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
         )
-        return index, normalized
+        return index, normalized, canonical_arxiv_url
 
-    async for index, normalized_seed in iter_bounded_as_completed(
+    async for index, normalized_seed, canonical_arxiv_url in iter_bounded_as_completed(
         enumerate(seeds),
         normalize_seed,
         max_concurrent=worker_count,
     ):
-        resolved[index] = normalized_seed
+        resolved[index] = (normalized_seed, canonical_arxiv_url)
 
     output: list[PaperSeed] = []
     seen_urls: set[str] = set()
-    for seed in resolved:
+    for seed, canonical_arxiv_url in resolved:
         if seed is None:
             continue
-        if seed.url in seen_urls:
+        dedupe_key = canonical_arxiv_url or seed.url
+        if dedupe_key in seen_urls:
             continue
-        seen_urls.add(seed.url)
+        seen_urls.add(dedupe_key)
         output.append(seed)
 
     if needs_resolution and callable(status_callback):
@@ -172,16 +191,20 @@ async def _normalize_seed_to_arxiv(
     *,
     discovery_client=None,
     arxiv_client=None,
-) -> PaperSeed | None:
-    normalized_url = normalize_arxiv_url(seed.url)
-    if normalized_url:
-        return PaperSeed(name=seed.name, url=normalized_url)
-
-    arxiv_id, _source, _error = await resolve_arxiv_id_by_title(
+    openalex_client=None,
+    relation_resolution_cache=None,
+    arxiv_relation_no_arxiv_recheck_days: int = 30,
+) -> tuple[PaperSeed | None, str | None]:
+    resolution = await resolve_arxiv_url(
         seed.name,
+        seed.url,
         discovery_client=discovery_client,
         arxiv_client=arxiv_client,
+        openalex_client=openalex_client,
+        relation_resolution_cache=relation_resolution_cache,
+        arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
+        allow_title_search=True,
     )
-    if not arxiv_id:
-        return None
-    return PaperSeed(name=seed.name, url=build_arxiv_abs_url(arxiv_id))
+    if not resolution.canonical_arxiv_url:
+        return None, None
+    return PaperSeed(name=seed.name, url=resolution.resolved_url or resolution.canonical_arxiv_url), resolution.canonical_arxiv_url

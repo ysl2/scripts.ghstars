@@ -10,7 +10,12 @@ import aiohttp
 
 from src.shared.arxiv import normalize_title_for_matching
 from src.shared.http import MAX_RETRIES, RateLimiter
-from src.shared.paper_identity import build_arxiv_abs_url, normalize_arxiv_url
+from src.shared.paper_identity import (
+    build_arxiv_abs_url,
+    normalize_arxiv_url,
+    normalize_doi_url,
+    normalize_openalex_work_url,
+)
 from src.shared.papers import PaperSeed
 
 
@@ -67,6 +72,50 @@ class OpenAlexClient:
         payload = await self._get_json(OPENALEX_WORKS_URL, params=params)
         results = payload.get("results") or []
         return results[0] if results else None
+
+    async def fetch_work_by_identifier(self, identifier: str) -> dict[str, Any] | None:
+        normalized_openalex_url = normalize_openalex_work_url(identifier)
+        normalized_doi_url = normalize_doi_url(identifier)
+
+        if normalized_openalex_url:
+            work_id = self._extract_work_id(normalized_openalex_url)
+            if not work_id:
+                return None
+            payload = await self._get_json(
+                f"{OPENALEX_WORKS_URL}/{work_id}",
+                params={"select": OPENALEX_RELATION_WORK_SELECT},
+            )
+            return payload if isinstance(payload, dict) else None
+
+        if normalized_doi_url:
+            payload = await self._get_json(
+                f"{OPENALEX_WORKS_URL}/{normalized_doi_url}",
+                params={"select": OPENALEX_RELATION_WORK_SELECT},
+            )
+            return payload if isinstance(payload, dict) else None
+
+        return None
+
+    async def find_preprint_match_by_identifier(
+        self,
+        identifier: str,
+        *,
+        title: str | None = None,
+    ) -> tuple[str | None, str | None]:
+        work = await self.fetch_work_by_identifier(identifier)
+        if not isinstance(work, dict):
+            return None, None
+
+        direct_arxiv_url = self._canonical_arxiv_url(work)
+        resolved_title = " ".join(str(work.get("display_name") or work.get("title") or title or "").split()).strip()
+        if direct_arxiv_url:
+            return direct_arxiv_url, resolved_title or title
+
+        search_title = " ".join(str(title or resolved_title).split()).strip()
+        if not search_title:
+            return None, resolved_title or None
+
+        return await self.find_related_work_preprint_match(work, title=search_title)
 
     async def find_related_work_preprint_match(
         self,

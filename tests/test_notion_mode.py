@@ -8,6 +8,7 @@ import src.notion_sync.runner as notion_runner
 from src.notion_sync.config import load_config_from_env
 from src.notion_sync.notion_client import NotionClient
 from src.notion_sync.pipeline import (
+    build_page_enrichment_request,
     classify_github_value,
     get_current_stars_from_page,
     get_github_url_from_page,
@@ -42,6 +43,7 @@ def test_load_config_accepts_env_values():
         "huggingface_token": "hf_test",
         "alphaxiv_token": "ax_token",
         "openalex_api_key": "",
+        "arxiv_relation_no_arxiv_recheck_days": 30,
         "repo_discovery_no_repo_recheck_days": 7,
     }
 
@@ -82,6 +84,26 @@ def test_classify_github_value_covers_expected_states():
     assert classify_github_value("WIP") == "other"
     assert classify_github_value("https://github.com/foo/bar") == "valid_github"
     assert classify_github_value("https://example.com/project") == "other"
+
+
+def test_build_page_enrichment_request_preserves_non_arxiv_raw_url_for_shared_normalization():
+    page = {
+        "id": "page-1",
+        "url": "https://notion.so/page-1",
+        "properties": {
+            "Name": {"type": "title", "title": [{"plain_text": "DOI Paper"}]},
+            "Github": {"type": "url", "url": None},
+            "URL": {"type": "url", "url": "https://doi.org/10.1007/978-3-031-72933-1_9"},
+        },
+    }
+
+    request, needs_github_update, reason = build_page_enrichment_request(page)
+
+    assert reason is None
+    assert needs_github_update is True
+    assert request is not None
+    assert request.raw_url == "https://doi.org/10.1007/978-3-031-72933-1_9"
+    assert request.allow_title_search is True
 
 
 @pytest.mark.anyio

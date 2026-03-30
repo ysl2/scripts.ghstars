@@ -4,6 +4,7 @@ import html
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -367,7 +368,8 @@ async def test_normalize_paper_seeds_to_arxiv_limits_started_tasks_to_worker_cou
     async def fake_normalize_seed_to_arxiv(seed, **kwargs):
         started.append(int(seed.name.split()[-1]))
         await release.wait()
-        return PaperSeed(name=seed.name, url=f"https://arxiv.org/abs/2501.0000{seed.name.split()[-1]}")
+        url = f"https://arxiv.org/abs/2501.0000{seed.name.split()[-1]}"
+        return PaperSeed(name=seed.name, url=url), url
 
     monkeypatch.setattr(url_pipeline, "_normalize_seed_to_arxiv", fake_normalize_seed_to_arxiv)
 
@@ -396,6 +398,42 @@ async def test_normalize_paper_seeds_to_arxiv_limits_started_tasks_to_worker_cou
         "https://arxiv.org/abs/2501.00004",
         "https://arxiv.org/abs/2501.00005",
     ]
+
+
+@pytest.mark.anyio
+async def test_normalize_paper_seeds_to_arxiv_preserves_existing_arxiv_urls_exactly():
+    seeds = [PaperSeed(name="Paper A", url="https://arxiv.org/pdf/2501.00001v2.pdf")]
+
+    resolved = await normalize_paper_seeds_to_arxiv(
+        seeds,
+        discovery_client=SimpleNamespace(huggingface_token=""),
+        arxiv_client=SimpleNamespace(get_arxiv_id_by_title=AsyncMock()),
+    )
+
+    assert resolved == [PaperSeed(name="Paper A", url="https://arxiv.org/pdf/2501.00001v2.pdf")]
+
+
+@pytest.mark.anyio
+async def test_normalize_paper_seeds_to_arxiv_rewrites_doi_via_openalex_crosswalk():
+    seeds = [PaperSeed(name="Published Paper", url="https://doi.org/10.1007/978-3-031-72933-1_9")]
+    openalex_client = SimpleNamespace(
+        find_preprint_match_by_identifier=AsyncMock(
+            return_value=("https://arxiv.org/abs/2501.12345", "Mapped Arxiv Title")
+        )
+    )
+
+    resolved = await normalize_paper_seeds_to_arxiv(
+        seeds,
+        discovery_client=SimpleNamespace(huggingface_token=""),
+        arxiv_client=SimpleNamespace(get_arxiv_id_by_title=AsyncMock()),
+        openalex_client=openalex_client,
+    )
+
+    assert resolved == [PaperSeed(name="Published Paper", url="https://arxiv.org/abs/2501.12345")]
+    openalex_client.find_preprint_match_by_identifier.assert_awaited_once_with(
+        "https://doi.org/10.1007/978-3-031-72933-1_9",
+        title="Published Paper",
+    )
 
 
 @pytest.mark.anyio
@@ -731,9 +769,12 @@ async def test_run_url_mode_builds_and_passes_content_cache(tmp_path: Path, monk
         huggingface_papers_client=None,
         semanticscholar_client=None,
         arxiv_client=None,
+        openalex_client=None,
         discovery_client,
         github_client,
         content_cache=None,
+        relation_resolution_cache=None,
+        arxiv_relation_no_arxiv_recheck_days=30,
         output_dir=None,
         status_callback=None,
         progress_callback=None,

@@ -3,6 +3,7 @@ import csv
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -83,7 +84,7 @@ async def test_update_csv_file_updates_rows_in_place_preserving_columns_and_orde
     assert rows == [
         {
             "Name": "Keep Github",
-            "Url": "https://arxiv.org/abs/2603.20000",
+            "Url": "https://arxiv.org/abs/2603.20000v2",
             "Notes": "note-1",
             "Github": "https://github.com/foo/existing",
             "Stars": "99",
@@ -91,7 +92,7 @@ async def test_update_csv_file_updates_rows_in_place_preserving_columns_and_orde
         },
         {
             "Name": "Discover Github",
-            "Url": "https://arxiv.org/abs/2603.10000",
+            "Url": "https://arxiv.org/pdf/2603.10000v1.pdf",
             "Notes": "note-2",
             "Github": "https://github.com/foo/discovered",
             "Stars": "42",
@@ -109,6 +110,58 @@ async def test_update_csv_file_updates_rows_in_place_preserving_columns_and_orde
     assert content_cache.calls == [
         "https://arxiv.org/abs/2603.20000",
         "https://arxiv.org/abs/2603.10000",
+    ]
+
+
+@pytest.mark.anyio
+async def test_update_csv_file_rewrites_doi_to_arxiv_when_openalex_crosswalk_resolves_it(tmp_path: Path):
+    csv_path = tmp_path / "papers.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "Name,Url,Github,Stars",
+                "DOI Paper,https://doi.org/10.1007/978-3-031-72933-1_9,,",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    openalex_client = SimpleNamespace(
+        find_preprint_match_by_identifier=AsyncMock(
+            return_value=("https://arxiv.org/abs/2501.12345", "Mapped Arxiv Title")
+        )
+    )
+
+    class FakeDiscoveryClient:
+        async def resolve_github_url(self, seed):
+            assert seed.url == "https://arxiv.org/abs/2501.12345"
+            return "https://github.com/foo/bar"
+
+    class FakeGitHubClient:
+        async def get_star_count(self, owner, repo):
+            assert (owner, repo) == ("foo", "bar")
+            return 7, None
+
+    result = await update_csv_file(
+        csv_path,
+        discovery_client=FakeDiscoveryClient(),
+        github_client=FakeGitHubClient(),
+        openalex_client=openalex_client,
+        content_cache=FakeContentCache(),
+    )
+
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert result.updated == 1
+    assert rows == [
+        {
+            "Name": "DOI Paper",
+            "Url": "https://arxiv.org/abs/2501.12345",
+            "Github": "https://github.com/foo/bar",
+            "Stars": "7",
+        }
     ]
 
 
@@ -156,7 +209,7 @@ async def test_update_csv_file_appends_missing_github_and_stars_columns_at_the_e
     assert rows == [
         {
             "Name": "Paper A",
-            "Url": "https://arxiv.org/abs/2603.30000",
+            "Url": "https://arxiv.org/abs/2603.30000v1",
             "Notes": "note-a",
             "Github": "https://github.com/foo/bar",
             "Stars": "7",
@@ -241,7 +294,7 @@ async def test_update_csv_file_allows_missing_name_column_when_url_exists(tmp_pa
     assert result.updated == 1
     assert rows == [
         {
-            "Url": "https://arxiv.org/abs/2603.30000",
+            "Url": "https://arxiv.org/abs/2603.30000v1",
             "Notes": "note-a",
             "Github": "https://github.com/foo/bar",
             "Stars": "7",
@@ -288,7 +341,7 @@ async def test_update_csv_file_fills_blank_stars_for_existing_github_without_add
     assert rows == [
         {
             "Name": "Paper A",
-            "Url": "https://arxiv.org/abs/2603.20000",
+            "Url": "https://arxiv.org/abs/2603.20000v2",
             "Github": "https://github.com/foo/bar",
             "Stars": "11",
         }
@@ -334,7 +387,7 @@ async def test_update_csv_file_skips_content_updates_when_github_discovery_misse
     assert rows == [
         {
             "Name": "Paper A",
-            "Url": "https://arxiv.org/abs/2603.20000",
+            "Url": "https://arxiv.org/abs/2603.20000v2",
             "Github": "",
             "Stars": "",
         }
@@ -483,7 +536,7 @@ async def test_update_csv_file_leaves_preexisting_overview_and_abs_columns_uncha
     assert rows == [
         {
             "Name": "Paper A",
-            "Url": "https://arxiv.org/abs/2603.30000",
+            "Url": "https://arxiv.org/abs/2603.30000v1",
             "Overview": "old-overview.md",
             "Abs": "old-abs.md",
             "Github": "https://github.com/foo/bar",
@@ -630,7 +683,7 @@ async def test_run_csv_mode_prints_progress_updates_file_and_writes_cached_markd
     assert rows == [
         {
             "Name": "Paper A",
-            "Url": "https://arxiv.org/abs/2603.20000",
+            "Url": "https://arxiv.org/abs/2603.20000v2",
             "Github": "https://github.com/foo/bar",
             "Stars": "11",
         }

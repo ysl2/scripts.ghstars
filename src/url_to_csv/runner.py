@@ -8,6 +8,7 @@ from src.shared.alphaxiv_content import AlphaXivContentClient
 from src.shared.arxiv import ArxivClient
 from src.shared.discovery import DiscoveryClient
 from src.shared.github import GitHubClient
+from src.shared.openalex import OpenAlexClient
 from src.shared.paper_content import PaperContentCache
 from src.shared.progress import print_paper_progress, print_summary
 from src.shared.runtime import build_client, load_runtime_config, open_runtime_clients
@@ -37,6 +38,7 @@ async def run_url_mode(
     semanticscholar_client_cls=SemanticScholarSearchClient,
     discovery_client_cls=DiscoveryClient,
     github_client_cls=GitHubClient,
+    openalex_client_cls=OpenAlexClient,
     content_client_cls=AlphaXivContentClient,
     content_cache_root: Path | str | None = None,
 ) -> int:
@@ -52,6 +54,7 @@ async def run_url_mode(
         github_client_cls=github_client_cls,
         concurrent_limit=CONCURRENT_LIMIT,
         request_delay=REQUEST_DELAY,
+        enable_relation_resolution_cache=True,
     ) as runtime:
         arxiv_client = build_client(
             arxiv_client_cls,
@@ -83,6 +86,13 @@ async def run_url_mode(
             max_concurrent=CONCURRENT_LIMIT,
             min_interval=REQUEST_DELAY,
         )
+        openalex_client = build_client(
+            openalex_client_cls,
+            runtime.session,
+            openalex_api_key=config["openalex_api_key"],
+            max_concurrent=CONCURRENT_LIMIT,
+            min_interval=REQUEST_DELAY,
+        )
         content_client = build_client(
             content_client_cls,
             runtime.session,
@@ -103,9 +113,12 @@ async def run_url_mode(
             huggingface_papers_client=huggingface_papers_client,
             semanticscholar_client=semanticscholar_client,
             arxiv_client=arxiv_client,
+            openalex_client=openalex_client,
             discovery_client=runtime.discovery_client,
             github_client=runtime.github_client,
             content_cache=content_cache,
+            relation_resolution_cache=runtime.relation_resolution_cache,
+            arxiv_relation_no_arxiv_recheck_days=config["arxiv_relation_no_arxiv_recheck_days"],
             status_callback=lambda message: print(message, flush=True),
             progress_callback=lambda outcome, total: print_paper_progress(
                 outcome,

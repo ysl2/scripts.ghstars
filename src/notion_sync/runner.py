@@ -11,6 +11,7 @@ from src.shared.arxiv import ArxivClient
 from src.shared.async_batch import iter_bounded_as_completed
 from src.shared.discovery import DiscoveryClient
 from src.shared.github import GitHubClient, resolve_github_min_interval
+from src.shared.openalex import OpenAlexClient
 from src.shared.paper_content import PaperContentCache
 from src.shared.progress import Colors, colored, print_summary
 from src.shared.runtime import build_client, open_runtime_clients
@@ -32,6 +33,7 @@ async def run_notion_mode(
     arxiv_client_cls=ArxivClient,
     discovery_client_cls=DiscoveryClient,
     github_client_cls=GitHubClient,
+    openalex_client_cls=OpenAlexClient,
     notion_client_cls=NotionClient,
     content_client_cls=AlphaXivContentClient,
 ) -> int:
@@ -57,10 +59,18 @@ async def run_notion_mode(
         concurrent_limit=CONCURRENT_LIMIT,
         request_delay=REQUEST_DELAY,
         github_min_interval=github_request_delay,
+        enable_relation_resolution_cache=True,
     ) as runtime:
         arxiv_client = arxiv_client_cls(
             runtime.session,
             max_concurrent=ARXIV_CONCURRENT_LIMIT,
+            min_interval=REQUEST_DELAY,
+        )
+        openalex_client = build_client(
+            openalex_client_cls,
+            runtime.session,
+            openalex_api_key=config["openalex_api_key"],
+            max_concurrent=CONCURRENT_LIMIT,
             min_interval=REQUEST_DELAY,
         )
         content_client = build_client(
@@ -102,7 +112,10 @@ async def run_notion_mode(
                     results=results,
                     lock=lock,
                     arxiv_client=arxiv_client,
+                    openalex_client=openalex_client,
                     content_cache=content_cache,
+                    relation_resolution_cache=runtime.relation_resolution_cache,
+                    arxiv_relation_no_arxiv_recheck_days=config["arxiv_relation_no_arxiv_recheck_days"],
                 )
 
             async for _ in iter_bounded_as_completed(

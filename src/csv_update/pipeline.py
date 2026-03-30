@@ -37,7 +37,10 @@ async def update_csv_file(
     *,
     discovery_client,
     github_client,
+    openalex_client=None,
     content_cache=None,
+    relation_resolution_cache=None,
+    arxiv_relation_no_arxiv_recheck_days: int = 30,
     status_callback=None,
     progress_callback=None,
 ) -> CsvUpdateResult:
@@ -59,7 +62,10 @@ async def update_csv_file(
             row,
             discovery_client=discovery_client,
             github_client=github_client,
+            openalex_client=openalex_client,
             content_cache=content_cache,
+            relation_resolution_cache=relation_resolution_cache,
+            arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
             csv_dir=csv_path.parent,
         )
 
@@ -93,7 +99,10 @@ async def build_csv_row_outcome(
     *,
     discovery_client,
     github_client,
+    openalex_client=None,
     content_cache,
+    relation_resolution_cache=None,
+    arxiv_relation_no_arxiv_recheck_days: int = 30,
     csv_dir: Path,
 ) -> tuple[int, dict[str, str], CsvRowOutcome]:
     updated_row = dict(row)
@@ -112,7 +121,10 @@ async def build_csv_row_outcome(
         ),
         discovery_client=discovery_client,
         github_client=github_client,
+        openalex_client=openalex_client,
         content_cache=content_cache,
+        relation_resolution_cache=relation_resolution_cache,
+        arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
     )
 
     if enrichment.normalized_url and enrichment.normalized_url != url:

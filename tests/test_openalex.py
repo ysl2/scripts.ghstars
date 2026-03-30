@@ -53,6 +53,78 @@ async def test_title_search_returns_first_result_by_relevance():
 
 
 @pytest.mark.anyio
+async def test_find_preprint_match_by_identifier_returns_direct_arxiv_for_doi():
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "id": "https://openalex.org/W1",
+                    "display_name": "Published Paper",
+                    "ids": {"arxiv": "2501.12345v2"},
+                }
+            )
+        ]
+    )
+    client = OpenAlexClient(session, min_interval=0, max_concurrent=1)
+
+    arxiv_url, resolved_title = await client.find_preprint_match_by_identifier(
+        "https://doi.org/10.48550/arXiv.2501.12345",
+        title="Published Paper",
+    )
+
+    assert arxiv_url == "https://arxiv.org/abs/2501.12345"
+    assert resolved_title == "Published Paper"
+    assert session.calls[0]["url"] == "https://api.openalex.org/works/https://doi.org/10.48550/arXiv.2501.12345"
+    assert session.calls[0]["params"]["select"] == "id,display_name,title,ids,doi,locations"
+
+
+@pytest.mark.anyio
+async def test_find_preprint_match_by_identifier_uses_sibling_crosswalk_after_direct_lookup():
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "id": "https://openalex.org/W-published",
+                    "display_name": "Example Published Paper",
+                    "doi": "https://doi.org/10.1145/example",
+                }
+            ),
+            FakeResponse(
+                {
+                    "results": [
+                        {
+                            "id": "https://openalex.org/W-published",
+                            "display_name": "Example Published Paper",
+                            "doi": "https://doi.org/10.1145/example",
+                        },
+                        {
+                            "id": "https://openalex.org/W-preprint",
+                            "display_name": "Example Published Paper",
+                            "locations": [
+                                {
+                                    "landing_page_url": "https://arxiv.org/abs/2401.12345v2",
+                                }
+                            ],
+                        },
+                    ]
+                }
+            ),
+        ]
+    )
+    client = OpenAlexClient(session, min_interval=0, max_concurrent=1)
+
+    arxiv_url, resolved_title = await client.find_preprint_match_by_identifier(
+        "https://openalex.org/W-published",
+        title="Example Published Paper",
+    )
+
+    assert arxiv_url == "https://arxiv.org/abs/2401.12345"
+    assert resolved_title == "Example Published Paper"
+    assert session.calls[0]["url"] == "https://api.openalex.org/works/W-published"
+    assert session.calls[0]["params"]["select"] == "id,display_name,title,ids,doi,locations"
+
+
+@pytest.mark.anyio
 async def test_find_related_work_preprint_accepts_candidate_with_explicit_arxiv_location():
     work = {
         "id": "https://openalex.org/W-published",

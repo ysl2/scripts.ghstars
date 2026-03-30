@@ -71,6 +71,26 @@ class RelationResolutionCacheStore:
         )
         self.connection.commit()
 
+    def count_negative_entries(self) -> int:
+        row = self.connection.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM relation_resolution_cache
+            WHERE arxiv_url IS NULL OR TRIM(arxiv_url) = ''
+            """
+        ).fetchone()
+        return int(row["count"]) if row is not None else 0
+
+    def delete_negative_entries(self) -> int:
+        cursor = self.connection.execute(
+            """
+            DELETE FROM relation_resolution_cache
+            WHERE arxiv_url IS NULL OR TRIM(arxiv_url) = ''
+            """
+        )
+        self.connection.commit()
+        return int(cursor.rowcount)
+
     @staticmethod
     def is_negative_cache_fresh(checked_at: str | None, recheck_days: int) -> bool:
         if not checked_at:

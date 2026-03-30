@@ -120,3 +120,23 @@ def test_relation_resolution_cache_negative_freshness_uses_days_threshold():
 
     assert RelationResolutionCacheStore.is_negative_cache_fresh(recent, 30) is True
     assert RelationResolutionCacheStore.is_negative_cache_fresh(stale, 30) is False
+
+
+def test_relation_resolution_cache_can_count_and_delete_negative_entries(tmp_path):
+    store = RelationResolutionCacheStore(tmp_path / "cache.db")
+    store.record_resolution(
+        key_type="doi",
+        key_value="https://doi.org/10.1000/negative",
+        arxiv_url=None,
+    )
+    store.record_resolution(
+        key_type="openalex_work",
+        key_value="https://openalex.org/W1",
+        arxiv_url="https://arxiv.org/abs/2501.12345",
+        resolved_title="Mapped Arxiv Title",
+    )
+
+    assert store.count_negative_entries() == 1
+    assert store.delete_negative_entries() == 1
+    assert store.count_negative_entries() == 0
+    assert store.get("openalex_work", "https://openalex.org/W1") is not None

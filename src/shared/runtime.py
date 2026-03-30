@@ -65,6 +65,7 @@ def load_notion_config(env: dict[str, str]) -> dict[str, str | int]:
         "huggingface_token": runtime_config["huggingface_token"],
         "alphaxiv_token": runtime_config["alphaxiv_token"],
         "openalex_api_key": runtime_config["openalex_api_key"],
+        "arxiv_relation_no_arxiv_recheck_days": runtime_config["arxiv_relation_no_arxiv_recheck_days"],
         "repo_discovery_no_repo_recheck_days": runtime_config["repo_discovery_no_repo_recheck_days"],
     }
 

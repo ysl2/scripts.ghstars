@@ -87,6 +87,15 @@ def get_page_url(page: dict) -> str:
     return page.get("url", "")
 
 
+def get_paper_url_from_page(page: dict) -> str:
+    properties = page.get("properties", {})
+    for name in ARXIV_PROPERTY_CANDIDATES:
+        value = get_text_from_property(properties.get(name, {}))
+        if value:
+            return value
+    return ""
+
+
 def extract_arxiv_id_from_url(url: str) -> str | None:
     return extract_arxiv_id(url)
 
@@ -104,8 +113,7 @@ def build_page_enrichment_request(page: dict) -> tuple[PaperEnrichmentRequest | 
     github_value = get_github_url_from_page(page)
     github_state = classify_github_value(github_value)
     title = get_page_title(page)
-    arxiv_id = get_arxiv_id_from_page(page)
-    raw_url = build_arxiv_abs_url(arxiv_id) if arxiv_id else ""
+    raw_url = get_paper_url_from_page(page)
 
     if github_state == "valid_github":
         return (
@@ -155,7 +163,10 @@ async def process_page(
     results: dict,
     lock: asyncio.Lock,
     arxiv_client=None,
+    openalex_client=None,
     content_cache=None,
+    relation_resolution_cache=None,
+    arxiv_relation_no_arxiv_recheck_days: int = 30,
 ) -> None:
     page_id = page["id"]
     current_stars = get_current_stars_from_page(page)
@@ -183,7 +194,10 @@ async def process_page(
         discovery_client=discovery_client,
         github_client=github_client,
         arxiv_client=arxiv_client,
+        openalex_client=openalex_client,
         content_cache=content_cache,
+        relation_resolution_cache=relation_resolution_cache,
+        arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
     )
     github_url = result.github_url
     if result.reason is not None or not github_url:
