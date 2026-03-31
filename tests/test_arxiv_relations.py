@@ -285,8 +285,8 @@ async def test_normalize_related_works_uses_shared_resolver_instead_of_relation_
         relation_resolution_cache=None,
         arxiv_relation_no_arxiv_recheck_days=30,
         allow_title_search=True,
-        allow_openalex_preprint_crosswalk=False,
-        allow_huggingface_fallback=False,
+        allow_openalex_preprint_crosswalk=True,
+        allow_huggingface_fallback=True,
         extra_identifiers=None,
     ):
         resolve_calls.append(
@@ -554,6 +554,12 @@ async def test_normalize_related_works_skips_api_when_negative_cache_is_fresh():
     recent = datetime.now(timezone.utc).isoformat()
     cache = FakeRelationResolutionCache(
         {
+            ("openalex_work", "https://openalex.org/W10"): SimpleNamespace(
+                key_type="openalex_work",
+                key_value="https://openalex.org/W10",
+                arxiv_url=None,
+                checked_at=recent,
+            ),
             ("doi", "https://doi.org/10.1007/978-3-031-72933-1_9"): SimpleNamespace(
                 key_type="doi",
                 key_value="https://doi.org/10.1007/978-3-031-72933-1_9",
@@ -1654,6 +1660,8 @@ async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_ret
             self.api_title_searches.append(title)
             if title == "Reference Needs Mapping":
                 return "2501.00002", "title_search_exact", None
+            if title == "Publisher Reference":
+                return None, None, "No arXiv ID found from title search"
             raise AssertionError(f"Unexpected title search: {title}")
 
         async def get_arxiv_match_by_title_from_api(self, title: str):
@@ -1781,7 +1789,10 @@ async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_ret
         "https://arxiv.org/abs/2603.23502",
         "2501.00002",
     ]
-    assert arxiv_client.api_title_searches == ["Reference Needs Mapping"]
+    assert arxiv_client.api_title_searches == [
+        "Reference Needs Mapping",
+        "Publisher Reference",
+    ]
     assert openalex_client.title_queries == ["Target Paper"]
     assert openalex_client.reference_work_queries == [{"id": "https://openalex.org/W0"}]
     assert openalex_client.citation_work_queries == [{"id": "https://openalex.org/W0"}]
@@ -2210,10 +2221,7 @@ async def test_export_arxiv_relations_to_csv_warms_content_for_arxiv_rows_and_pr
         "https://arxiv.org/abs/2501.00001",
         "https://arxiv.org/abs/2502.00002",
     ]
-    assert arxiv_client.html_title_searches == [
-        "Retained DOI Reference",
-        "Retained DOI Reference",
-    ]
+    assert arxiv_client.html_title_searches == ["Retained DOI Reference"]
     assert arxiv_client.api_title_searches == []
     assert result.references.resolved == 1
     assert result.references.skipped == [

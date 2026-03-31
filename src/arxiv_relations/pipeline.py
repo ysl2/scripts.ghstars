@@ -108,9 +108,6 @@ async def _resolve_related_work_row(
         discovery_client=discovery_client,
         relation_resolution_cache=relation_resolution_cache,
         arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
-        allow_title_search=True,
-        allow_openalex_preprint_crosswalk=True,
-        allow_huggingface_fallback=True,
         extra_identifiers=[candidate.openalex_url, candidate.doi_url],
     )
     if resolution.canonical_arxiv_url:
@@ -197,7 +194,15 @@ async def normalize_related_works_to_seeds(
         arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
     )
     deduped_rows = _dedupe_normalized_rows(normalized_rows)
-    return [PaperSeed(name=row.title, url=row.url) for row in deduped_rows]
+    return [
+        PaperSeed(
+            name=row.title,
+            url=row.url,
+            canonical_arxiv_url=row.url if extract_arxiv_id(row.url) else None,
+            url_resolution_authoritative=True,
+        )
+        for row in deduped_rows
+    ]
 
 
 async def export_arxiv_relations_to_csv(

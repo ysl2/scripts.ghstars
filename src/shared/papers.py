@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from src.shared.paper_identity import arxiv_url_sort_key, extract_arxiv_id
@@ -8,6 +8,8 @@ from src.shared.paper_identity import arxiv_url_sort_key, extract_arxiv_id
 class PaperSeed:
     name: str
     url: str
+    canonical_arxiv_url: str | None = field(default=None, compare=False)
+    url_resolution_authoritative: bool = field(default=False, compare=False)
 
 
 @dataclass(frozen=True)

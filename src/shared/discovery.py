@@ -520,32 +520,6 @@ def _should_skip_negative_cache_recheck(last_checked_at: str | None, recheck_day
     return datetime.now(timezone.utc) < checked_at + timedelta(days=recheck_days)
 
 
-async def resolve_arxiv_id_by_title(
-    title: str,
-    *,
-    discovery_client=None,
-    arxiv_client=None,
-) -> tuple[str | None, str | None, str | None]:
-    if not title:
-        return None, None, "Missing title"
-
-    if (
-        discovery_client is not None
-        and getattr(discovery_client, "huggingface_token", "")
-        and callable(getattr(discovery_client, "get_huggingface_search_html", None))
-    ):
-        search_html, error = await discovery_client.get_huggingface_search_html(title)
-        if not error:
-            arxiv_id, source = extract_best_huggingface_paper_id_from_search_html(search_html, title)
-            if arxiv_id:
-                return arxiv_id, source, None
-
-    if arxiv_client is not None:
-        return await arxiv_client.get_arxiv_id_by_title(title)
-
-    return None, None, "No arXiv ID found from title search"
-
-
 def _discovery_cache_key(seed) -> str | None:
     url = getattr(seed, "url", "")
     normalized_url = normalize_arxiv_url(url) or normalize_semanticscholar_paper_url(url)

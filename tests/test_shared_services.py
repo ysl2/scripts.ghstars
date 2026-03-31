@@ -11,7 +11,6 @@ from src.shared.discovery import (
     DiscoveryClient,
     find_huggingface_paper_id_in_search_html,
     find_github_url_in_huggingface_paper_html,
-    resolve_arxiv_id_by_title,
     resolve_github_url,
 )
 from src.shared.http import RateLimiter
@@ -359,46 +358,6 @@ async def test_alphaxiv_content_client_adds_bearer_token_when_configured():
             },
         ),
     ]
-
-
-@pytest.mark.anyio
-async def test_resolve_arxiv_id_by_title_prefers_huggingface_search_before_arxiv():
-    class FakeDiscoveryClient:
-        def __init__(self):
-            self.huggingface_token = "hf_token"
-            self.calls = []
-
-        async def get_huggingface_search_html(self, title):
-            self.calls.append(title)
-            return (
-                """
-                <div
-                  data-target="DailyPapers"
-                  data-props="{
-                    &quot;query&quot;:{&quot;q&quot;:&quot;Fast3R: Towards 3D Reconstruction of 1000+ Images in One Forward Pass&quot;},
-                    &quot;searchResults&quot;:[
-                      {
-                        &quot;title&quot;:&quot;Fast3R: Towards 3D Reconstruction of 1000+ Images in One Forward Pass&quot;,
-                        &quot;paper&quot;:{&quot;id&quot;:&quot;2501.13928&quot;,&quot;title&quot;:&quot;Fast3R: Towards 3D Reconstruction of 1000+ Images in One Forward Pass&quot;}
-                      }
-                    ]
-                  }">
-                </div>
-                """,
-                None,
-            )
-
-    class FakeArxivClient:
-        async def get_arxiv_id_by_title(self, title):
-            raise AssertionError("arXiv fallback should not be used when Hugging Face already matched")
-
-    arxiv_id, source, error = await resolve_arxiv_id_by_title(
-        "Fast3R: Towards 3D Reconstruction of 1000+ Images in One Forward Pass",
-        discovery_client=FakeDiscoveryClient(),
-        arxiv_client=FakeArxivClient(),
-    )
-
-    assert (arxiv_id, source, error) == ("2501.13928", "title_search_huggingface_exact", None)
 
 
 @pytest.mark.anyio

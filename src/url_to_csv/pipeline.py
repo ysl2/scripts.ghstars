@@ -223,7 +223,6 @@ async def _normalize_seed_to_arxiv(
         datacite_client=datacite_client,
         relation_resolution_cache=relation_resolution_cache,
         arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
-        allow_title_search=True,
     )
     if not resolution.canonical_arxiv_url:
         return None, None

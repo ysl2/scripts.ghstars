@@ -14,6 +14,9 @@ class PaperEnrichmentRequest:
     existing_github_url: str | None
     allow_title_search: bool
     allow_github_discovery: bool
+    precomputed_normalized_url: str | None = None
+    precomputed_canonical_arxiv_url: str | None = None
+    url_resolution_authoritative: bool = False
 
 
 @dataclass(frozen=True)
@@ -43,21 +46,23 @@ async def process_single_paper(
 ) -> PaperEnrichmentResult:
     title = (request.title or "").strip()
     raw_url = (request.raw_url or "").strip()
-
-    url_resolution = await resolve_arxiv_url(
-        title,
-        raw_url,
-        arxiv_client=arxiv_client,
-        openalex_client=openalex_client,
-        crossref_client=crossref_client,
-        datacite_client=datacite_client,
-        discovery_client=discovery_client,
-        relation_resolution_cache=relation_resolution_cache,
-        arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
-        allow_title_search=request.allow_title_search,
-    )
-    normalized_url = url_resolution.resolved_url
-    canonical_arxiv_url = url_resolution.canonical_arxiv_url
+    if request.url_resolution_authoritative:
+        normalized_url = request.precomputed_normalized_url or raw_url or None
+        canonical_arxiv_url = request.precomputed_canonical_arxiv_url
+    else:
+        url_resolution = await resolve_arxiv_url(
+            title,
+            raw_url,
+            arxiv_client=arxiv_client,
+            openalex_client=openalex_client,
+            crossref_client=crossref_client,
+            datacite_client=datacite_client,
+            discovery_client=discovery_client,
+            relation_resolution_cache=relation_resolution_cache,
+            arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
+        )
+        normalized_url = url_resolution.resolved_url
+        canonical_arxiv_url = url_resolution.canonical_arxiv_url
 
     github_url = None
     github_source = None

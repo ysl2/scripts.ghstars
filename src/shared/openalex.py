@@ -16,9 +16,6 @@ from src.shared.paper_identity import (
     normalize_doi_url,
     normalize_openalex_work_url,
 )
-from src.shared.papers import PaperSeed
-
-
 OPENALEX_WORKS_URL = "https://api.openalex.org/works"
 OPENALEX_SEARCH_PAGE_SIZE = 5
 OPENALEX_CITED_BY_PAGE_SIZE = 200
@@ -243,14 +240,6 @@ class OpenAlexClient:
             landing_page_url=self._extract_landing_page_url(work),
             openalex_url=work.get("id") or "",
         )
-
-    def normalize_related_work(self, work: dict[str, Any]) -> PaperSeed | None:
-        candidate = self.build_related_work_candidate(work)
-        if not candidate.direct_arxiv_url:
-            return None
-
-        name = candidate.title or candidate.direct_arxiv_url
-        return PaperSeed(name=name, url=candidate.direct_arxiv_url)
 
     async def _get_json(self, url: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
         retry_attempt = 0

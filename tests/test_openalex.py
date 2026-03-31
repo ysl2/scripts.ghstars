@@ -1,7 +1,6 @@
 import pytest
 
 from src.shared.openalex import OpenAlexClient
-from src.shared.papers import PaperSeed
 
 
 class FakeResponse:
@@ -296,24 +295,6 @@ async def test_find_related_work_preprint_returns_none_for_malformed_or_empty_pa
     assert empty_result is None
 
 
-def test_extracts_canonical_arxiv_url_from_related_work():
-    session = FakeSession([])
-    client = OpenAlexClient(session, min_interval=0)
-    work = {"display_name": "Paper", "ids": {"arxiv": "2403.00001v2"}}
-
-    seed = client.normalize_related_work(work)
-
-    assert seed == PaperSeed(name="Paper", url="https://arxiv.org/abs/2403.00001")
-
-
-def test_ignores_related_work_without_arxiv_metadata():
-    session = FakeSession([])
-    client = OpenAlexClient(session, min_interval=0)
-    work = {"display_name": "Paper", "ids": {}}
-
-    assert client.normalize_related_work(work) is None
-
-
 def test_build_related_work_candidate_prefers_direct_arxiv_identity():
     session = FakeSession([])
     client = OpenAlexClient(session, min_interval=0)
@@ -569,7 +550,7 @@ async def test_title_search_stops_retrying_when_retry_after_exceeds_bounded_limi
     assert sleep_calls == []
 
 
-def test_normalizes_related_work_from_location_url():
+def test_build_related_work_candidate_extracts_direct_arxiv_url_from_location_url():
     session = FakeSession([])
     client = OpenAlexClient(session, min_interval=0)
     work = {
@@ -582,12 +563,13 @@ def test_normalizes_related_work_from_location_url():
         ],
     }
 
-    seed = client.normalize_related_work(work)
+    candidate = client.build_related_work_candidate(work)
 
-    assert seed == PaperSeed(name="Location Paper", url="https://arxiv.org/abs/2403.00002")
+    assert candidate.direct_arxiv_url == "https://arxiv.org/abs/2403.00002"
+    assert candidate.title == "Location Paper"
 
 
-def test_normalizes_related_work_from_location_pdf_url():
+def test_build_related_work_candidate_extracts_direct_arxiv_url_from_location_pdf_url():
     session = FakeSession([])
     client = OpenAlexClient(session, min_interval=0)
     work = {
@@ -595,16 +577,18 @@ def test_normalizes_related_work_from_location_pdf_url():
         "locations": [{"pdf_url": "https://arxiv.org/pdf/2403.00005.pdf"}],
     }
 
-    seed = client.normalize_related_work(work)
+    candidate = client.build_related_work_candidate(work)
 
-    assert seed == PaperSeed(name="PDF Location Paper", url="https://arxiv.org/abs/2403.00005")
+    assert candidate.direct_arxiv_url == "https://arxiv.org/abs/2403.00005"
+    assert candidate.title == "PDF Location Paper"
 
 
-def test_normalizes_related_work_from_doi():
+def test_build_related_work_candidate_extracts_direct_arxiv_url_from_doi():
     session = FakeSession([])
     client = OpenAlexClient(session, min_interval=0)
     work = {"doi": "https://doi.org/10.48550/arXiv.2403.00003"}
 
-    seed = client.normalize_related_work(work)
+    candidate = client.build_related_work_candidate(work)
 
-    assert seed == PaperSeed(name="https://arxiv.org/abs/2403.00003", url="https://arxiv.org/abs/2403.00003")
+    assert candidate.direct_arxiv_url == "https://arxiv.org/abs/2403.00003"
+    assert candidate.title == ""

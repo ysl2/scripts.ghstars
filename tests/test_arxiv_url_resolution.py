@@ -108,13 +108,57 @@ async def test_resolve_arxiv_url_skips_openalex_when_fresh_negative_cache_exists
         arxiv_client=arxiv_client,
         relation_resolution_cache=cache,
         arxiv_relation_no_arxiv_recheck_days=30,
-        allow_title_search=False,
+        allow_title_search=True,
+        allow_openalex_preprint_crosswalk=True,
+        allow_huggingface_fallback=True,
     )
 
     assert result.resolved_url is None
     assert result.canonical_arxiv_url is None
     openalex_client.find_exact_arxiv_match_by_identifier.assert_not_awaited()
     arxiv_client.get_arxiv_id_by_title.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_resolve_arxiv_url_does_not_short_circuit_when_only_subset_of_keys_have_fresh_negative_cache():
+    recent = datetime.now(timezone.utc).isoformat()
+    cache = RecordingRelationResolutionCache(
+        {
+            ("doi", "https://doi.org/10.1145/example"): SimpleNamespace(
+                key_type="doi",
+                key_value="https://doi.org/10.1145/example",
+                arxiv_url=None,
+                resolved_title=None,
+                checked_at=recent,
+            )
+        }
+    )
+    openalex_client = SimpleNamespace(
+        find_exact_arxiv_match_by_identifier=AsyncMock(
+            side_effect=lambda identifier, title=None: (
+                ("https://arxiv.org/abs/2501.12345", "Mapped Arxiv Title")
+                if identifier == "https://openalex.org/W123"
+                else (None, None)
+            )
+        )
+    )
+
+    result = await resolve_arxiv_url(
+        title="Published Paper",
+        raw_url="https://doi.org/10.1145/example",
+        openalex_client=openalex_client,
+        relation_resolution_cache=cache,
+        arxiv_relation_no_arxiv_recheck_days=30,
+        allow_title_search=True,
+        allow_openalex_preprint_crosswalk=True,
+        allow_huggingface_fallback=True,
+        extra_identifiers=["https://openalex.org/W123"],
+    )
+
+    assert result.canonical_arxiv_url == "https://arxiv.org/abs/2501.12345"
+    assert openalex_client.find_exact_arxiv_match_by_identifier.await_args_list == [
+        (( "https://openalex.org/W123",), {"title": "Published Paper"}),
+    ]
 
 
 @pytest.mark.anyio
