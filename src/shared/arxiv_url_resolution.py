@@ -164,27 +164,6 @@ async def resolve_arxiv_url(
                     script_derived=True,
                 )
 
-    title_resolution = _TitleResolutionResult(canonical_arxiv_url=None, resolved_title=None, definitive_no_match=False)
-    if allow_title_search:
-        title_resolution = await _resolve_by_title(
-            normalized_title,
-            arxiv_client=arxiv_client,
-        )
-        if title_resolution.canonical_arxiv_url:
-            _record_positive_resolution(
-                relation_resolution_cache,
-                cache_keys,
-                arxiv_url=title_resolution.canonical_arxiv_url,
-                resolved_title=title_resolution.resolved_title or normalized_title or None,
-            )
-            return ArxivUrlResolutionResult(
-                resolved_url=title_resolution.canonical_arxiv_url,
-                canonical_arxiv_url=title_resolution.canonical_arxiv_url,
-                resolved_title=title_resolution.resolved_title or normalized_title or title_resolution.canonical_arxiv_url,
-                source="title_search",
-                script_derived=True,
-            )
-
     if allow_openalex_preprint_crosswalk and callable(openalex_preprint_lookup):
         for key_type, key_value in cache_keys:
             try:
@@ -207,6 +186,27 @@ async def resolve_arxiv_url(
                     source=f"openalex_preprint_{key_type}",
                     script_derived=True,
                 )
+
+    title_resolution = _TitleResolutionResult(canonical_arxiv_url=None, resolved_title=None, definitive_no_match=False)
+    if allow_title_search:
+        title_resolution = await _resolve_by_title(
+            normalized_title,
+            arxiv_client=arxiv_client,
+        )
+        if title_resolution.canonical_arxiv_url:
+            _record_positive_resolution(
+                relation_resolution_cache,
+                cache_keys,
+                arxiv_url=title_resolution.canonical_arxiv_url,
+                resolved_title=title_resolution.resolved_title or normalized_title or None,
+            )
+            return ArxivUrlResolutionResult(
+                resolved_url=title_resolution.canonical_arxiv_url,
+                canonical_arxiv_url=title_resolution.canonical_arxiv_url,
+                resolved_title=title_resolution.resolved_title or normalized_title or title_resolution.canonical_arxiv_url,
+                source="title_search",
+                script_derived=True,
+            )
 
     crossref_lookup = getattr(crossref_client, "find_arxiv_match_by_doi", None)
     if callable(crossref_lookup) and normalized_doi_key:

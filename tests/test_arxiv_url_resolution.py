@@ -225,20 +225,12 @@ async def test_resolve_arxiv_url_strips_html_markup_before_openalex_preprint_loo
 
 
 @pytest.mark.anyio
-async def test_resolve_arxiv_url_runs_title_search_before_openalex_preprint():
+async def test_resolve_arxiv_url_runs_openalex_preprint_before_title_search():
     call_order: list[str] = []
 
     async def openalex_exact(identifier: str, title=None):
         call_order.append("openalex_exact")
         return None, "Published Paper"
-
-    async def html_title_search(title: str):
-        call_order.append("arxiv_html")
-        return None, None, "No arXiv ID found from title search"
-
-    async def api_title_search(title: str):
-        call_order.append("arxiv_api")
-        return None, None, None, "No arXiv ID found from title search"
 
     async def openalex_preprint(identifier: str, title=None):
         call_order.append("openalex_preprint")
@@ -249,8 +241,8 @@ async def test_resolve_arxiv_url_runs_title_search_before_openalex_preprint():
         find_preprint_match_by_identifier=AsyncMock(side_effect=openalex_preprint),
     )
     arxiv_client = SimpleNamespace(
-        get_arxiv_id_by_title=AsyncMock(side_effect=html_title_search),
-        get_arxiv_match_by_title_from_api=AsyncMock(side_effect=api_title_search),
+        get_arxiv_id_by_title=AsyncMock(),
+        get_arxiv_match_by_title_from_api=AsyncMock(),
     )
     crossref_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock())
     datacite_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock())
@@ -268,7 +260,9 @@ async def test_resolve_arxiv_url_runs_title_search_before_openalex_preprint():
 
     assert result.canonical_arxiv_url == "https://arxiv.org/abs/2507.01125"
     assert result.source == "openalex_preprint_doi"
-    assert call_order == ["openalex_exact", "arxiv_html", "arxiv_api", "openalex_preprint"]
+    assert call_order == ["openalex_exact", "openalex_preprint"]
+    arxiv_client.get_arxiv_id_by_title.assert_not_awaited()
+    arxiv_client.get_arxiv_match_by_title_from_api.assert_not_awaited()
     crossref_client.find_arxiv_match_by_doi.assert_not_awaited()
     datacite_client.find_arxiv_match_by_doi.assert_not_awaited()
 
@@ -407,9 +401,9 @@ async def test_resolve_arxiv_url_runs_crossref_then_datacite_after_html_title_se
     assert result.canonical_arxiv_url == "https://arxiv.org/abs/2501.12345"
     assert call_order == [
         "openalex_exact",
+        "openalex_preprint",
         "arxiv_html",
         "arxiv_api",
-        "openalex_preprint",
         "crossref",
         "datacite",
     ]
@@ -491,8 +485,8 @@ async def test_resolve_arxiv_url_can_use_optional_huggingface_fallback_after_met
     assert result.resolved_title == "Mapped Arxiv Title"
     assert call_order == [
         "openalex_exact",
-        "arxiv_html",
         "openalex_preprint",
+        "arxiv_html",
         "crossref",
         "datacite",
         "huggingface",

@@ -171,6 +171,55 @@ async def test_find_preprint_match_by_identifier_uses_sibling_crosswalk_after_di
     assert resolved_title == "Example Published Paper"
     assert session.calls[0]["url"] == "https://api.openalex.org/works/W-published"
     assert session.calls[0]["params"]["select"] == "id,display_name,title,ids,doi,locations"
+    assert len(session.calls) == 2
+
+
+@pytest.mark.anyio
+async def test_fetch_work_by_identifier_reuses_cached_work_across_openalex_and_doi_aliases():
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "id": "https://openalex.org/W-published",
+                    "display_name": "Example Published Paper",
+                    "doi": "https://doi.org/10.1145/example",
+                }
+            ),
+            FakeResponse(
+                {
+                    "results": [
+                        {
+                            "id": "https://openalex.org/W-preprint",
+                            "display_name": "Example Published Paper",
+                            "locations": [
+                                {
+                                    "landing_page_url": "https://arxiv.org/abs/2401.12345v2",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            ),
+        ]
+    )
+    client = OpenAlexClient(session, min_interval=0, max_concurrent=1)
+
+    direct_arxiv_url, direct_title = await client.find_exact_arxiv_match_by_identifier(
+        "https://openalex.org/W-published",
+        title="Example Published Paper",
+    )
+    preprint_arxiv_url, preprint_title = await client.find_preprint_match_by_identifier(
+        "https://doi.org/10.1145/example",
+        title="Example Published Paper",
+    )
+
+    assert direct_arxiv_url is None
+    assert direct_title == "Example Published Paper"
+    assert preprint_arxiv_url == "https://arxiv.org/abs/2401.12345"
+    assert preprint_title == "Example Published Paper"
+    assert len(session.calls) == 2
+    assert session.calls[0]["url"] == "https://api.openalex.org/works/W-published"
+    assert session.calls[1]["url"] == "https://api.openalex.org/works"
 
 
 @pytest.mark.anyio

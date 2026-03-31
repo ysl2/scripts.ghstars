@@ -59,6 +59,7 @@ class OpenAlexClient:
         self.openalex_api_key = openalex_api_key.strip()
         self.semaphore = asyncio.Semaphore(max_concurrent)
         self.rate_limiter = RateLimiter(min_interval)
+        self._work_cache: dict[str, dict[str, Any] | None] = {}
 
     async def search_first_work(self, title: str) -> dict[str, Any] | None:
         params = {
@@ -73,6 +74,11 @@ class OpenAlexClient:
     async def fetch_work_by_identifier(self, identifier: str) -> dict[str, Any] | None:
         normalized_openalex_url = normalize_openalex_work_url(identifier)
         normalized_doi_url = normalize_doi_url(identifier)
+        cache_keys = [key for key in [normalized_openalex_url, normalized_doi_url] if key]
+
+        for cache_key in cache_keys:
+            if cache_key in self._work_cache:
+                return self._work_cache[cache_key]
 
         if normalized_openalex_url:
             work_id = self._extract_work_id(normalized_openalex_url)
@@ -82,16 +88,33 @@ class OpenAlexClient:
                 f"{OPENALEX_WORKS_URL}/{work_id}",
                 params={"select": OPENALEX_RELATION_WORK_SELECT},
             )
-            return payload if isinstance(payload, dict) else None
+            work = payload if isinstance(payload, dict) else None
+            self._cache_work_lookup(work, cache_keys)
+            return work
 
         if normalized_doi_url:
             payload = await self._get_json(
                 f"{OPENALEX_WORKS_URL}/{normalized_doi_url}",
                 params={"select": OPENALEX_RELATION_WORK_SELECT},
             )
-            return payload if isinstance(payload, dict) else None
+            work = payload if isinstance(payload, dict) else None
+            self._cache_work_lookup(work, cache_keys)
+            return work
 
         return None
+
+    def _cache_work_lookup(self, work: dict[str, Any] | None, cache_keys: list[str]) -> None:
+        alias_keys = {key for key in cache_keys if key}
+        if isinstance(work, dict):
+            normalized_work_openalex_url = normalize_openalex_work_url(work.get("id"))
+            normalized_work_doi_url = normalize_doi_url(work.get("doi"))
+            if normalized_work_openalex_url:
+                alias_keys.add(normalized_work_openalex_url)
+            if normalized_work_doi_url:
+                alias_keys.add(normalized_work_doi_url)
+
+        for cache_key in alias_keys:
+            self._work_cache[cache_key] = work
 
     async def find_exact_arxiv_match_by_identifier(
         self,
