@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import aiohttp
 import pytest
@@ -238,18 +239,20 @@ async def test_normalize_related_works_maps_non_arxiv_title_hits_to_canonical_ar
 
     class FakeArxivClient:
         async def get_arxiv_id_by_title(self, title: str):
-            raise AssertionError("Relation normalization should use the arXiv API title search path")
+            if title == "Original OpenAlex Title":
+                return "2501.12345", "title_search_exact", None
+            raise AssertionError(f"Unexpected title search: {title}")
 
         async def get_arxiv_match_by_title_from_api(self, title: str):
-            if title == "Original OpenAlex Title":
-                return "2501.12345", "Mapped Arxiv Title", "title_search_exact", None
-            raise AssertionError(f"Unexpected title search: {title}")
+            raise AssertionError("Shared relation normalization should use the common HTML title search entrypoint")
 
         async def get_arxiv_id_by_title_from_api(self, title: str):
             raise AssertionError("Optimized relation normalization should use the title-search helper result directly")
 
         async def get_title(self, arxiv_identifier: str):
-            raise AssertionError("Successful API title-search mappings should not do an extra arXiv title lookup")
+            if arxiv_identifier in {"2501.12345", "https://arxiv.org/abs/2501.12345"}:
+                return "Mapped Arxiv Title", None
+            raise AssertionError(f"Unexpected arXiv title lookup: {arxiv_identifier}")
 
     related_works = [{"id": "R1"}, {"id": "R2"}]
     seeds = await normalize_related_works_to_seeds(
@@ -261,6 +264,110 @@ async def test_normalize_related_works_maps_non_arxiv_title_hits_to_canonical_ar
     assert seeds == [
         PaperSeed(name="Direct Paper", url="https://arxiv.org/abs/2403.00001"),
         PaperSeed(name="Mapped Arxiv Title", url="https://arxiv.org/abs/2501.12345"),
+    ]
+
+
+@pytest.mark.anyio
+async def test_normalize_related_works_uses_shared_resolver_instead_of_relation_local_ladder(monkeypatch):
+    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+
+    resolve_calls: list[dict] = []
+
+    async def fake_shared_resolver(
+        title: str,
+        raw_url: str,
+        *,
+        arxiv_client=None,
+        openalex_client=None,
+        crossref_client=None,
+        datacite_client=None,
+        discovery_client=None,
+        relation_resolution_cache=None,
+        arxiv_relation_no_arxiv_recheck_days=30,
+        allow_title_search=True,
+        allow_openalex_preprint_crosswalk=False,
+        allow_huggingface_fallback=False,
+        extra_identifiers=None,
+    ):
+        resolve_calls.append(
+            {
+                "title": title,
+                "raw_url": raw_url,
+                "crossref_client": crossref_client,
+                "datacite_client": datacite_client,
+                "discovery_client": discovery_client,
+                "relation_resolution_cache": relation_resolution_cache,
+                "arxiv_relation_no_arxiv_recheck_days": arxiv_relation_no_arxiv_recheck_days,
+                "allow_title_search": allow_title_search,
+                "allow_openalex_preprint_crosswalk": allow_openalex_preprint_crosswalk,
+                "allow_huggingface_fallback": allow_huggingface_fallback,
+                "extra_identifiers": extra_identifiers,
+            }
+        )
+        return SimpleNamespace(
+            resolved_url="https://arxiv.org/abs/2501.12345",
+            canonical_arxiv_url="https://arxiv.org/abs/2501.12345",
+            resolved_title="Mapped Arxiv Title",
+            source="shared_resolver",
+            script_derived=True,
+        )
+
+    monkeypatch.setattr(
+        "src.arxiv_relations.pipeline.resolve_arxiv_url",
+        fake_shared_resolver,
+        raising=False,
+    )
+
+    class FakeOpenAlexClient:
+        def build_related_work_candidate(self, work: dict):
+            return RelatedWorkCandidate(
+                title="Published Paper",
+                direct_arxiv_url=None,
+                doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
+                landing_page_url="https://publisher.example/paper",
+                openalex_url="https://openalex.org/W123",
+            )
+
+    class FakeArxivClient:
+        async def get_title(self, arxiv_identifier: str):
+            raise AssertionError("Resolved titles from the shared resolver should not need a fallback lookup")
+
+    crossref_client = SimpleNamespace(name="crossref")
+    datacite_client = SimpleNamespace(name="datacite")
+    discovery_client = SimpleNamespace(name="discovery")
+    relation_resolution_cache = SimpleNamespace(name="cache")
+    seeds = await normalize_related_works_to_seeds(
+        [{"id": "R1"}],
+        openalex_client=FakeOpenAlexClient(),
+        arxiv_client=FakeArxivClient(),
+        crossref_client=crossref_client,
+        datacite_client=datacite_client,
+        discovery_client=discovery_client,
+        relation_resolution_cache=relation_resolution_cache,
+        arxiv_relation_no_arxiv_recheck_days=17,
+    )
+
+    from src.arxiv_relations import pipeline as relations_pipeline
+
+    assert not hasattr(relations_pipeline, "resolve_related_work_title_to_arxiv")
+    assert seeds == [PaperSeed(name="Mapped Arxiv Title", url="https://arxiv.org/abs/2501.12345")]
+    assert resolve_calls == [
+        {
+            "title": "Published Paper",
+            "raw_url": "https://doi.org/10.1007/978-3-031-72933-1_9",
+            "crossref_client": crossref_client,
+            "datacite_client": datacite_client,
+            "discovery_client": discovery_client,
+            "relation_resolution_cache": relation_resolution_cache,
+            "arxiv_relation_no_arxiv_recheck_days": 17,
+            "allow_title_search": True,
+            "allow_openalex_preprint_crosswalk": True,
+            "allow_huggingface_fallback": True,
+            "extra_identifiers": [
+                "https://openalex.org/W123",
+                "https://doi.org/10.1007/978-3-031-72933-1_9",
+            ],
+        }
     ]
 
 
@@ -421,10 +528,10 @@ async def test_normalize_related_works_retains_unresolved_non_arxiv_rows_with_ur
 
     class FakeArxivClient:
         async def get_arxiv_id_by_title(self, title: str):
-            raise AssertionError("Relation normalization should use the arXiv API title search path")
+            return None, None, "No arXiv ID found from title search"
 
         async def get_arxiv_id_by_title_from_api(self, title: str):
-            return None, None, "No arXiv ID found from title search"
+            raise AssertionError("Shared relation normalization should use the common HTML title search entrypoint")
 
     related_works = [{"id": "R3"}, {"id": "R4"}, {"id": "R5"}]
     seeds = await normalize_related_works_to_seeds(
@@ -506,10 +613,10 @@ async def test_normalize_related_works_does_not_negative_cache_api_request_failu
 
     class FakeArxivClient:
         async def get_arxiv_id_by_title(self, title: str):
-            raise AssertionError("HTML title search should not run in relation mode")
+            return None, None, "arXiv search timeout"
 
         async def get_arxiv_id_by_title_from_api(self, title: str):
-            return None, None, "arXiv metadata query timeout"
+            raise AssertionError("Shared relation normalization should use the common HTML title search entrypoint")
 
         async def get_title(self, arxiv_identifier: str):
             raise AssertionError("Title lookup should not run when API search fails")
@@ -544,14 +651,16 @@ async def test_normalize_related_works_uses_openalex_crosswalk_before_arxiv_and_
                 openalex_url="https://openalex.org/WX1",
             )
 
-        async def find_related_work_preprint_match(self, work: dict, *, title: str):
+        async def find_preprint_match_by_identifier(self, identifier: str, *, title: str | None = None):
             events.append(("openalex_crosswalk", title))
-            assert work["id"] == "https://openalex.org/WX1"
-            assert work["display_name"] == "Example Published Paper"
+            assert identifier in {
+                "https://openalex.org/WX1",
+                "https://doi.org/10.1145/example",
+            }
             return "https://arxiv.org/abs/2401.12345", "Example Preprint Title"
 
         async def find_related_work_preprint_arxiv_url(self, work: dict, *, title: str):
-            raise AssertionError("Optimized relation normalization should use the richer OpenAlex crosswalk helper")
+            raise AssertionError("Shared relation normalization should use identifier-based OpenAlex crosswalk lookup")
 
     class FakeArxivClient:
         async def get_arxiv_id_by_title(self, title: str):
@@ -632,17 +741,23 @@ async def test_normalize_related_works_openalex_crosswalk_miss_runs_before_arxiv
             )
 
         async def find_related_work_preprint_arxiv_url(self, work: dict, *, title: str):
+            raise AssertionError("Shared relation normalization should use identifier-based OpenAlex crosswalk lookup")
+
+        async def find_preprint_match_by_identifier(self, identifier: str, *, title: str | None = None):
             events.append(("openalex_crosswalk", title))
-            assert work["id"] == "https://openalex.org/WX2"
-            return None
+            assert identifier in {
+                "https://openalex.org/WX2",
+                "https://doi.org/10.1145/example",
+            }
+            return None, None
 
     class FakeArxivClient:
         async def get_arxiv_id_by_title(self, title: str):
-            raise AssertionError("Relation mode should not use legacy HTML title search")
-
-        async def get_arxiv_id_by_title_from_api(self, title: str):
             events.append(("arxiv_title_search", title))
             return None, None, "No arXiv ID found from title search"
+
+        async def get_arxiv_id_by_title_from_api(self, title: str):
+            raise AssertionError("Shared relation normalization should use the common HTML title search entrypoint")
 
         async def get_title(self, arxiv_identifier: str):
             raise AssertionError("No title lookup should run after a full miss")
@@ -688,6 +803,7 @@ async def test_normalize_related_works_openalex_crosswalk_miss_runs_before_arxiv
     ]
     assert events == [
         ("openalex_crosswalk", "Example Published Paper"),
+        ("openalex_crosswalk", "Example Published Paper"),
         ("arxiv_title_search", "Example Published Paper"),
         ("hf_search_json", "Example Published Paper", 1),
         ("cache_record", "openalex_work", "https://openalex.org/WX2", None),
@@ -710,14 +826,17 @@ async def test_normalize_related_works_does_not_negative_cache_when_openalex_cro
             )
 
         async def find_related_work_preprint_arxiv_url(self, work: dict, *, title: str):
+            raise AssertionError("Shared relation normalization should use identifier-based OpenAlex crosswalk lookup")
+
+        async def find_preprint_match_by_identifier(self, identifier: str, *, title: str | None = None):
             raise RuntimeError("OpenAlex API error (429)")
 
     class FakeArxivClient:
         async def get_arxiv_id_by_title(self, title: str):
-            raise AssertionError("Relation mode should not use legacy HTML title search")
+            return None, None, "No arXiv ID found from title search"
 
         async def get_arxiv_id_by_title_from_api(self, title: str):
-            return None, None, "No arXiv ID found from title search"
+            raise AssertionError("Shared relation normalization should use the common HTML title search entrypoint")
 
         async def get_title(self, arxiv_identifier: str):
             raise AssertionError("No title lookup should run after a full miss")
@@ -760,11 +879,11 @@ async def test_normalize_related_works_uses_hf_fallback_after_arxiv_api_miss():
 
     class FakeArxivClient:
         async def get_arxiv_id_by_title(self, title: str):
-            raise AssertionError("Relation mode should not use legacy HTML title search")
+            events.append(("arxiv_title_miss", title))
+            return None, None, "No arXiv ID found from title search"
 
         async def get_arxiv_id_by_title_from_api(self, title: str):
-            events.append(("arxiv_api_miss", title))
-            return None, None, "No arXiv ID found from title search"
+            raise AssertionError("Shared relation normalization should use the common HTML title search entrypoint")
 
         async def get_title(self, arxiv_identifier: str):
             events.append(("title_lookup", arxiv_identifier))
@@ -834,7 +953,7 @@ async def test_normalize_related_works_uses_hf_fallback_after_arxiv_api_miss():
         == "FSGS: Real-Time Few-shot View Synthesis using Gaussian Splatting"
     )
     assert events == [
-        ("arxiv_api_miss", "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting"),
+        ("arxiv_title_miss", "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting"),
         ("hf_search_json", "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting", 1),
         ("title_lookup", "2312.00451"),
         ("cache_record", "openalex_work", "https://openalex.org/WFSGS", "https://arxiv.org/abs/2312.00451"),
@@ -860,11 +979,11 @@ async def test_normalize_related_works_uses_hf_fallback_after_arxiv_api_transien
 
     class FakeArxivClient:
         async def get_arxiv_id_by_title(self, title: str):
-            raise AssertionError("Relation mode should not use legacy HTML title search")
+            events.append(("arxiv_title_error", title))
+            return None, None, "arXiv search error (429)"
 
         async def get_arxiv_id_by_title_from_api(self, title: str):
-            events.append(("arxiv_api_429", title))
-            return None, None, "arXiv metadata query error (429)"
+            raise AssertionError("Shared relation normalization should use the common HTML title search entrypoint")
 
         async def get_title(self, arxiv_identifier: str):
             events.append(("title_lookup", arxiv_identifier))
@@ -926,7 +1045,7 @@ async def test_normalize_related_works_uses_hf_fallback_after_arxiv_api_transien
         ("doi", "https://doi.org/10.1007/978-3-031-72933-1_9", "https://arxiv.org/abs/2312.00451"),
     ]
     assert events == [
-        ("arxiv_api_429", "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting"),
+        ("arxiv_title_error", "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting"),
         ("hf_search_json", "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting", 1),
         ("title_lookup", "2312.00451"),
         ("cache_record", "openalex_work", "https://openalex.org/WFSGS", "https://arxiv.org/abs/2312.00451"),
@@ -950,10 +1069,10 @@ async def test_normalize_related_works_skips_hf_fallback_when_token_missing():
 
     class FakeNoMatchArxivClient:
         async def get_arxiv_id_by_title(self, title: str):
-            raise AssertionError("Relation mode should not use legacy HTML title search")
+            return None, None, "No arXiv ID found from title search"
 
         async def get_arxiv_id_by_title_from_api(self, title: str):
-            return None, None, "No arXiv ID found from title search"
+            raise AssertionError("Shared relation normalization should use the common HTML title search entrypoint")
 
         async def get_title(self, arxiv_identifier: str):
             raise AssertionError("No title lookup should run after a full miss")
@@ -999,10 +1118,10 @@ async def test_normalize_related_works_does_not_negative_cache_transient_hf_fail
 
     class FakeNoMatchArxivClient:
         async def get_arxiv_id_by_title(self, title: str):
-            raise AssertionError("Relation mode should not use legacy HTML title search")
+            return None, None, "No arXiv ID found from title search"
 
         async def get_arxiv_id_by_title_from_api(self, title: str):
-            return None, None, "No arXiv ID found from title search"
+            raise AssertionError("Shared relation normalization should use the common HTML title search entrypoint")
 
         async def get_title(self, arxiv_identifier: str):
             raise AssertionError("No title lookup should run after a full miss")
@@ -1048,10 +1167,10 @@ async def test_normalize_related_works_does_not_negative_cache_when_arxiv_transi
 
     class FakeArxivClient:
         async def get_arxiv_id_by_title(self, title: str):
-            raise AssertionError("Relation mode should not use legacy HTML title search")
+            return None, None, "arXiv search timeout"
 
         async def get_arxiv_id_by_title_from_api(self, title: str):
-            return None, None, "arXiv metadata query timeout"
+            raise AssertionError("Shared relation normalization should use the common HTML title search entrypoint")
 
         async def get_title(self, arxiv_identifier: str):
             raise AssertionError("No title lookup should run after a full miss")
@@ -1097,10 +1216,10 @@ async def test_normalize_related_works_does_not_negative_cache_unparseable_hf_pa
 
     class FakeNoMatchArxivClient:
         async def get_arxiv_id_by_title(self, title: str):
-            raise AssertionError("Relation mode should not use legacy HTML title search")
+            return None, None, "No arXiv ID found from title search"
 
         async def get_arxiv_id_by_title_from_api(self, title: str):
-            return None, None, "No arXiv ID found from title search"
+            raise AssertionError("Shared relation normalization should use the common HTML title search entrypoint")
 
         async def get_title(self, arxiv_identifier: str):
             raise AssertionError("No title lookup should run after an unparseable HF payload")
@@ -1146,10 +1265,10 @@ async def test_normalize_related_works_does_not_negative_cache_malformed_hf_sear
 
     class FakeNoMatchArxivClient:
         async def get_arxiv_id_by_title(self, title: str):
-            raise AssertionError("Relation mode should not use legacy HTML title search")
+            return None, None, "No arXiv ID found from title search"
 
         async def get_arxiv_id_by_title_from_api(self, title: str):
-            return None, None, "No arXiv ID found from title search"
+            raise AssertionError("Shared relation normalization should use the common HTML title search entrypoint")
 
         async def get_title(self, arxiv_identifier: str):
             raise AssertionError("No title lookup should run after malformed HF search items")
@@ -1198,10 +1317,10 @@ async def test_normalize_related_works_does_not_negative_cache_when_hf_title_pay
 
     class FakeNoMatchArxivClient:
         async def get_arxiv_id_by_title(self, title: str):
-            raise AssertionError("Relation mode should not use legacy HTML title search")
+            return None, None, "No arXiv ID found from title search"
 
         async def get_arxiv_id_by_title_from_api(self, title: str):
-            return None, None, "No arXiv ID found from title search"
+            raise AssertionError("Shared relation normalization should use the common HTML title search entrypoint")
 
         async def get_title(self, arxiv_identifier: str):
             raise AssertionError("No title lookup should run after malformed HF title payloads")
@@ -1256,11 +1375,11 @@ async def test_normalize_related_works_negative_caches_only_after_arxiv_and_hf_b
 
     class FakeNoMatchArxivClient:
         async def get_arxiv_id_by_title(self, title: str):
-            raise AssertionError("Relation mode should not use legacy HTML title search")
+            events.append(("arxiv_title_miss", title))
+            return None, None, "No arXiv ID found from title search"
 
         async def get_arxiv_id_by_title_from_api(self, title: str):
-            events.append(("arxiv_api_miss", title))
-            return None, None, "No arXiv ID found from title search"
+            raise AssertionError("Shared relation normalization should use the common HTML title search entrypoint")
 
         async def get_title(self, arxiv_identifier: str):
             raise AssertionError("No title lookup should run after a full miss")
@@ -1304,7 +1423,7 @@ async def test_normalize_related_works_negative_caches_only_after_arxiv_and_hf_b
         ("doi", "https://doi.org/10.1007/978-3-031-72933-1_9", None),
     ]
     assert events == [
-        ("arxiv_api_miss", "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting"),
+        ("arxiv_title_miss", "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting"),
         ("hf_search_json_miss", "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting", 1),
         ("cache_record", "openalex_work", "https://openalex.org/WFSGS", None),
         ("cache_record", "doi", "https://doi.org/10.1007/978-3-031-72933-1_9", None),
@@ -1339,22 +1458,24 @@ async def test_normalize_related_works_rechecks_stale_negative_and_backfills_all
 
     class FakeArxivClient:
         def __init__(self):
-            self.api_title_searches: list[str] = []
+            self.html_title_searches: list[str] = []
             self.title_lookups: list[str] = []
 
         async def get_arxiv_id_by_title(self, title: str):
-            raise AssertionError("Legacy HTML title search should not run in the relation cache pipeline")
+            self.html_title_searches.append(title)
+            return "2312.00451", "title_search_exact", None
 
         async def get_arxiv_match_by_title_from_api(self, title: str):
-            self.api_title_searches.append(title)
-            return "2312.00451", "Mapped Arxiv Title", "title_search_exact", None
+            raise AssertionError("Shared relation normalization should use the common HTML title search entrypoint")
 
         async def get_arxiv_id_by_title_from_api(self, title: str):
             raise AssertionError("Optimized backfill should use the title-search helper result directly")
 
         async def get_title(self, arxiv_identifier: str):
             self.title_lookups.append(arxiv_identifier)
-            raise AssertionError("Successful API backfills should not do an extra arXiv title lookup")
+            if arxiv_identifier == "2312.00451":
+                return "Mapped Arxiv Title", None
+            raise AssertionError(f"Unexpected arXiv title lookup: {arxiv_identifier}")
 
     arxiv_client = FakeArxivClient()
     seeds = await normalize_related_works_to_seeds(
@@ -1366,8 +1487,8 @@ async def test_normalize_related_works_rechecks_stale_negative_and_backfills_all
     )
 
     assert seeds == [PaperSeed(name="Mapped Arxiv Title", url="https://arxiv.org/abs/2312.00451")]
-    assert arxiv_client.api_title_searches == ["Backfilled Paper"]
-    assert arxiv_client.title_lookups == []
+    assert arxiv_client.html_title_searches == ["Backfilled Paper"]
+    assert arxiv_client.title_lookups == ["2312.00451"]
     assert cache.record_calls == [
         ("openalex_work", "https://openalex.org/W11", "https://arxiv.org/abs/2312.00451"),
         ("doi", "https://doi.org/10.1007/978-3-031-72933-1_9", "https://arxiv.org/abs/2312.00451"),
@@ -1462,9 +1583,6 @@ async def test_normalize_related_works_resolves_non_direct_rows_concurrently():
             self.release_searches = asyncio.Event()
 
         async def get_arxiv_id_by_title(self, title: str):
-            raise AssertionError("Relation normalization should use the arXiv API title search path")
-
-        async def get_arxiv_id_by_title_from_api(self, title: str):
             self.search_started.append(title)
             if len(self.search_started) == 2:
                 self.release_searches.set()
@@ -1475,6 +1593,9 @@ async def test_normalize_related_works_resolves_non_direct_rows_concurrently():
                 "Concurrent Paper B": ("2601.00002", "title_search_exact", None),
             }
             return mapping[title]
+
+        async def get_arxiv_id_by_title_from_api(self, title: str):
+            raise AssertionError("Shared relation normalization should use the common HTML title search entrypoint")
 
         async def get_title(self, arxiv_identifier: str):
             mapping = {
@@ -1530,13 +1651,13 @@ async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_ret
             return title_mapping[arxiv_identifier], None
 
         async def get_arxiv_id_by_title(self, title: str):
-            raise AssertionError("Relation export should use the arXiv API title search path")
-
-        async def get_arxiv_match_by_title_from_api(self, title: str):
             self.api_title_searches.append(title)
             if title == "Reference Needs Mapping":
-                return "2501.00002", "Mapped Reference", "title_search_exact", None
+                return "2501.00002", "title_search_exact", None
             raise AssertionError(f"Unexpected title search: {title}")
+
+        async def get_arxiv_match_by_title_from_api(self, title: str):
+            raise AssertionError("Shared relation normalization should use the common HTML title search entrypoint")
 
         async def get_arxiv_id_by_title_from_api(self, title: str):
             raise AssertionError("Optimized relation export should use the title-search helper result directly")
@@ -1656,7 +1777,10 @@ async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_ret
         status_callback=statuses.append,
     )
 
-    assert arxiv_client.calls == ["https://arxiv.org/abs/2603.23502"]
+    assert arxiv_client.calls == [
+        "https://arxiv.org/abs/2603.23502",
+        "2501.00002",
+    ]
     assert arxiv_client.api_title_searches == ["Reference Needs Mapping"]
     assert openalex_client.title_queries == ["Target Paper"]
     assert openalex_client.reference_work_queries == [{"id": "https://openalex.org/W0"}]
@@ -1716,11 +1840,11 @@ async def test_export_arxiv_relations_to_csv_uses_hf_fallback_for_unresolved_rel
             return title_mapping[arxiv_identifier], None
 
         async def get_arxiv_id_by_title(self, title: str):
-            raise AssertionError("Relation export should not use the legacy HTML title search path")
-
-        async def get_arxiv_id_by_title_from_api(self, title: str):
             self.api_title_searches.append(title)
             return None, None, "No arXiv ID found from title search"
+
+        async def get_arxiv_id_by_title_from_api(self, title: str):
+            raise AssertionError("Shared relation normalization should use the common HTML title search entrypoint")
 
     class FakeOpenAlexClient:
         async def search_first_work(self, title: str):
@@ -2086,8 +2210,11 @@ async def test_export_arxiv_relations_to_csv_warms_content_for_arxiv_rows_and_pr
         "https://arxiv.org/abs/2501.00001",
         "https://arxiv.org/abs/2502.00002",
     ]
-    assert arxiv_client.html_title_searches == ["Retained DOI Reference"]
-    assert arxiv_client.api_title_searches == ["Retained DOI Reference"]
+    assert arxiv_client.html_title_searches == [
+        "Retained DOI Reference",
+        "Retained DOI Reference",
+    ]
+    assert arxiv_client.api_title_searches == []
     assert result.references.resolved == 1
     assert result.references.skipped == [
         {
@@ -2521,6 +2648,7 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
 @pytest.mark.anyio
 async def test_export_arxiv_relations_to_csv_threads_metadata_clients_to_shared_export(monkeypatch, tmp_path: Path):
     export_calls = []
+    normalize_calls = []
 
     class FakeArxivClient:
         async def get_title(self, arxiv_url: str):
@@ -2539,6 +2667,7 @@ async def test_export_arxiv_relations_to_csv_threads_metadata_clients_to_shared_
             return []
 
     async def fake_normalize_related_works_to_seeds(*args, **kwargs):
+        normalize_calls.append(kwargs)
         return [PaperSeed(name="Mapped Related", url="https://doi.org/10.1145/example")]
 
     async def fake_export_paper_seeds_to_csv(
@@ -2596,6 +2725,11 @@ async def test_export_arxiv_relations_to_csv_threads_metadata_clients_to_shared_
     )
 
     assert result.references.csv_path.parent == tmp_path
+    assert len(normalize_calls) == 2
+    assert normalize_calls[0]["crossref_client"] is crossref_client
+    assert normalize_calls[0]["datacite_client"] is datacite_client
+    assert normalize_calls[1]["crossref_client"] is crossref_client
+    assert normalize_calls[1]["datacite_client"] is datacite_client
     assert len(export_calls) == 2
     assert export_calls[0]["arxiv_client"] is not None
     assert export_calls[0]["crossref_client"] is crossref_client

@@ -209,3 +209,50 @@ async def test_resolve_arxiv_url_runs_crossref_then_datacite_after_html_title_se
     datacite_client.find_arxiv_match_by_doi.assert_awaited_once_with("https://doi.org/10.1145/example")
     discovery_client.get_huggingface_paper_search_results.assert_not_awaited()
     discovery_client.get_huggingface_search_html.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_resolve_arxiv_url_can_use_optional_huggingface_fallback_after_metadata_misses():
+    openalex_client = SimpleNamespace(
+        find_exact_arxiv_match_by_identifier=AsyncMock(return_value=(None, "Published Paper"))
+    )
+    arxiv_client = SimpleNamespace(
+        get_arxiv_id_by_title=AsyncMock(return_value=(None, None, "No arXiv ID found from title search")),
+        get_title=AsyncMock(return_value=("Mapped Arxiv Title", None)),
+    )
+    crossref_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock(return_value=(None, "Published Paper")))
+    datacite_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock(return_value=(None, "Published Paper")))
+    discovery_client = SimpleNamespace(
+        huggingface_token="hf-token",
+        get_huggingface_paper_search_results=AsyncMock(
+            return_value=(
+                [
+                    {
+                        "paper": {
+                            "id": "2501.12345",
+                            "title": "Published Paper",
+                        }
+                    }
+                ],
+                None,
+            )
+        ),
+    )
+
+    result = await resolve_arxiv_url(
+        title="Published Paper",
+        raw_url="https://doi.org/10.1145/example",
+        openalex_client=openalex_client,
+        arxiv_client=arxiv_client,
+        crossref_client=crossref_client,
+        datacite_client=datacite_client,
+        discovery_client=discovery_client,
+        allow_title_search=True,
+        allow_huggingface_fallback=True,
+    )
+
+    assert result.canonical_arxiv_url == "https://arxiv.org/abs/2501.12345"
+    assert result.resolved_title == "Mapped Arxiv Title"
+    crossref_client.find_arxiv_match_by_doi.assert_awaited_once_with("https://doi.org/10.1145/example")
+    datacite_client.find_arxiv_match_by_doi.assert_awaited_once_with("https://doi.org/10.1145/example")
+    discovery_client.get_huggingface_paper_search_results.assert_awaited_once_with("Published Paper", limit=1)

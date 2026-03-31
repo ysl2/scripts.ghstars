@@ -89,7 +89,7 @@ Path:
 
 - `src/arxiv_relations/runner.py`
 - `src/arxiv_relations/pipeline.py`
-- `src/arxiv_relations/title_resolution.py`
+- shared normalization via `src/shared/arxiv_url_resolution.py`
 
 Purpose:
 
@@ -118,6 +118,7 @@ Key files:
 Responsibilities:
 
 - Normalize paper URLs and identifiers.
+- Run the shared DOI/OpenAlex/title-based arXiv resolution ladder used by CSV, Notion, URL, and relation flows.
 - Detect whether an input is already arXiv-hosted.
 - Resolve DOI / OpenAlex work URLs to arXiv when possible.
 

@@ -3,8 +3,8 @@ from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
 
-from src.arxiv_relations.title_resolution import resolve_related_work_title_to_arxiv
 from src.shared.arxiv import normalize_title_for_matching
+from src.shared.arxiv_url_resolution import resolve_arxiv_url
 from src.shared.paper_export import export_paper_seeds_to_csv
 from src.shared.paper_identity import build_arxiv_abs_url, extract_arxiv_id, extract_arxiv_id_from_single_paper_url
 from src.shared.papers import ConversionResult, PaperSeed
@@ -78,20 +78,13 @@ def _build_retained_related_row(candidate) -> NormalizedRelatedRow:
     )
 
 
-def _relation_cache_keys(candidate) -> list[tuple[str, str]]:
-    keys: list[tuple[str, str]] = []
-    if candidate.openalex_url:
-        keys.append(("openalex_work", candidate.openalex_url))
-    if candidate.doi_url:
-        keys.append(("doi", candidate.doi_url))
-    return keys
-
-
 async def _resolve_related_work_row(
     candidate,
     *,
     arxiv_client,
     openalex_client=None,
+    crossref_client=None,
+    datacite_client=None,
     discovery_client=None,
     relation_resolution_cache=None,
     arxiv_relation_no_arxiv_recheck_days: int = 30,
@@ -105,76 +98,31 @@ async def _resolve_related_work_row(
             original_title=resolved_title,
         )
 
-    cache_keys = _relation_cache_keys(candidate)
-    cached_entries = (
-        [relation_resolution_cache.get(key_type, key_value) for key_type, key_value in cache_keys]
-        if relation_resolution_cache is not None
-        else []
-    )
-    positive_entry = next((entry for entry in cached_entries if entry and entry.arxiv_url), None)
-    if positive_entry is not None:
-        cached_title = getattr(positive_entry, "resolved_title", None)
-        if not cached_title:
-            cached_title, _ = await arxiv_client.get_title(positive_entry.arxiv_url)
-        original_title = candidate.title or cached_title or positive_entry.arxiv_url
-        return NormalizedRelatedRow(
-            title=cached_title or candidate.title or positive_entry.arxiv_url,
-            url=positive_entry.arxiv_url,
-            strength=NormalizationStrength.TITLE_SEARCH,
-            original_title=original_title,
-        )
-
-    has_fresh_negative = any(
-        entry is not None
-        and entry.arxiv_url is None
-        and relation_resolution_cache.is_negative_cache_fresh(
-            entry.checked_at,
-            arxiv_relation_no_arxiv_recheck_days,
-        )
-        for entry in cached_entries
-    )
-    if has_fresh_negative:
-        return _build_retained_related_row(candidate)
-
-    resolution = await resolve_related_work_title_to_arxiv(
-        candidate.title,
+    resolution = await resolve_arxiv_url(
+        title=candidate.title,
+        raw_url=_fallback_related_work_url(candidate),
         arxiv_client=arxiv_client,
         openalex_client=openalex_client,
-        openalex_work=(
-            {
-                "id": candidate.openalex_url,
-                "display_name": candidate.title,
-            }
-            if candidate.openalex_url
-            else None
-        ),
+        crossref_client=crossref_client,
+        datacite_client=datacite_client,
         discovery_client=discovery_client,
+        relation_resolution_cache=relation_resolution_cache,
+        arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
+        allow_title_search=True,
+        allow_openalex_preprint_crosswalk=True,
+        allow_huggingface_fallback=True,
+        extra_identifiers=[candidate.openalex_url, candidate.doi_url],
     )
-    if resolution.arxiv_url:
-        if relation_resolution_cache is not None:
-            for key_type, key_value in cache_keys:
-                relation_resolution_cache.record_resolution(
-                    key_type=key_type,
-                    key_value=key_value,
-                    arxiv_url=resolution.arxiv_url,
-                    resolved_title=resolution.resolved_title,
-                )
-        resolved_title = resolution.resolved_title or candidate.title or resolution.arxiv_url
-        original_title = candidate.title or resolution.resolved_title or resolution.arxiv_url
+    if resolution.canonical_arxiv_url:
+        resolved_title = resolution.resolved_title or candidate.title or resolution.canonical_arxiv_url
+        original_title = candidate.title or resolution.resolved_title or resolution.canonical_arxiv_url
         return NormalizedRelatedRow(
             title=resolved_title,
-            url=resolution.arxiv_url,
+            url=resolution.canonical_arxiv_url,
             strength=NormalizationStrength.TITLE_SEARCH,
             original_title=original_title,
         )
 
-    if relation_resolution_cache is not None and resolution.negative_cacheable:
-        for key_type, key_value in cache_keys:
-            relation_resolution_cache.record_resolution(
-                key_type=key_type,
-                key_value=key_value,
-                arxiv_url=None,
-            )
     return _build_retained_related_row(candidate)
 
 
@@ -183,6 +131,8 @@ async def _resolve_related_work_rows(
     *,
     arxiv_client,
     openalex_client=None,
+    crossref_client=None,
+    datacite_client=None,
     discovery_client=None,
     relation_resolution_cache=None,
     arxiv_relation_no_arxiv_recheck_days: int = 30,
@@ -193,6 +143,8 @@ async def _resolve_related_work_rows(
                 candidate,
                 arxiv_client=arxiv_client,
                 openalex_client=openalex_client,
+                crossref_client=crossref_client,
+                datacite_client=datacite_client,
                 discovery_client=discovery_client,
                 relation_resolution_cache=relation_resolution_cache,
                 arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
@@ -227,6 +179,8 @@ async def normalize_related_works_to_seeds(
     *,
     openalex_client,
     arxiv_client,
+    crossref_client=None,
+    datacite_client=None,
     discovery_client=None,
     relation_resolution_cache=None,
     arxiv_relation_no_arxiv_recheck_days: int = 30,
@@ -236,6 +190,8 @@ async def normalize_related_works_to_seeds(
         candidates,
         arxiv_client=arxiv_client,
         openalex_client=openalex_client,
+        crossref_client=crossref_client,
+        datacite_client=datacite_client,
         discovery_client=discovery_client,
         relation_resolution_cache=relation_resolution_cache,
         arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
@@ -287,6 +243,8 @@ async def export_arxiv_relations_to_csv(
         referenced_works,
         openalex_client=openalex_client,
         arxiv_client=arxiv_client,
+        crossref_client=crossref_client,
+        datacite_client=datacite_client,
         discovery_client=discovery_client,
         relation_resolution_cache=relation_resolution_cache,
         arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
@@ -295,6 +253,8 @@ async def export_arxiv_relations_to_csv(
         citation_works,
         openalex_client=openalex_client,
         arxiv_client=arxiv_client,
+        crossref_client=crossref_client,
+        datacite_client=datacite_client,
         discovery_client=discovery_client,
         relation_resolution_cache=relation_resolution_cache,
         arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
