@@ -37,22 +37,22 @@ ALPHAXIV_TOKEN=
 REPO_DISCOVERY_NO_REPO_RECHECK_DAYS=7
 ```
 
-`HUGGINGFACE_TOKEN` enables both Hugging Face exact repo discovery and the optional single-paper relation-mode title-search fallback.
+`HUGGINGFACE_TOKEN` enables both Hugging Face exact repo discovery and the shared final-stage Hugging Face paper title-search fallback inside arXiv URL resolution.
 `ALPHAXIV_TOKEN` is optional. When set, AlphaXiv page fetches and API requests send `Authorization: Bearer <token>`; when empty, they keep using the current anonymous public behavior.
 
-`cache.db` is created automatically in the current working directory and shared across URL, CSV, and Notion runs.
+`cache.db` is created automatically in the current working directory and shared across all four modes.
 `HF_EXACT_NO_REPO_RECHECK_DAYS` is still accepted as a backward-compatible alias, but `REPO_DISCOVERY_NO_REPO_RECHECK_DAYS` is the preferred name.
 
-### Optional only for single-paper arXiv relation mode
+### Optional in modes that may normalize non-arXiv paper URLs
 
 ```bash
 OPENALEX_API_KEY=
 ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS=30
 ```
 
-`OPENALEX_API_KEY` is optional but recommended for single-paper relation export. Even with a key, OpenAlex can still return budget-exhausted `429` responses; the client honors `Retry-After` / `retryAfter` signals and avoids long pointless retry loops when the server asks for a much later retry.
+`OPENALEX_API_KEY` is optional but recommended anywhere the shared arXiv URL resolver may need OpenAlex metadata, including CSV update, collection URL export, Notion sync, and single-paper relation export. Even with a key, OpenAlex can still return budget-exhausted `429` responses; the client honors `Retry-After` / `retryAfter` signals and avoids long pointless retry loops when the server asks for a much later retry.
 
-`ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS` controls how long single-paper relation mode keeps a cached "no arXiv match found" result before retrying arXiv title search.
+`ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS` controls how long the shared arXiv-resolution negative cache stays fresh before the resolver retries that unresolved identifier.
 
 ### Optional override only for Semantic Scholar URL mode
 
@@ -80,7 +80,7 @@ DATABASE_ID=
 
 ### Shared enrichment behavior
 
-CSV update, collection URL export, and single-paper relation export reuse the same downstream enrichment path once a row has a canonical arXiv URL.
+CSV update, collection URL export, Notion sync, and single-paper relation export reuse the same downstream enrichment path once a row has a canonical arXiv URL.
 
 - GitHub discovery checks `cache.db` first, then does one Hugging Face exact lookup on cache miss when discovery is allowed
 - when Hugging Face exact returns no repo, discovery does one AlphaXiv paper-page HTML lookup before giving up
@@ -140,7 +140,7 @@ uv run main.py /path/to/papers.csv
 CSV mode behavior:
 
 - if `Url` is already an arXiv URL, it is preserved exactly as-is
-- if `Url` is non-arXiv, the shared resolver uses `cache -> OpenAlex exact -> arXiv HTML title search -> Crossref -> DataCite` to normalize it to arXiv when possible
+- if `Url` is non-arXiv, the shared resolver uses `cache -> OpenAlex exact -> OpenAlex preprint -> arXiv title search (HTML -> API) -> Crossref -> DataCite -> Hugging Face` to normalize it to arXiv when possible
 - requires `Url`; `Name` is optional
 - if `Github` is already present and valid, its exact value is preserved and only `Stars` is refreshed
 - if `Github` is blank, discovery checks `cache.db` first, then does one Hugging Face exact lookup on cache miss
@@ -290,7 +290,7 @@ URL mode behavior:
 - URL modes use canonical, versionless arXiv URLs as internal identity and dedupe keys during downstream enrichment; existing arXiv URLs are preserved as-is in the final CSV, while non-arXiv rows are rewritten only when they are resolved to arXiv
 - rows that cannot be mapped to arXiv are dropped from the final CSV
 - repo discovery reuses the shared `cache.db` mapping of canonical arXiv URL to GitHub repo
-- the shared resolver uses `cache -> OpenAlex exact -> arXiv HTML title search -> Crossref -> DataCite` for non-arXiv rows before downstream repo discovery
+- the shared resolver uses `cache -> OpenAlex exact -> OpenAlex preprint -> arXiv title search (HTML -> API) -> Crossref -> DataCite -> Hugging Face` for non-arXiv rows before downstream repo discovery
 - downstream repository discovery, star lookup, sorting, progress printing, and CSV writing reuse the same shared export logic as CSV update mode where applicable
 
 ### Single-paper arXiv relation export mode
@@ -336,14 +336,12 @@ Single-paper mode behavior:
 - resolves the input paper title from arXiv metadata first, then searches OpenAlex by title
 - accepts the first OpenAlex work returned by relevance order
 - keeps direct arXiv-backed related works as canonical, versionless arXiv `abs` rows
-- otherwise first tries an OpenAlex exact-title preprint/sibling crosswalk on the related work itself
-- on crosswalk miss, tries arXiv API title search and takes the first most relevant hit
-- after an arXiv API title-search miss, may try Hugging Face Papers title search when `HUGGINGFACE_TOKEN` is configured
+- otherwise reuses the shared resolver `cache -> OpenAlex exact -> OpenAlex preprint -> arXiv title search (HTML -> API) -> Crossref -> DataCite -> Hugging Face`
 - mapped rows use the matched arXiv title and canonical arXiv `abs` URL
 - when `HUGGINGFACE_TOKEN` is absent, the Hugging Face fallback is skipped silently and unresolved rows keep the current retained-row behavior
 - if still unresolved, keeps the non-arXiv row with `Url` priority `DOI > landing page > OpenAlex URL`
 - relation normalization reuses `./cache.db` to cache non-direct relation resolution by OpenAlex work URL and DOI
-- cached positive matches store canonical arXiv `abs` URLs; cached negative matches are written only after the active relation-resolution ladder for the current environment confirms no accepted arXiv match, then retried after `ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS`
+- cached positive matches store canonical arXiv `abs` URLs; cached negative matches are written only when all actually attempted resolver stages finish without transient/network failure and still find no accepted arXiv match, then retried after `ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS`
 - referenced and citing works are deduplicated by final normalized URL before export
 - both CSVs use the standard columns: `Name`, `Url`, `Github`, `Stars`
 - shared GitHub discovery, local overview / abs cache warming, and star enrichment are reused, so resolved and unresolved rows remain in the CSV even when no repo is found; in that case `Github` and `Stars` are left blank
@@ -372,7 +370,7 @@ Optional arXiv source fields for fallback discovery:
 
 When `Github` is empty, the sync flow:
 
-1. resolves the paper to a canonical arXiv URL from URL fields first; for non-arXiv URLs, the shared resolver uses `cache -> OpenAlex exact -> arXiv HTML title search -> Crossref -> DataCite`
+1. resolves the paper to a canonical arXiv URL from URL fields first; for non-arXiv URLs, the shared resolver uses `cache -> OpenAlex exact -> OpenAlex preprint -> arXiv title search (HTML -> API) -> Crossref -> DataCite -> Hugging Face`
 2. uses that canonical arXiv URL as the paper identity for repo discovery and stars lookup
 3. checks `cache.db` for that canonical arXiv URL
 4. if needed, calls Hugging Face exact paper API for that arXiv id
