@@ -44,8 +44,18 @@ ARXIV_ID_ONLY_PATTERN = re.compile(
 def normalize_title_for_matching(title: str) -> str:
     if not title or not isinstance(title, str):
         return ""
-    normalized = unicodedata.normalize("NFKC", title).casefold()
+    normalized = sanitize_title_for_lookup(title).casefold()
     normalized = NON_ALNUM_PATTERN.sub(" ", normalized)
+    return " ".join(normalized.split()).strip()
+
+
+def sanitize_title_for_lookup(title: str) -> str:
+    if not title or not isinstance(title, str):
+        return ""
+
+    normalized = unicodedata.normalize("NFKC", title)
+    normalized = HTML_TAG_PATTERN.sub(" ", normalized)
+    normalized = html_lib.unescape(normalized)
     return " ".join(normalized.split()).strip()
 
 

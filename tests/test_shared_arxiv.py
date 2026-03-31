@@ -7,6 +7,7 @@ from src.shared.arxiv import (
     extract_best_arxiv_id_from_feed,
     extract_best_arxiv_id_from_search_html,
     extract_submitted_date_from_abs_html,
+    normalize_title_for_matching,
 )
 
 
@@ -77,6 +78,12 @@ def test_extract_best_arxiv_id_from_search_html_rejects_non_matching_related_tit
         search_html,
         "VGGT: Visual Geometry Grounded Transformer",
     ) == (None, None)
+
+
+def test_normalize_title_for_matching_strips_html_markup():
+    assert normalize_title_for_matching(
+        "<b>VISTA</b> : Open-Vocabulary, Task-Relevant Robot Exploration With Online Semantic Gaussian Splatting"
+    ) == "vista open vocabulary task relevant robot exploration with online semantic gaussian splatting"
 
 
 @pytest.mark.anyio

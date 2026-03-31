@@ -244,7 +244,9 @@ async def test_normalize_related_works_maps_non_arxiv_title_hits_to_canonical_ar
             raise AssertionError(f"Unexpected title search: {title}")
 
         async def get_arxiv_match_by_title_from_api(self, title: str):
-            raise AssertionError("Shared relation normalization should use the common HTML title search entrypoint")
+            if title == "Publisher Reference":
+                return None, None, None, "No arXiv ID found from title search"
+            raise AssertionError(f"Unexpected API title search: {title}")
 
         async def get_arxiv_id_by_title_from_api(self, title: str):
             raise AssertionError("Optimized relation normalization should use the title-search helper result directly")
@@ -1472,7 +1474,9 @@ async def test_normalize_related_works_rechecks_stale_negative_and_backfills_all
             return "2312.00451", "title_search_exact", None
 
         async def get_arxiv_match_by_title_from_api(self, title: str):
-            raise AssertionError("Shared relation normalization should use the common HTML title search entrypoint")
+            if title == "Publisher Reference":
+                return None, None, None, "No arXiv ID found from title search"
+            raise AssertionError(f"Unexpected API title search: {title}")
 
         async def get_arxiv_id_by_title_from_api(self, title: str):
             raise AssertionError("Optimized backfill should use the title-search helper result directly")
@@ -1665,7 +1669,9 @@ async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_ret
             raise AssertionError(f"Unexpected title search: {title}")
 
         async def get_arxiv_match_by_title_from_api(self, title: str):
-            raise AssertionError("Shared relation normalization should use the common HTML title search entrypoint")
+            if title == "Publisher Reference":
+                return None, None, None, "No arXiv ID found from title search"
+            raise AssertionError(f"Unexpected API title search: {title}")
 
         async def get_arxiv_id_by_title_from_api(self, title: str):
             raise AssertionError("Optimized relation export should use the title-search helper result directly")
@@ -2222,7 +2228,7 @@ async def test_export_arxiv_relations_to_csv_warms_content_for_arxiv_rows_and_pr
         "https://arxiv.org/abs/2502.00002",
     ]
     assert arxiv_client.html_title_searches == ["Retained DOI Reference"]
-    assert arxiv_client.api_title_searches == []
+    assert arxiv_client.api_title_searches == ["Retained DOI Reference"]
     assert result.references.resolved == 1
     assert result.references.skipped == [
         {

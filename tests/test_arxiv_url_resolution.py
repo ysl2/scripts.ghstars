@@ -189,6 +189,41 @@ async def test_resolve_arxiv_url_uses_openalex_exact_before_all_fallbacks():
 
 
 @pytest.mark.anyio
+async def test_resolve_arxiv_url_strips_html_markup_before_openalex_preprint_lookup():
+    openalex_client = SimpleNamespace(
+        find_exact_arxiv_match_by_identifier=AsyncMock(return_value=(None, None)),
+        find_preprint_match_by_identifier=AsyncMock(
+            side_effect=lambda identifier, title=None: (
+                ("https://arxiv.org/abs/2507.01125", "VISTA: Open-Vocabulary, Task-Relevant Robot Exploration with Online Semantic Gaussian Splatting")
+                if identifier == "https://doi.org/10.1109/lra.2026.3653276"
+                and title == "VISTA : Open-Vocabulary, Task-Relevant Robot Exploration With Online Semantic Gaussian Splatting"
+                else (None, None)
+            )
+        ),
+    )
+    arxiv_client = SimpleNamespace(get_arxiv_id_by_title=AsyncMock())
+
+    result = await resolve_arxiv_url(
+        title="<b>VISTA</b> : Open-Vocabulary, Task-Relevant Robot Exploration With Online Semantic Gaussian Splatting",
+        raw_url="https://doi.org/10.1109/lra.2026.3653276",
+        openalex_client=openalex_client,
+        arxiv_client=arxiv_client,
+    )
+
+    assert result.canonical_arxiv_url == "https://arxiv.org/abs/2507.01125"
+    assert result.source == "openalex_preprint_doi"
+    openalex_client.find_exact_arxiv_match_by_identifier.assert_awaited_once_with(
+        "https://doi.org/10.1109/lra.2026.3653276",
+        title="VISTA : Open-Vocabulary, Task-Relevant Robot Exploration With Online Semantic Gaussian Splatting",
+    )
+    openalex_client.find_preprint_match_by_identifier.assert_awaited_once_with(
+        "https://doi.org/10.1109/lra.2026.3653276",
+        title="VISTA : Open-Vocabulary, Task-Relevant Robot Exploration With Online Semantic Gaussian Splatting",
+    )
+    arxiv_client.get_arxiv_id_by_title.assert_not_awaited()
+
+
+@pytest.mark.anyio
 async def test_resolve_arxiv_url_prefers_html_title_search_over_api_title_search():
     openalex_client = SimpleNamespace(
         find_exact_arxiv_match_by_identifier=AsyncMock(return_value=(None, "Published Paper"))
@@ -215,6 +250,49 @@ async def test_resolve_arxiv_url_prefers_html_title_search_over_api_title_search
     assert result.canonical_arxiv_url == "https://arxiv.org/abs/2501.54321"
     arxiv_client.get_arxiv_id_by_title.assert_awaited_once_with("Published Paper")
     arxiv_client.get_arxiv_match_by_title_from_api.assert_not_awaited()
+    crossref_client.find_arxiv_match_by_doi.assert_not_awaited()
+    datacite_client.find_arxiv_match_by_doi.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_resolve_arxiv_url_falls_back_to_api_title_search_after_html_miss():
+    openalex_client = SimpleNamespace(
+        find_exact_arxiv_match_by_identifier=AsyncMock(return_value=(None, "Published Paper"))
+    )
+    arxiv_client = SimpleNamespace(
+        get_arxiv_id_by_title=AsyncMock(return_value=(None, None, "No arXiv ID found from title search")),
+        get_arxiv_match_by_title_from_api=AsyncMock(
+            return_value=(
+                "2508.18242",
+                "GSVisLoc: Generalizable Visual Localization for Gaussian Splatting Scene Representations",
+                "title_search_contained",
+                None,
+            )
+        ),
+    )
+    crossref_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock())
+    datacite_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock())
+
+    result = await resolve_arxiv_url(
+        title="Generalizable Visual Localization for Gaussian Splatting Scene Representations",
+        raw_url="https://doi.org/10.1109/iccvw69036.2025.00025",
+        openalex_client=openalex_client,
+        arxiv_client=arxiv_client,
+        crossref_client=crossref_client,
+        datacite_client=datacite_client,
+        allow_title_search=True,
+        allow_huggingface_fallback=False,
+    )
+
+    assert result.canonical_arxiv_url == "https://arxiv.org/abs/2508.18242"
+    assert result.resolved_title == "GSVisLoc: Generalizable Visual Localization for Gaussian Splatting Scene Representations"
+    assert result.source == "title_search"
+    arxiv_client.get_arxiv_id_by_title.assert_awaited_once_with(
+        "Generalizable Visual Localization for Gaussian Splatting Scene Representations"
+    )
+    arxiv_client.get_arxiv_match_by_title_from_api.assert_awaited_once_with(
+        "Generalizable Visual Localization for Gaussian Splatting Scene Representations"
+    )
     crossref_client.find_arxiv_match_by_doi.assert_not_awaited()
     datacite_client.find_arxiv_match_by_doi.assert_not_awaited()
 

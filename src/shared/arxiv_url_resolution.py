@@ -4,7 +4,7 @@ import re
 
 import aiohttp
 
-from src.shared.arxiv import normalize_title_for_matching
+from src.shared.arxiv import normalize_title_for_matching, sanitize_title_for_lookup
 from src.shared.paper_identity import (
     build_arxiv_abs_url,
     is_arxiv_hosted_url,
@@ -82,7 +82,7 @@ async def resolve_arxiv_url(
     allow_huggingface_fallback: bool = True,
     extra_identifiers: list[str] | None = None,
 ) -> ArxivUrlResolutionResult:
-    normalized_title = " ".join((title or "").split()).strip()
+    normalized_title = sanitize_title_for_lookup(title)
     normalized_raw_url = (raw_url or "").strip()
     identifiers = [normalized_raw_url]
     if extra_identifiers:
@@ -314,29 +314,43 @@ async def _resolve_by_title(
     if not title:
         return _TitleResolutionResult(canonical_arxiv_url=None, resolved_title=None, definitive_no_match=False)
 
-    arxiv_id = None
-    matched_title = None
-    error = None
-
     arxiv_title_search = getattr(arxiv_client, "get_arxiv_id_by_title", None)
+    html_definitive_no_match = False
     if callable(arxiv_title_search):
         arxiv_id, _source, error = await arxiv_title_search(title)
-    else:
-        arxiv_title_match = getattr(arxiv_client, "get_arxiv_match_by_title_from_api", None)
-        if callable(arxiv_title_match):
-            arxiv_id, matched_title, _source, error = await arxiv_title_match(title)
+        if arxiv_id:
+            matched_title = None
+            if callable(getattr(arxiv_client, "get_title", None)):
+                matched_title, _ = await arxiv_client.get_title(arxiv_id)
+            return _TitleResolutionResult(
+                canonical_arxiv_url=build_arxiv_abs_url(arxiv_id),
+                resolved_title=matched_title or title,
+                definitive_no_match=False,
+            )
+        html_definitive_no_match = error == NO_MATCH_TITLE_SEARCH_ERROR
 
-    if arxiv_id:
-        canonical_arxiv_url = build_arxiv_abs_url(arxiv_id)
-        if matched_title is None and callable(getattr(arxiv_client, "get_title", None)):
-            matched_title, _ = await arxiv_client.get_title(arxiv_id)
-        return _TitleResolutionResult(
-            canonical_arxiv_url=canonical_arxiv_url,
-            resolved_title=matched_title or title,
-            definitive_no_match=False,
+    arxiv_title_match = getattr(arxiv_client, "get_arxiv_match_by_title_from_api", None)
+    api_definitive_no_match = False
+    if callable(arxiv_title_match):
+        arxiv_id, matched_title, _source, error = await arxiv_title_match(title)
+        if arxiv_id:
+            canonical_arxiv_url = build_arxiv_abs_url(arxiv_id)
+            if matched_title is None and callable(getattr(arxiv_client, "get_title", None)):
+                matched_title, _ = await arxiv_client.get_title(arxiv_id)
+            return _TitleResolutionResult(
+                canonical_arxiv_url=canonical_arxiv_url,
+                resolved_title=matched_title or title,
+                definitive_no_match=False,
+            )
+        api_definitive_no_match = error == NO_MATCH_TITLE_SEARCH_ERROR
+
+    definitive_no_match = False
+    if callable(arxiv_title_match):
+        definitive_no_match = api_definitive_no_match and (
+            not callable(arxiv_title_search) or html_definitive_no_match
         )
-
-    definitive_no_match = error == NO_MATCH_TITLE_SEARCH_ERROR
+    elif callable(arxiv_title_search):
+        definitive_no_match = html_definitive_no_match
 
     return _TitleResolutionResult(
         canonical_arxiv_url=None,
