@@ -644,7 +644,7 @@ async def test_normalize_related_works_does_not_negative_cache_api_request_failu
 
 
 @pytest.mark.anyio
-async def test_normalize_related_works_uses_openalex_crosswalk_before_arxiv_and_hf_fallbacks():
+async def test_normalize_related_works_runs_arxiv_title_before_openalex_crosswalk_and_hf_fallbacks():
     from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
 
     events: list[tuple] = []
@@ -672,10 +672,8 @@ async def test_normalize_related_works_uses_openalex_crosswalk_before_arxiv_and_
 
     class FakeArxivClient:
         async def get_arxiv_id_by_title(self, title: str):
-            raise AssertionError("Relation mode should not use legacy HTML title search")
-
-        async def get_arxiv_id_by_title_from_api(self, title: str):
-            raise AssertionError("OpenAlex crosswalk hits should bypass arXiv title search")
+            events.append(("arxiv_title_search", title))
+            return None, None, "No arXiv ID found from title search"
 
         async def get_title(self, arxiv_identifier: str):
             raise AssertionError("OpenAlex crosswalk hits should not do an extra arXiv title lookup")
@@ -726,6 +724,7 @@ async def test_normalize_related_works_uses_openalex_crosswalk_before_arxiv_and_
     assert cache.entries[("openalex_work", "https://openalex.org/WX1")].resolved_title == "Example Preprint Title"
     assert cache.entries[("doi", "https://doi.org/10.1145/example")].resolved_title == "Example Preprint Title"
     assert events == [
+        ("arxiv_title_search", "Example Published Paper"),
         ("openalex_crosswalk", "Example Published Paper"),
         ("cache_record", "openalex_work", "https://openalex.org/WX1", "https://arxiv.org/abs/2401.12345"),
         ("cache_record", "doi", "https://doi.org/10.1145/example", "https://arxiv.org/abs/2401.12345"),
@@ -733,7 +732,7 @@ async def test_normalize_related_works_uses_openalex_crosswalk_before_arxiv_and_
 
 
 @pytest.mark.anyio
-async def test_normalize_related_works_openalex_crosswalk_miss_runs_before_arxiv_and_hf_fallback():
+async def test_normalize_related_works_openalex_crosswalk_miss_runs_after_arxiv_and_before_hf_fallback():
     from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
 
     events: list[tuple] = []
@@ -810,9 +809,9 @@ async def test_normalize_related_works_openalex_crosswalk_miss_runs_before_arxiv
         ("doi", "https://doi.org/10.1145/example", None),
     ]
     assert events == [
-        ("openalex_crosswalk", "Example Published Paper"),
-        ("openalex_crosswalk", "Example Published Paper"),
         ("arxiv_title_search", "Example Published Paper"),
+        ("openalex_crosswalk", "Example Published Paper"),
+        ("openalex_crosswalk", "Example Published Paper"),
         ("hf_search_json", "Example Published Paper", 1),
         ("cache_record", "openalex_work", "https://openalex.org/WX2", None),
         ("cache_record", "doi", "https://doi.org/10.1145/example", None),

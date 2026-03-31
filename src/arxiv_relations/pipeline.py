@@ -1,5 +1,5 @@
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
 
@@ -31,6 +31,8 @@ class NormalizedRelatedRow:
     url: str
     strength: NormalizationStrength
     original_title: str = ""
+    input_url: str = field(default="", compare=False)
+    resolution_source: str | None = field(default=None, compare=False)
 
 
 def normalize_single_arxiv_input(arxiv_input: str) -> str:
@@ -67,7 +69,7 @@ def _fallback_related_work_url(candidate) -> str:
     return candidate.doi_url or candidate.landing_page_url or candidate.openalex_url
 
 
-def _build_retained_related_row(candidate) -> NormalizedRelatedRow:
+def _build_retained_related_row(candidate, *, resolution_source: str | None = None) -> NormalizedRelatedRow:
     fallback_url = _fallback_related_work_url(candidate)
     original_title = candidate.title or fallback_url
     return NormalizedRelatedRow(
@@ -75,6 +77,8 @@ def _build_retained_related_row(candidate) -> NormalizedRelatedRow:
         url=fallback_url,
         strength=NormalizationStrength.RETAINED_NON_ARXIV,
         original_title=original_title,
+        input_url=fallback_url,
+        resolution_source=resolution_source or "unresolved",
     )
 
 
@@ -88,7 +92,9 @@ async def _resolve_related_work_row(
     discovery_client=None,
     relation_resolution_cache=None,
     arxiv_relation_no_arxiv_recheck_days: int = 30,
+    resolve_arxiv_url_fn=None,
 ) -> NormalizedRelatedRow:
+    resolve_arxiv_url_fn = resolve_arxiv_url if resolve_arxiv_url_fn is None else resolve_arxiv_url_fn
     if candidate.direct_arxiv_url:
         resolved_title = candidate.title or candidate.direct_arxiv_url
         return NormalizedRelatedRow(
@@ -96,11 +102,14 @@ async def _resolve_related_work_row(
             url=candidate.direct_arxiv_url,
             strength=NormalizationStrength.DIRECT_ARXIV,
             original_title=resolved_title,
+            input_url=candidate.direct_arxiv_url,
+            resolution_source="direct_arxiv_url",
         )
 
-    resolution = await resolve_arxiv_url(
+    fallback_url = _fallback_related_work_url(candidate)
+    resolution = await resolve_arxiv_url_fn(
         title=candidate.title,
-        raw_url=_fallback_related_work_url(candidate),
+        raw_url=fallback_url,
         arxiv_client=arxiv_client,
         openalex_client=openalex_client,
         crossref_client=crossref_client,
@@ -118,9 +127,11 @@ async def _resolve_related_work_row(
             url=resolution.canonical_arxiv_url,
             strength=NormalizationStrength.TITLE_SEARCH,
             original_title=original_title,
+            input_url=fallback_url,
+            resolution_source=resolution.source,
         )
 
-    return _build_retained_related_row(candidate)
+    return _build_retained_related_row(candidate, resolution_source=resolution.source)
 
 
 async def _resolve_related_work_rows(
@@ -133,6 +144,7 @@ async def _resolve_related_work_rows(
     discovery_client=None,
     relation_resolution_cache=None,
     arxiv_relation_no_arxiv_recheck_days: int = 30,
+    resolve_arxiv_url_fn=None,
 ) -> list[NormalizedRelatedRow]:
     return await asyncio.gather(
         *[
@@ -145,6 +157,7 @@ async def _resolve_related_work_rows(
                 discovery_client=discovery_client,
                 relation_resolution_cache=relation_resolution_cache,
                 arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
+                resolve_arxiv_url_fn=resolve_arxiv_url_fn,
             )
             for candidate in candidates
         ]
@@ -171,6 +184,33 @@ def _dedupe_normalized_rows(rows: list[NormalizedRelatedRow]) -> list[Normalized
     return list(winners_by_url.values())
 
 
+async def normalize_related_works_to_rows(
+    related_works: list[dict],
+    *,
+    openalex_client,
+    arxiv_client,
+    crossref_client=None,
+    datacite_client=None,
+    discovery_client=None,
+    relation_resolution_cache=None,
+    arxiv_relation_no_arxiv_recheck_days: int = 30,
+    resolve_arxiv_url_fn=None,
+) -> list[NormalizedRelatedRow]:
+    candidates = [openalex_client.build_related_work_candidate(work) for work in related_works]
+    normalized_rows = await _resolve_related_work_rows(
+        candidates,
+        arxiv_client=arxiv_client,
+        openalex_client=openalex_client,
+        crossref_client=crossref_client,
+        datacite_client=datacite_client,
+        discovery_client=discovery_client,
+        relation_resolution_cache=relation_resolution_cache,
+        arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
+        resolve_arxiv_url_fn=resolve_arxiv_url_fn,
+    )
+    return _dedupe_normalized_rows(normalized_rows)
+
+
 async def normalize_related_works_to_seeds(
     related_works: list[dict],
     *,
@@ -182,18 +222,16 @@ async def normalize_related_works_to_seeds(
     relation_resolution_cache=None,
     arxiv_relation_no_arxiv_recheck_days: int = 30,
 ) -> list[PaperSeed]:
-    candidates = [openalex_client.build_related_work_candidate(work) for work in related_works]
-    normalized_rows = await _resolve_related_work_rows(
-        candidates,
-        arxiv_client=arxiv_client,
+    deduped_rows = await normalize_related_works_to_rows(
+        related_works,
         openalex_client=openalex_client,
+        arxiv_client=arxiv_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
         discovery_client=discovery_client,
         relation_resolution_cache=relation_resolution_cache,
         arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
     )
-    deduped_rows = _dedupe_normalized_rows(normalized_rows)
     return [
         PaperSeed(
             name=row.title,

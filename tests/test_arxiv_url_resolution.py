@@ -208,6 +208,7 @@ async def test_resolve_arxiv_url_strips_html_markup_before_openalex_preprint_loo
         raw_url="https://doi.org/10.1109/lra.2026.3653276",
         openalex_client=openalex_client,
         arxiv_client=arxiv_client,
+        allow_title_search=False,
     )
 
     assert result.canonical_arxiv_url == "https://arxiv.org/abs/2507.01125"
@@ -221,6 +222,55 @@ async def test_resolve_arxiv_url_strips_html_markup_before_openalex_preprint_loo
         title="VISTA : Open-Vocabulary, Task-Relevant Robot Exploration With Online Semantic Gaussian Splatting",
     )
     arxiv_client.get_arxiv_id_by_title.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_resolve_arxiv_url_runs_title_search_before_openalex_preprint():
+    call_order: list[str] = []
+
+    async def openalex_exact(identifier: str, title=None):
+        call_order.append("openalex_exact")
+        return None, "Published Paper"
+
+    async def html_title_search(title: str):
+        call_order.append("arxiv_html")
+        return None, None, "No arXiv ID found from title search"
+
+    async def api_title_search(title: str):
+        call_order.append("arxiv_api")
+        return None, None, None, "No arXiv ID found from title search"
+
+    async def openalex_preprint(identifier: str, title=None):
+        call_order.append("openalex_preprint")
+        return "https://arxiv.org/abs/2507.01125", "Mapped By OpenAlex Preprint"
+
+    openalex_client = SimpleNamespace(
+        find_exact_arxiv_match_by_identifier=AsyncMock(side_effect=openalex_exact),
+        find_preprint_match_by_identifier=AsyncMock(side_effect=openalex_preprint),
+    )
+    arxiv_client = SimpleNamespace(
+        get_arxiv_id_by_title=AsyncMock(side_effect=html_title_search),
+        get_arxiv_match_by_title_from_api=AsyncMock(side_effect=api_title_search),
+    )
+    crossref_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock())
+    datacite_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock())
+
+    result = await resolve_arxiv_url(
+        title="Published Paper",
+        raw_url="https://doi.org/10.1145/example",
+        openalex_client=openalex_client,
+        arxiv_client=arxiv_client,
+        crossref_client=crossref_client,
+        datacite_client=datacite_client,
+        allow_title_search=True,
+        allow_huggingface_fallback=False,
+    )
+
+    assert result.canonical_arxiv_url == "https://arxiv.org/abs/2507.01125"
+    assert result.source == "openalex_preprint_doi"
+    assert call_order == ["openalex_exact", "arxiv_html", "arxiv_api", "openalex_preprint"]
+    crossref_client.find_arxiv_match_by_doi.assert_not_awaited()
+    datacite_client.find_arxiv_match_by_doi.assert_not_awaited()
 
 
 @pytest.mark.anyio
@@ -299,15 +349,43 @@ async def test_resolve_arxiv_url_falls_back_to_api_title_search_after_html_miss(
 
 @pytest.mark.anyio
 async def test_resolve_arxiv_url_runs_crossref_then_datacite_after_html_title_search_fails_without_hf():
+    call_order: list[str] = []
+
+    async def openalex_exact(identifier: str, title=None):
+        call_order.append("openalex_exact")
+        return None, "Published Paper"
+
+    async def openalex_preprint(identifier: str, title=None):
+        call_order.append("openalex_preprint")
+        return None, "Published Paper"
+
+    async def html_title_search(title: str):
+        call_order.append("arxiv_html")
+        return None, None, "No arXiv ID found from title search"
+
+    async def api_title_search(title: str):
+        call_order.append("arxiv_api")
+        return None, None, None, "No arXiv ID found from title search"
+
+    async def crossref_lookup(doi_url: str):
+        call_order.append("crossref")
+        return None, "Published Paper"
+
+    async def datacite_lookup(doi_url: str):
+        call_order.append("datacite")
+        return "https://arxiv.org/abs/2501.12345", "Published Paper"
+
     openalex_client = SimpleNamespace(
-        find_exact_arxiv_match_by_identifier=AsyncMock(return_value=(None, "Published Paper"))
+        find_exact_arxiv_match_by_identifier=AsyncMock(side_effect=openalex_exact),
+        find_preprint_match_by_identifier=AsyncMock(side_effect=openalex_preprint),
     )
     arxiv_client = SimpleNamespace(
-        get_arxiv_id_by_title=AsyncMock(return_value=(None, None, "No arXiv ID found from title search"))
+        get_arxiv_id_by_title=AsyncMock(side_effect=html_title_search),
+        get_arxiv_match_by_title_from_api=AsyncMock(side_effect=api_title_search),
     )
-    crossref_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock(return_value=(None, "Published Paper")))
+    crossref_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock(side_effect=crossref_lookup))
     datacite_client = SimpleNamespace(
-        find_arxiv_match_by_doi=AsyncMock(return_value=("https://arxiv.org/abs/2501.12345", "Published Paper"))
+        find_arxiv_match_by_doi=AsyncMock(side_effect=datacite_lookup)
     )
     discovery_client = SimpleNamespace(
         huggingface_token="hf-token",
@@ -327,6 +405,14 @@ async def test_resolve_arxiv_url_runs_crossref_then_datacite_after_html_title_se
     )
 
     assert result.canonical_arxiv_url == "https://arxiv.org/abs/2501.12345"
+    assert call_order == [
+        "openalex_exact",
+        "arxiv_html",
+        "arxiv_api",
+        "openalex_preprint",
+        "crossref",
+        "datacite",
+    ]
     crossref_client.find_arxiv_match_by_doi.assert_awaited_once_with("https://doi.org/10.1145/example")
     datacite_client.find_arxiv_match_by_doi.assert_awaited_once_with("https://doi.org/10.1145/example")
     discovery_client.get_huggingface_paper_search_results.assert_not_awaited()
@@ -335,30 +421,58 @@ async def test_resolve_arxiv_url_runs_crossref_then_datacite_after_html_title_se
 
 @pytest.mark.anyio
 async def test_resolve_arxiv_url_can_use_optional_huggingface_fallback_after_metadata_misses():
+    call_order: list[str] = []
+
+    async def openalex_exact(identifier: str, title=None):
+        call_order.append("openalex_exact")
+        return None, "Published Paper"
+
+    async def openalex_preprint(identifier: str, title=None):
+        call_order.append("openalex_preprint")
+        return None, "Published Paper"
+
+    async def html_title_search(title: str):
+        call_order.append("arxiv_html")
+        return None, None, "No arXiv ID found from title search"
+
+    async def crossref_lookup(doi_url: str):
+        call_order.append("crossref")
+        return None, "Published Paper"
+
+    async def datacite_lookup(doi_url: str):
+        call_order.append("datacite")
+        return None, "Published Paper"
+
+    async def hf_lookup(title: str, *, limit: int = 1):
+        call_order.append("huggingface")
+        return (
+            [
+                {
+                    "paper": {
+                        "id": "2501.12345",
+                        "title": "Published Paper",
+                    }
+                }
+            ],
+            None,
+        )
+
     openalex_client = SimpleNamespace(
-        find_exact_arxiv_match_by_identifier=AsyncMock(return_value=(None, "Published Paper"))
+        find_exact_arxiv_match_by_identifier=AsyncMock(side_effect=openalex_exact),
+        find_preprint_match_by_identifier=AsyncMock(side_effect=openalex_preprint),
     )
     arxiv_client = SimpleNamespace(
-        get_arxiv_id_by_title=AsyncMock(return_value=(None, None, "No arXiv ID found from title search")),
+        get_arxiv_id_by_title=AsyncMock(side_effect=html_title_search),
+        get_arxiv_match_by_title_from_api=AsyncMock(
+            return_value=(None, None, None, "No arXiv ID found from title search")
+        ),
         get_title=AsyncMock(return_value=("Mapped Arxiv Title", None)),
     )
-    crossref_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock(return_value=(None, "Published Paper")))
-    datacite_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock(return_value=(None, "Published Paper")))
+    crossref_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock(side_effect=crossref_lookup))
+    datacite_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock(side_effect=datacite_lookup))
     discovery_client = SimpleNamespace(
         huggingface_token="hf-token",
-        get_huggingface_paper_search_results=AsyncMock(
-            return_value=(
-                [
-                    {
-                        "paper": {
-                            "id": "2501.12345",
-                            "title": "Published Paper",
-                        }
-                    }
-                ],
-                None,
-            )
-        ),
+        get_huggingface_paper_search_results=AsyncMock(side_effect=hf_lookup),
     )
 
     result = await resolve_arxiv_url(
@@ -375,6 +489,14 @@ async def test_resolve_arxiv_url_can_use_optional_huggingface_fallback_after_met
 
     assert result.canonical_arxiv_url == "https://arxiv.org/abs/2501.12345"
     assert result.resolved_title == "Mapped Arxiv Title"
+    assert call_order == [
+        "openalex_exact",
+        "arxiv_html",
+        "openalex_preprint",
+        "crossref",
+        "datacite",
+        "huggingface",
+    ]
     crossref_client.find_arxiv_match_by_doi.assert_awaited_once_with("https://doi.org/10.1145/example")
     datacite_client.find_arxiv_match_by_doi.assert_awaited_once_with("https://doi.org/10.1145/example")
     discovery_client.get_huggingface_paper_search_results.assert_awaited_once_with("Published Paper", limit=1)
