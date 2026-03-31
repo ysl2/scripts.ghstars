@@ -57,15 +57,6 @@ def _build_cache_keys(identifiers: list[str]) -> list[tuple[str, str]]:
     return keys
 
 
-def _uses_full_shared_resolution_policy(
-    *,
-    allow_title_search: bool,
-    allow_openalex_preprint_crosswalk: bool,
-    allow_huggingface_fallback: bool,
-) -> bool:
-    return allow_title_search and allow_openalex_preprint_crosswalk and allow_huggingface_fallback
-
-
 async def resolve_arxiv_url(
     title: str,
     raw_url: str,
@@ -98,12 +89,6 @@ async def resolve_arxiv_url(
         )
 
     cache_keys = _build_cache_keys(identifiers)
-    uses_full_shared_resolution_policy = _uses_full_shared_resolution_policy(
-        allow_title_search=allow_title_search,
-        allow_openalex_preprint_crosswalk=allow_openalex_preprint_crosswalk,
-        allow_huggingface_fallback=allow_huggingface_fallback,
-    )
-
     if relation_resolution_cache is not None and cache_keys:
         cached_entries = [relation_resolution_cache.get(key_type, key_value) for key_type, key_value in cache_keys]
         positive_entry = next((entry for entry in cached_entries if entry is not None and entry.arxiv_url), None)
@@ -119,7 +104,7 @@ async def resolve_arxiv_url(
                 script_derived=True,
             )
 
-        has_fresh_negative_for_all_keys = uses_full_shared_resolution_policy and all(
+        has_fresh_negative_for_all_keys = all(
             entry is not None
             and entry.arxiv_url is None
             and relation_resolution_cache.is_negative_cache_fresh(
@@ -288,10 +273,14 @@ async def resolve_arxiv_url(
                     script_derived=True,
                 )
 
-    should_record_negative = uses_full_shared_resolution_policy and bool(cache_keys) and not metadata_transient_failure
-    if allow_title_search:
+    title_stage_attempted = allow_title_search and (
+        callable(getattr(arxiv_client, "get_arxiv_id_by_title", None))
+        or callable(getattr(arxiv_client, "get_arxiv_match_by_title_from_api", None))
+    )
+    should_record_negative = bool(cache_keys) and not metadata_transient_failure
+    if title_stage_attempted:
         should_record_negative = should_record_negative and title_resolution.definitive_no_match
-    if allow_huggingface_fallback:
+    if allow_huggingface_fallback and huggingface_stage_available:
         should_record_negative = should_record_negative and huggingface_stage_available and huggingface_definitive_no_match
 
     if should_record_negative:

@@ -1060,7 +1060,7 @@ async def test_normalize_related_works_uses_hf_fallback_after_arxiv_api_transien
 
 
 @pytest.mark.anyio
-async def test_normalize_related_works_skips_hf_fallback_when_token_missing():
+async def test_normalize_related_works_negative_caches_stable_miss_when_hf_token_is_missing():
     from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
 
     class FakeOpenAlexClient:
@@ -1105,7 +1105,10 @@ async def test_normalize_related_works_skips_hf_fallback_when_token_missing():
             url="https://doi.org/10.1007/978-3-031-72933-1_9",
         )
     ]
-    assert cache.record_calls == []
+    assert cache.record_calls == [
+        ("openalex_work", "https://openalex.org/WFSGS", None),
+        ("doi", "https://doi.org/10.1007/978-3-031-72933-1_9", None),
+    ]
 
 
 @pytest.mark.anyio
@@ -1364,7 +1367,7 @@ async def test_normalize_related_works_does_not_negative_cache_when_hf_title_pay
 
 
 @pytest.mark.anyio
-async def test_normalize_related_works_negative_caches_only_after_arxiv_and_hf_both_miss():
+async def test_normalize_related_works_negative_caches_after_stable_miss_with_hf_enabled():
     from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
 
     events: list[tuple] = []

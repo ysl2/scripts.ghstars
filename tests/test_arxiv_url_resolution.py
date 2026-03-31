@@ -120,6 +120,42 @@ async def test_resolve_arxiv_url_skips_openalex_when_fresh_negative_cache_exists
 
 
 @pytest.mark.anyio
+async def test_resolve_arxiv_url_skips_on_fresh_negative_cache_even_without_hf_stage():
+    recent = datetime.now(timezone.utc).isoformat()
+    cache = RecordingRelationResolutionCache(
+        {
+            ("doi", "https://doi.org/10.1145/example"): SimpleNamespace(
+                key_type="doi",
+                key_value="https://doi.org/10.1145/example",
+                arxiv_url=None,
+                resolved_title=None,
+                checked_at=recent,
+            )
+        }
+    )
+    openalex_client = SimpleNamespace(find_exact_arxiv_match_by_identifier=AsyncMock())
+    arxiv_client = SimpleNamespace(get_arxiv_id_by_title=AsyncMock())
+
+    result = await resolve_arxiv_url(
+        title="Published Paper",
+        raw_url="https://doi.org/10.1145/example",
+        openalex_client=openalex_client,
+        arxiv_client=arxiv_client,
+        relation_resolution_cache=cache,
+        arxiv_relation_no_arxiv_recheck_days=30,
+        allow_title_search=True,
+        allow_openalex_preprint_crosswalk=True,
+        allow_huggingface_fallback=False,
+    )
+
+    assert result.resolved_url is None
+    assert result.canonical_arxiv_url is None
+    assert result.source == "relation_resolution_cache_negative"
+    openalex_client.find_exact_arxiv_match_by_identifier.assert_not_awaited()
+    arxiv_client.get_arxiv_id_by_title.assert_not_awaited()
+
+
+@pytest.mark.anyio
 async def test_resolve_arxiv_url_does_not_short_circuit_when_only_subset_of_keys_have_fresh_negative_cache():
     recent = datetime.now(timezone.utc).isoformat()
     cache = RecordingRelationResolutionCache(
@@ -159,6 +195,80 @@ async def test_resolve_arxiv_url_does_not_short_circuit_when_only_subset_of_keys
     assert openalex_client.find_exact_arxiv_match_by_identifier.await_args_list == [
         (( "https://openalex.org/W123",), {"title": "Published Paper"}),
     ]
+
+
+@pytest.mark.anyio
+async def test_resolve_arxiv_url_records_negative_after_stable_miss_without_hf_stage():
+    openalex_client = SimpleNamespace(
+        find_exact_arxiv_match_by_identifier=AsyncMock(return_value=(None, "Published Paper")),
+        find_preprint_match_by_identifier=AsyncMock(return_value=(None, "Published Paper")),
+    )
+    arxiv_client = SimpleNamespace(
+        get_arxiv_id_by_title=AsyncMock(return_value=(None, None, "No arXiv ID found from title search")),
+        get_arxiv_match_by_title_from_api=AsyncMock(
+            return_value=(None, None, None, "No arXiv ID found from title search")
+        ),
+    )
+    crossref_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock(return_value=(None, "Published Paper")))
+    datacite_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock(return_value=(None, "Published Paper")))
+    cache = RecordingRelationResolutionCache()
+
+    result = await resolve_arxiv_url(
+        title="Published Paper",
+        raw_url="https://doi.org/10.1145/example",
+        openalex_client=openalex_client,
+        arxiv_client=arxiv_client,
+        crossref_client=crossref_client,
+        datacite_client=datacite_client,
+        relation_resolution_cache=cache,
+        arxiv_relation_no_arxiv_recheck_days=30,
+        allow_title_search=True,
+        allow_openalex_preprint_crosswalk=True,
+        allow_huggingface_fallback=False,
+    )
+
+    assert result.canonical_arxiv_url is None
+    assert cache.record_calls == [
+        {
+            "key_type": "doi",
+            "key_value": "https://doi.org/10.1145/example",
+            "arxiv_url": None,
+        }
+    ]
+
+
+@pytest.mark.anyio
+async def test_resolve_arxiv_url_does_not_record_negative_when_any_attempted_stage_has_transient_failure():
+    openalex_client = SimpleNamespace(
+        find_exact_arxiv_match_by_identifier=AsyncMock(side_effect=RuntimeError("OpenAlex API error (429)")),
+        find_preprint_match_by_identifier=AsyncMock(return_value=(None, "Published Paper")),
+    )
+    arxiv_client = SimpleNamespace(
+        get_arxiv_id_by_title=AsyncMock(return_value=(None, None, "No arXiv ID found from title search")),
+        get_arxiv_match_by_title_from_api=AsyncMock(
+            return_value=(None, None, None, "No arXiv ID found from title search")
+        ),
+    )
+    crossref_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock(return_value=(None, "Published Paper")))
+    datacite_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock(return_value=(None, "Published Paper")))
+    cache = RecordingRelationResolutionCache()
+
+    result = await resolve_arxiv_url(
+        title="Published Paper",
+        raw_url="https://doi.org/10.1145/example",
+        openalex_client=openalex_client,
+        arxiv_client=arxiv_client,
+        crossref_client=crossref_client,
+        datacite_client=datacite_client,
+        relation_resolution_cache=cache,
+        arxiv_relation_no_arxiv_recheck_days=30,
+        allow_title_search=True,
+        allow_openalex_preprint_crosswalk=True,
+        allow_huggingface_fallback=False,
+    )
+
+    assert result.canonical_arxiv_url is None
+    assert cache.record_calls == []
 
 
 @pytest.mark.anyio
