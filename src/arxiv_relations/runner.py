@@ -14,7 +14,7 @@ from src.shared.discovery import DiscoveryClient
 from src.shared.github import GitHubClient
 from src.shared.openalex import OpenAlexClient
 from src.shared.paper_content import PaperContentCache
-from src.shared.progress import print_paper_progress, print_summary
+from src.shared.progress import print_paper_progress, print_relation_progress, print_summary
 from src.shared.runtime import build_client, load_runtime_config, open_runtime_clients
 from src.shared.settings import CONTENT_CACHE_DIR, DEFAULT_CONCURRENT_LIMIT
 from src.shared.skip_reasons import is_minor_skip_reason
@@ -98,6 +98,7 @@ async def run_arxiv_relations_mode(
                 relation_resolution_cache=runtime.relation_resolution_cache,
                 arxiv_relation_no_arxiv_recheck_days=config["arxiv_relation_no_arxiv_recheck_days"],
                 status_callback=lambda message: print(message, flush=True),
+                normalization_progress_callback=lambda outcome, total: print_relation_progress(outcome, total),
                 progress_callback=lambda outcome, total: print_paper_progress(
                     outcome,
                     total,

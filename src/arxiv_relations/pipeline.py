@@ -35,6 +35,12 @@ class NormalizedRelatedRow:
     resolution_source: str | None = field(default=None, compare=False)
 
 
+@dataclass(frozen=True)
+class RelationNormalizationProgressOutcome:
+    index: int
+    row: NormalizedRelatedRow
+
+
 def normalize_single_arxiv_input(arxiv_input: str) -> str:
     arxiv_id = extract_arxiv_id_from_single_paper_url(arxiv_input)
     if not arxiv_id:
@@ -145,21 +151,31 @@ async def _resolve_related_work_rows(
     relation_resolution_cache=None,
     arxiv_relation_no_arxiv_recheck_days: int = 30,
     resolve_arxiv_url_fn=None,
+    progress_callback=None,
 ) -> list[NormalizedRelatedRow]:
+    total = len(candidates)
+
+    async def resolve_candidate(item: tuple[int, object]) -> NormalizedRelatedRow:
+        index, candidate = item
+        row = await _resolve_related_work_row(
+            candidate,
+            arxiv_client=arxiv_client,
+            openalex_client=openalex_client,
+            crossref_client=crossref_client,
+            datacite_client=datacite_client,
+            discovery_client=discovery_client,
+            relation_resolution_cache=relation_resolution_cache,
+            arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
+            resolve_arxiv_url_fn=resolve_arxiv_url_fn,
+        )
+        if callable(progress_callback):
+            progress_callback(RelationNormalizationProgressOutcome(index=index, row=row), total)
+        return row
+
     return await asyncio.gather(
         *[
-            _resolve_related_work_row(
-                candidate,
-                arxiv_client=arxiv_client,
-                openalex_client=openalex_client,
-                crossref_client=crossref_client,
-                datacite_client=datacite_client,
-                discovery_client=discovery_client,
-                relation_resolution_cache=relation_resolution_cache,
-                arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
-                resolve_arxiv_url_fn=resolve_arxiv_url_fn,
-            )
-            for candidate in candidates
+            resolve_candidate((index, candidate))
+            for index, candidate in enumerate(candidates, 1)
         ]
     )
 
@@ -195,6 +211,7 @@ async def normalize_related_works_to_rows(
     relation_resolution_cache=None,
     arxiv_relation_no_arxiv_recheck_days: int = 30,
     resolve_arxiv_url_fn=None,
+    progress_callback=None,
 ) -> list[NormalizedRelatedRow]:
     candidates = [openalex_client.build_related_work_candidate(work) for work in related_works]
     normalized_rows = await _resolve_related_work_rows(
@@ -207,6 +224,7 @@ async def normalize_related_works_to_rows(
         relation_resolution_cache=relation_resolution_cache,
         arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
         resolve_arxiv_url_fn=resolve_arxiv_url_fn,
+        progress_callback=progress_callback,
     )
     return _dedupe_normalized_rows(normalized_rows)
 
@@ -221,6 +239,7 @@ async def normalize_related_works_to_seeds(
     discovery_client=None,
     relation_resolution_cache=None,
     arxiv_relation_no_arxiv_recheck_days: int = 30,
+    progress_callback=None,
 ) -> list[PaperSeed]:
     deduped_rows = await normalize_related_works_to_rows(
         related_works,
@@ -231,6 +250,7 @@ async def normalize_related_works_to_seeds(
         discovery_client=discovery_client,
         relation_resolution_cache=relation_resolution_cache,
         arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
+        progress_callback=progress_callback,
     )
     return [
         PaperSeed(
@@ -257,6 +277,7 @@ async def export_arxiv_relations_to_csv(
     arxiv_relation_no_arxiv_recheck_days: int = 30,
     output_dir: Path | None = None,
     status_callback=None,
+    normalization_progress_callback=None,
     progress_callback=None,
 ) -> ArxivRelationsExportResult:
     arxiv_url = normalize_single_arxiv_input(arxiv_input)
@@ -293,6 +314,7 @@ async def export_arxiv_relations_to_csv(
         discovery_client=discovery_client,
         relation_resolution_cache=relation_resolution_cache,
         arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
+        progress_callback=normalization_progress_callback,
     )
     if callable(status_callback):
         status_callback(
@@ -310,6 +332,7 @@ async def export_arxiv_relations_to_csv(
         discovery_client=discovery_client,
         relation_resolution_cache=relation_resolution_cache,
         arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
+        progress_callback=normalization_progress_callback,
     )
     if callable(status_callback):
         status_callback(f"🧭 Kept {len(citation_seeds)}/{len(citation_works)} citation works after arXiv normalization")

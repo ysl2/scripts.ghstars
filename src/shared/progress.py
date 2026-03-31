@@ -13,6 +13,13 @@ def colored(text: str, color: str) -> str:
     return f"{color}{text}{Colors.RESET}"
 
 
+def _print_progress_block(index: int, total: int, title: str, detail_lines: list[str], *, color: str | None = None) -> None:
+    render = (lambda text: colored(text, color)) if color else (lambda text: text)
+    print(render(f"[{index}/{total}] {title}"))
+    for line in detail_lines:
+        print(render(line))
+
+
 def print_item_success(
     index: int,
     total: int,
@@ -24,22 +31,21 @@ def print_item_success(
     source_label: str | None = None,
     github_url_set: str | None = None,
 ) -> None:
-    print(f"[{index}/{total}] {title}")
-
+    detail_lines: list[str] = []
     if owner_repo:
         owner, repo = owner_repo
         current_display = current_stars if current_stars is not None else "N/A"
-        print(f"  📍 {owner}/{repo} | Current stars: {current_display}")
+        detail_lines.append(f"  📍 {owner}/{repo} | Current stars: {current_display}")
 
     if source_label:
-        print(f"  🔎 Source: {source_label}")
+        detail_lines.append(f"  🔎 Source: {source_label}")
 
     if github_url_set:
-        print(f"  🔗 Github set to: {github_url_set}")
+        detail_lines.append(f"  🔗 Github set to: {github_url_set}")
 
     if new_stars is not None:
         if current_stars is None:
-            print(f"  ✅ Updated: N/A → {new_stars}")
+            detail_lines.append(f"  ✅ Updated: N/A → {new_stars}")
         else:
             diff = new_stars - current_stars
             if diff > 0:
@@ -48,7 +54,9 @@ def print_item_success(
                 diff_display = colored(str(diff), Colors.RED)
             else:
                 diff_display = "±0"
-            print(f"  ✅ Updated: {current_stars} → {new_stars} ({diff_display})")
+            detail_lines.append(f"  ✅ Updated: {current_stars} → {new_stars} ({diff_display})")
+
+    _print_progress_block(index, total, title, detail_lines)
 
 
 def print_item_skip(
@@ -59,13 +67,73 @@ def print_item_skip(
     *,
     owner_repo: tuple[str, str] | None = None,
     minor: bool,
+    source_label: str | None = None,
 ) -> None:
     color = Colors.GRAY if minor else Colors.RED
-    print(colored(f"[{index}/{total}] {title}", color))
+    detail_lines: list[str] = []
     if owner_repo:
         owner, repo = owner_repo
-        print(colored(f"  📍 {owner}/{repo}", color))
-    print(colored(f"  ⏭️ Skipped: {reason}", color))
+        detail_lines.append(f"  📍 {owner}/{repo}")
+    if source_label:
+        detail_lines.append(f"  🔎 Source: {source_label}")
+    detail_lines.append(f"  ⏭️ Skipped: {reason}")
+    _print_progress_block(index, total, title, detail_lines, color=color)
+
+
+def _humanize_resolution_source_kind(kind: str) -> str:
+    mapping = {
+        "doi": "DOI",
+        "openalex_work": "OpenAlex work",
+    }
+    return mapping.get(kind, kind.replace("_", " "))
+
+
+def format_relation_resolution_source_label(source: str | None) -> str | None:
+    if not source:
+        return None
+
+    mapping = {
+        "direct_arxiv_url": "Direct arXiv URL",
+        "title_search": "Title search",
+        "crossref": "Crossref",
+        "datacite": "DataCite",
+        "huggingface_title_search": "Hugging Face title search",
+        "relation_resolution_cache": "Resolution cache",
+        "relation_resolution_cache_negative": "Resolution cache negative",
+        "unresolved": "Unresolved",
+    }
+    if source in mapping:
+        return mapping[source]
+
+    if source.startswith("openalex_exact_"):
+        kind = source.removeprefix("openalex_exact_")
+        return f"OpenAlex exact ({_humanize_resolution_source_kind(kind)})"
+
+    if source.startswith("openalex_preprint_"):
+        kind = source.removeprefix("openalex_preprint_")
+        return f"OpenAlex preprint ({_humanize_resolution_source_kind(kind)})"
+
+    return source.replace("_", " ")
+
+
+def print_relation_progress(outcome, total: int) -> None:
+    row = outcome.row
+    source_label = format_relation_resolution_source_label(getattr(row, "resolution_source", None))
+    url = getattr(row, "url", "")
+
+    if url.startswith("https://arxiv.org/abs/"):
+        detail_lines = []
+        if source_label:
+            detail_lines.append(f"  🔎 Source: {source_label}")
+        detail_lines.append(f"  🔗 Url set to: {url}")
+        _print_progress_block(outcome.index, total, row.title, detail_lines)
+        return
+
+    detail_lines = []
+    if source_label:
+        detail_lines.append(f"  🔎 Source: {source_label}")
+    detail_lines.append(f"  ⏭️ Retained: {url}")
+    _print_progress_block(outcome.index, total, row.title, detail_lines, color=Colors.GRAY)
 
 
 def print_summary(

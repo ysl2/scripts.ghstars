@@ -1634,7 +1634,7 @@ async def test_normalize_related_works_resolves_non_direct_rows_concurrently():
 async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_retained_rows(
     tmp_path: Path, monkeypatch
 ):
-    from src.arxiv_relations.pipeline import export_arxiv_relations_to_csv
+    from src.arxiv_relations.pipeline import NormalizationStrength, export_arxiv_relations_to_csv
 
     recent = datetime.now(timezone.utc).isoformat()
     relation_resolution_cache = FakeRelationResolutionCache(
@@ -1748,6 +1748,7 @@ async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_ret
     github_client = object()
     export_calls = []
     statuses = []
+    normalization_progress_events = []
 
     async def fake_export(
         seeds: list[PaperSeed],
@@ -1790,6 +1791,16 @@ async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_ret
         arxiv_relation_no_arxiv_recheck_days=30,
         output_dir=tmp_path,
         status_callback=statuses.append,
+        normalization_progress_callback=lambda outcome, total: normalization_progress_events.append(
+            (
+                outcome.index,
+                total,
+                outcome.row.title,
+                outcome.row.url,
+                outcome.row.strength,
+                outcome.row.resolution_source,
+            )
+        ),
     )
 
     assert arxiv_client.calls == [
@@ -1837,6 +1848,13 @@ async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_ret
     assert "🧭 Kept 3/3 referenced works after arXiv normalization" in statuses
     assert "🔎 Normalizing citation works to arXiv-backed seeds" in statuses
     assert "🧭 Kept 1/2 citation works after arXiv normalization" in statuses
+    assert sorted(normalization_progress_events) == [
+        (1, 2, "Citation A", "https://arxiv.org/abs/2502.00002", NormalizationStrength.DIRECT_ARXIV, "direct_arxiv_url"),
+        (1, 3, "Direct Reference", "https://arxiv.org/abs/2501.00001", NormalizationStrength.DIRECT_ARXIV, "direct_arxiv_url"),
+        (2, 2, "Citation A Duplicate", "https://arxiv.org/abs/2502.00002", NormalizationStrength.DIRECT_ARXIV, "direct_arxiv_url"),
+        (2, 3, "Mapped Reference", "https://arxiv.org/abs/2501.00002", NormalizationStrength.TITLE_SEARCH, "title_search"),
+        (3, 3, "Publisher Reference", "https://doi.org/10.1145/example", NormalizationStrength.RETAINED_NON_ARXIV, "unresolved"),
+    ]
 
 
 @pytest.mark.anyio
@@ -2499,6 +2517,8 @@ async def test_run_arxiv_relations_mode_returns_nonzero_on_pre_export_setup_fail
 async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and_summary_output(
     tmp_path: Path, monkeypatch, capsys
 ):
+    from src.arxiv_relations.pipeline import NormalizationStrength, NormalizedRelatedRow
+
     monkeypatch.setenv("ALPHAXIV_TOKEN", "ax_token")
     references_csv_path = tmp_path / "arxiv-2603.23502-references-20260326113045.csv"
     citations_csv_path = tmp_path / "arxiv-2603.23502-citations-20260326113045.csv"
@@ -2576,6 +2596,7 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
         relation_resolution_cache,
         arxiv_relation_no_arxiv_recheck_days,
         status_callback=None,
+        normalization_progress_callback=None,
         progress_callback=None,
     ):
         export_calls.append(
@@ -2592,13 +2613,51 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
                 "relation_resolution_cache": relation_resolution_cache,
                 "arxiv_relation_no_arxiv_recheck_days": arxiv_relation_no_arxiv_recheck_days,
                 "status_callback": status_callback,
+                "normalization_progress_callback": normalization_progress_callback,
                 "progress_callback": progress_callback,
             }
         )
         assert callable(status_callback)
+        assert callable(normalization_progress_callback)
         assert callable(progress_callback)
 
         status_callback("Starting relation export")
+        normalization_progress_callback(
+            SimpleNamespace(
+                index=1,
+                row=NormalizedRelatedRow(
+                    title="Direct Reference",
+                    url="https://arxiv.org/abs/2501.00001",
+                    strength=NormalizationStrength.DIRECT_ARXIV,
+                    resolution_source="direct_arxiv_url",
+                ),
+            ),
+            2,
+        )
+        normalization_progress_callback(
+            SimpleNamespace(
+                index=2,
+                row=NormalizedRelatedRow(
+                    title="Retained DOI Reference",
+                    url="https://doi.org/10.1145/example",
+                    strength=NormalizationStrength.RETAINED_NON_ARXIV,
+                    resolution_source="relation_resolution_cache_negative",
+                ),
+            ),
+            2,
+        )
+        normalization_progress_callback(
+            SimpleNamespace(
+                index=1,
+                row=NormalizedRelatedRow(
+                    title="Citation Paper",
+                    url="https://arxiv.org/abs/2502.00001",
+                    strength=NormalizationStrength.TITLE_SEARCH,
+                    resolution_source="title_search",
+                ),
+            ),
+            1,
+        )
         progress_callback(
             SimpleNamespace(
                 index=1,
@@ -2655,6 +2714,15 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
     assert export_calls[0]["relation_resolution_cache"] is not None
     assert export_calls[0]["arxiv_relation_no_arxiv_recheck_days"] == 30
     assert "Starting relation export" in captured.out
+    assert "[1/2] Direct Reference" in captured.out
+    assert "Source: Direct arXiv URL" in captured.out
+    assert "Url set to: https://arxiv.org/abs/2501.00001" in captured.out
+    assert "[2/2] Retained DOI Reference" in captured.out
+    assert "Source: Resolution cache negative" in captured.out
+    assert "Retained: https://doi.org/10.1145/example" in captured.out
+    assert "[1/1] Citation Paper" in captured.out
+    assert "Source: Title search" in captured.out
+    assert "Url set to: https://arxiv.org/abs/2502.00001" in captured.out
     assert "[1/1] Reference Paper" in captured.out
     assert "foo/bar" in captured.out
     assert "Updated: 10 → 12" in captured.out
