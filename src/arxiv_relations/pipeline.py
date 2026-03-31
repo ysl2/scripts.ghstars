@@ -282,6 +282,8 @@ async def export_arxiv_relations_to_csv(
     if callable(status_callback):
         status_callback(f"📚 Retrieved {len(citation_works)} citation works")
 
+    if callable(status_callback):
+        status_callback("🔎 Normalizing referenced works to arXiv-backed seeds")
     reference_seeds = await normalize_related_works_to_seeds(
         referenced_works,
         openalex_client=openalex_client,
@@ -292,6 +294,13 @@ async def export_arxiv_relations_to_csv(
         relation_resolution_cache=relation_resolution_cache,
         arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
     )
+    if callable(status_callback):
+        status_callback(
+            f"🧭 Kept {len(reference_seeds)}/{len(referenced_works)} referenced works after arXiv normalization"
+        )
+
+    if callable(status_callback):
+        status_callback("🔎 Normalizing citation works to arXiv-backed seeds")
     citation_seeds = await normalize_related_works_to_seeds(
         citation_works,
         openalex_client=openalex_client,
@@ -302,6 +311,8 @@ async def export_arxiv_relations_to_csv(
         relation_resolution_cache=relation_resolution_cache,
         arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
     )
+    if callable(status_callback):
+        status_callback(f"🧭 Kept {len(citation_seeds)}/{len(citation_works)} citation works after arXiv normalization")
 
     references_csv_path, citations_csv_path = build_relations_csv_paths(arxiv_url, output_dir=output_dir)
 

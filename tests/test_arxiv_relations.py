@@ -1833,6 +1833,10 @@ async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_ret
     assert result.citations.csv_path.name == "arxiv-2603.23502-citations-20260326113045.csv"
     assert any("Fetching OpenAlex referenced works" in message for message in statuses)
     assert any("Fetching OpenAlex citations" in message for message in statuses)
+    assert "🔎 Normalizing referenced works to arXiv-backed seeds" in statuses
+    assert "🧭 Kept 3/3 referenced works after arXiv normalization" in statuses
+    assert "🔎 Normalizing citation works to arXiv-backed seeds" in statuses
+    assert "🧭 Kept 1/2 citation works after arXiv normalization" in statuses
 
 
 @pytest.mark.anyio
