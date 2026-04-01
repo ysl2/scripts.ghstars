@@ -191,6 +191,12 @@ async def _fetch_primary_relation_candidates(
     status_callback=None,
 ) -> list[RelatedWorkCandidate]:
     is_references = relation_label == "references"
+    openalex_label = "referenced works" if is_references else "citations"
+    openalex_fetcher = (
+        openalex_client.fetch_referenced_works
+        if is_references
+        else openalex_client.fetch_citations
+    ) if openalex_client is not None else None
     semantic_fetch_failed = False
 
     if semanticscholar_graph_client is not None and semantic_scholar_target_paper is not None:
@@ -225,18 +231,11 @@ async def _fetch_primary_relation_candidates(
                 f"Semantic Scholar {relation_label} fallback could not resolve OpenAlex target work"
             )
         if callable(status_callback):
-            if openalex_client is None:
-                status_callback(f"⚠️ OpenAlex fallback unavailable; keeping empty {relation_label}")
-            else:
-                status_callback(f"⚠️ OpenAlex target lookup missed; keeping empty {relation_label}")
+            status_callback(f"⚠️ OpenAlex target lookup missed; keeping empty {relation_label}")
         return []
 
-    openalex_label = "referenced works" if is_references else "citations"
-    openalex_fetcher = (
-        openalex_client.fetch_referenced_works
-        if is_references
-        else openalex_client.fetch_citations
-    )
+    if openalex_fetcher is None:
+        return []
     if callable(status_callback):
         status_callback(f"🔎 Fetching OpenAlex {openalex_label}")
     openalex_rows = await openalex_fetcher(openalex_target_work)
@@ -559,9 +558,7 @@ async def export_arxiv_relations_to_csv(
         nonlocal openalex_target_work
         nonlocal openalex_target_work_resolved
         if not openalex_target_work_resolved:
-            if openalex_client is None:
-                openalex_target_work = None
-            else:
+            if openalex_client is not None:
                 openalex_target_work = await _resolve_target_openalex_work(arxiv_url, title, openalex_client)
             openalex_target_work_resolved = True
         return openalex_target_work
