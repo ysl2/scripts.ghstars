@@ -13,6 +13,7 @@ from src.shared.paper_identity import (
     normalize_doi_url,
 )
 from src.shared.papers import ConversionResult, PaperSeed
+from src.shared.relation_candidates import RelatedWorkCandidate
 from src.url_to_csv import filenames as url_export_filenames
 
 
@@ -280,8 +281,35 @@ async def normalize_related_works_to_rows(
     progress_callback=None,
 ) -> list[NormalizedRelatedRow]:
     candidates = [openalex_client.build_related_work_candidate(work) for work in related_works]
-    normalized_rows = await _resolve_related_work_rows(
+    return await normalize_related_work_candidates_to_rows(
         candidates,
+        openalex_client=openalex_client,
+        arxiv_client=arxiv_client,
+        crossref_client=crossref_client,
+        datacite_client=datacite_client,
+        discovery_client=discovery_client,
+        relation_resolution_cache=relation_resolution_cache,
+        arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
+        resolve_arxiv_url_fn=resolve_arxiv_url_fn,
+        progress_callback=progress_callback,
+    )
+
+
+async def normalize_related_work_candidates_to_rows(
+    related_work_candidates: list[RelatedWorkCandidate],
+    *,
+    arxiv_client,
+    openalex_client=None,
+    crossref_client=None,
+    datacite_client=None,
+    discovery_client=None,
+    relation_resolution_cache=None,
+    arxiv_relation_no_arxiv_recheck_days: int = 30,
+    resolve_arxiv_url_fn=None,
+    progress_callback=None,
+) -> list[NormalizedRelatedRow]:
+    normalized_rows = await _resolve_related_work_rows(
+        related_work_candidates,
         arxiv_client=arxiv_client,
         openalex_client=openalex_client,
         crossref_client=crossref_client,
@@ -295,11 +323,11 @@ async def normalize_related_works_to_rows(
     return _dedupe_normalized_rows(normalized_rows)
 
 
-async def normalize_related_works_to_seeds(
-    related_works: list[dict],
+async def normalize_related_work_candidates_to_seeds(
+    related_work_candidates: list[RelatedWorkCandidate],
     *,
-    openalex_client,
     arxiv_client,
+    openalex_client=None,
     crossref_client=None,
     datacite_client=None,
     discovery_client=None,
@@ -307,10 +335,10 @@ async def normalize_related_works_to_seeds(
     arxiv_relation_no_arxiv_recheck_days: int = 30,
     progress_callback=None,
 ) -> list[PaperSeed]:
-    deduped_rows = await normalize_related_works_to_rows(
-        related_works,
-        openalex_client=openalex_client,
+    deduped_rows = await normalize_related_work_candidates_to_rows(
+        related_work_candidates,
         arxiv_client=arxiv_client,
+        openalex_client=openalex_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
         discovery_client=discovery_client,
@@ -327,6 +355,35 @@ async def normalize_related_works_to_seeds(
         )
         for row in deduped_rows
     ]
+
+
+async def normalize_related_works_to_seeds(
+    related_works: list[dict],
+    *,
+    openalex_client,
+    arxiv_client,
+    crossref_client=None,
+    datacite_client=None,
+    discovery_client=None,
+    relation_resolution_cache=None,
+    arxiv_relation_no_arxiv_recheck_days: int = 30,
+    progress_callback=None,
+) -> list[PaperSeed]:
+    related_work_candidates = [
+        openalex_client.build_related_work_candidate(work)
+        for work in related_works
+    ]
+    return await normalize_related_work_candidates_to_seeds(
+        related_work_candidates,
+        arxiv_client=arxiv_client,
+        openalex_client=openalex_client,
+        crossref_client=crossref_client,
+        datacite_client=datacite_client,
+        discovery_client=discovery_client,
+        relation_resolution_cache=relation_resolution_cache,
+        arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
+        progress_callback=progress_callback,
+    )
 
 
 async def export_arxiv_relations_to_csv(

@@ -1,6 +1,5 @@
 import asyncio
 import re
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, Iterable
@@ -16,6 +15,7 @@ from src.shared.paper_identity import (
     normalize_doi_url,
     normalize_openalex_work_url,
 )
+from src.shared.relation_candidates import RelatedWorkCandidate
 OPENALEX_WORKS_URL = "https://api.openalex.org/works"
 OPENALEX_SEARCH_PAGE_SIZE = 5
 OPENALEX_CITED_BY_PAGE_SIZE = 200
@@ -27,16 +27,6 @@ OPENALEX_429_MAX_RETRIES = 3
 OPENALEX_429_FALLBACK_BACKOFF_SECONDS = 2.0
 OPENALEX_429_MAX_RETRY_AFTER_SECONDS = 15.0
 ARXIV_DOI_PATTERN = re.compile(r"10\.48550/arxiv\.([0-9]{4}\.[0-9]{4,5})(?:v\d+)?", re.IGNORECASE)
-
-
-@dataclass(frozen=True)
-class RelatedWorkCandidate:
-    title: str
-    direct_arxiv_url: str | None
-    doi_url: str | None
-    landing_page_url: str | None
-    openalex_url: str
-
 
 def _normalize_doi_url(doi: Any) -> str | None:
     if not isinstance(doi, str):
@@ -261,7 +251,7 @@ class OpenAlexClient:
             direct_arxiv_url=self._canonical_arxiv_url(work),
             doi_url=_normalize_doi_url(work.get("doi")),
             landing_page_url=self._extract_landing_page_url(work),
-            openalex_url=work.get("id") or "",
+            source_url=work.get("id") or "",
         )
 
     async def _get_json(self, url: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:

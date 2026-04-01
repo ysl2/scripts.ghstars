@@ -1,6 +1,7 @@
 import pytest
 
 from src.shared.openalex import OpenAlexClient
+from src.shared.relation_candidates import RelatedWorkCandidate as SharedRelatedWorkCandidate
 
 
 class FakeResponse:
@@ -361,7 +362,9 @@ def test_build_related_work_candidate_prefers_direct_arxiv_identity():
     assert candidate.direct_arxiv_url == "https://arxiv.org/abs/2403.00001"
     assert candidate.doi_url == "https://doi.org/10.48550/arXiv.2403.00001"
     assert candidate.landing_page_url == "https://example.com/direct"
+    assert candidate.source_url == "https://openalex.org/W1"
     assert candidate.openalex_url == "https://openalex.org/W1"
+    assert isinstance(candidate, SharedRelatedWorkCandidate)
 
 
 def test_build_related_work_candidate_retains_non_arxiv_fallback_fields():
@@ -379,7 +382,36 @@ def test_build_related_work_candidate_retains_non_arxiv_fallback_fields():
     assert candidate.direct_arxiv_url is None
     assert candidate.doi_url == "https://doi.org/10.1145/example"
     assert candidate.landing_page_url == "https://publisher.example/paper"
+    assert candidate.source_url == "https://openalex.org/W9"
     assert candidate.openalex_url == "https://openalex.org/W9"
+
+
+def test_build_related_work_candidate_provider_neutral_source_url():
+    session = FakeSession([])
+    client = OpenAlexClient(session, min_interval=0)
+    work = {
+        "display_name": "Provider Neutral Candidate",
+        "id": "https://openalex.org/W123",
+    }
+
+    candidate = client.build_related_work_candidate(work)
+
+    assert isinstance(candidate, SharedRelatedWorkCandidate)
+    assert candidate.source_url == "https://openalex.org/W123"
+
+
+def test_build_related_work_candidate_uses_source_url_field_for_openalex_url_compatibility_alias():
+    session = FakeSession([])
+    client = OpenAlexClient(session, min_interval=0)
+    work = {
+        "display_name": "Compatibility Alias Candidate",
+        "id": "https://openalex.org/W456",
+    }
+
+    candidate = client.build_related_work_candidate(work)
+
+    assert candidate.source_url == "https://openalex.org/W456"
+    assert candidate.openalex_url == candidate.source_url
 
 
 @pytest.mark.anyio

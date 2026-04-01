@@ -10,7 +10,7 @@ import aiohttp
 import pytest
 
 from src.arxiv_relations.pipeline import ArxivRelationsExportResult, export_arxiv_relations_to_csv
-from src.shared.openalex import RelatedWorkCandidate
+from src.shared.relation_candidates import RelatedWorkCandidate
 from src.shared.papers import ConversionResult, PaperSeed
 from src.shared.papers import PaperRecord
 from src.arxiv_relations.runner import run_arxiv_relations_mode
@@ -264,6 +264,68 @@ async def test_normalize_related_works_maps_non_arxiv_title_hits_to_canonical_ar
     )
 
     assert seeds == [
+        PaperSeed(name="Direct Paper", url="https://arxiv.org/abs/2403.00001"),
+        PaperSeed(name="Mapped Arxiv Title", url="https://arxiv.org/abs/2501.12345"),
+    ]
+
+
+@pytest.mark.anyio
+async def test_normalize_related_work_candidates_to_seeds_matches_openalex_wrapper_behavior():
+    from src.arxiv_relations.pipeline import (
+        normalize_related_work_candidates_to_seeds,
+        normalize_related_works_to_seeds,
+    )
+
+    candidates = [
+        RelatedWorkCandidate(
+            title="Direct Paper",
+            direct_arxiv_url="https://arxiv.org/abs/2403.00001",
+            doi_url=None,
+            landing_page_url=None,
+            source_url="https://openalex.org/W1",
+        ),
+        RelatedWorkCandidate(
+            title="Original OpenAlex Title",
+            direct_arxiv_url=None,
+            doi_url=None,
+            landing_page_url="https://publisher.example/mapped",
+            source_url="https://openalex.org/W2",
+        ),
+    ]
+
+    class FakeOpenAlexClient:
+        def build_related_work_candidate(self, work: dict):
+            mapping = {"R1": candidates[0], "R2": candidates[1]}
+            return mapping[work["id"]]
+
+    class FakeArxivClient:
+        async def get_arxiv_id_by_title(self, title: str):
+            if title == "Original OpenAlex Title":
+                return "2501.12345", "title_search_exact", None
+            raise AssertionError(f"Unexpected title search: {title}")
+
+        async def get_arxiv_match_by_title_from_api(self, title: str):
+            return None, None, None, "No arXiv ID found from title search"
+
+        async def get_arxiv_id_by_title_from_api(self, title: str):
+            raise AssertionError("Optimized relation normalization should use the title-search helper result directly")
+
+        async def get_title(self, arxiv_identifier: str):
+            if arxiv_identifier in {"2501.12345", "https://arxiv.org/abs/2501.12345"}:
+                return "Mapped Arxiv Title", None
+            raise AssertionError(f"Unexpected arXiv title lookup: {arxiv_identifier}")
+
+    from_candidates = await normalize_related_work_candidates_to_seeds(
+        candidates,
+        arxiv_client=FakeArxivClient(),
+    )
+    from_openalex_rows = await normalize_related_works_to_seeds(
+        [{"id": "R1"}, {"id": "R2"}],
+        openalex_client=FakeOpenAlexClient(),
+        arxiv_client=FakeArxivClient(),
+    )
+
+    assert from_candidates == from_openalex_rows == [
         PaperSeed(name="Direct Paper", url="https://arxiv.org/abs/2403.00001"),
         PaperSeed(name="Mapped Arxiv Title", url="https://arxiv.org/abs/2501.12345"),
     ]
