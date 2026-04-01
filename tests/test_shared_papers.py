@@ -36,16 +36,12 @@ def test_write_records_to_csv_path_sorts_and_serializes_stars(tmp_path):
             "Url": "https://arxiv.org/abs/2603.20000",
             "Github": "https://github.com/foo/new",
             "Stars": "20",
-            "Created": "",
-            "About": "",
         },
         {
             "Name": "Older",
             "Url": "https://arxiv.org/abs/2603.10000",
             "Github": "https://github.com/foo/old",
             "Stars": "10",
-            "Created": "",
-            "About": "",
         },
     ]
 

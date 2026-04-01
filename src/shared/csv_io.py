@@ -7,6 +7,7 @@ from src.shared.papers import PaperRecord, sort_records
 
 
 CSV_HEADERS = ["Name", "Url", "Github", "Stars", "Created", "About"]
+LEGACY_RECORD_HEADERS = ["Name", "Url", "Github", "Stars"]
 
 
 def write_rows_to_csv_path(rows: list[CsvRow], csv_path: Path) -> Path:
@@ -34,18 +35,22 @@ def write_rows_to_csv_path(rows: list[CsvRow], csv_path: Path) -> Path:
 
 
 def write_records_to_csv_path(records: list[PaperRecord], csv_path: Path) -> Path:
-    return write_rows_to_csv_path(
-        [
-            CsvRow(
-                name=record.name,
-                url=record.url,
-                github=record.github,
-                stars=record.stars,
-                created="",
-                about="",
-                sort_index=record.sort_index,
+    sorted_records = sort_records(records)
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="", delete=False, dir=csv_path.parent) as handle:
+        writer = csv.DictWriter(handle, fieldnames=LEGACY_RECORD_HEADERS)
+        writer.writeheader()
+        for record in sorted_records:
+            writer.writerow(
+                {
+                    "Name": record.name,
+                    "Url": record.url,
+                    "Github": record.github,
+                    "Stars": "" if record.stars in (None, "") else str(record.stars),
+                }
             )
-            for record in sort_records(records)
-        ],
-        csv_path,
-    )
+        temp_path = Path(handle.name)
+
+    temp_path.replace(csv_path)
+    return csv_path
