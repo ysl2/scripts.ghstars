@@ -268,7 +268,7 @@ URL mode behavior:
 - source-specific fetching is kept in separate adapters under `url_to_csv/`
 - every URL export appends a run timestamp in `YYYYMMDDHHMMSS` form before `.csv`
 - CLI URL exports default to `./output` in the current working directory and create that directory automatically if needed
-- URL exports always write the shared six-column export schema: `Name`, `Url`, `Github`, `Stars`, `Created`, `About`
+- URL exports always write the standard columns: `Name`, `Url`, `Github`, `Stars`
 - standard arXiv `list/...` and `search/...` collection pages, including `/search/advanced`, are crawled across all pages, not just the first page
 - archive-style arXiv `list/<category>/YYYY-MM` pages reuse the same multi-page `list/...` crawling path
 - arXiv `new` pages include all visible sections, including new submissions, cross-lists, and replacements
@@ -362,7 +362,7 @@ Single-paper mode behavior:
 - relation normalization reuses `./cache.db` to cache non-direct relation resolution by source URL and DOI
 - cached positive matches store canonical arXiv `abs` URLs; cached negative matches are written only when all actually attempted resolver stages finish without transient/network failure and still find no accepted arXiv match, then retried after `ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS`
 - referenced and citing works are deduplicated by final normalized URL before export
-- both CSVs use the shared six-column export schema: `Name`, `Url`, `Github`, `Stars`, `Created`, `About`
+- both CSVs use the standard columns: `Name`, `Url`, `Github`, `Stars`
 - shared GitHub discovery, local overview / abs cache warming, and star enrichment are reused, so resolved and unresolved rows remain in the CSV even when no repo is found; in that case `Github` and `Stars` are left blank
 - the CLI reports success only after both CSV files are written; other arXiv or Semantic Scholar hard failures still return a nonzero exit code
 
