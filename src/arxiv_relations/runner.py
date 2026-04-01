@@ -16,6 +16,7 @@ from src.shared.openalex import OpenAlexClient
 from src.shared.paper_content import PaperContentCache
 from src.shared.progress import print_paper_progress, print_relation_progress, print_summary
 from src.shared.runtime import build_client, load_runtime_config, open_runtime_clients
+from src.shared.semantic_scholar_graph import SemanticScholarGraphClient
 from src.shared.settings import CONTENT_CACHE_DIR, DEFAULT_CONCURRENT_LIMIT
 from src.shared.skip_reasons import is_minor_skip_reason
 
@@ -36,6 +37,7 @@ async def run_arxiv_relations_mode(
     discovery_client_cls=DiscoveryClient,
     github_client_cls=GitHubClient,
     content_client_cls=AlphaXivContentClient,
+    semanticscholar_graph_client_cls=SemanticScholarGraphClient,
 ) -> int:
     try:
         config = load_runtime_config(dict(os.environ))
@@ -80,6 +82,13 @@ async def run_arxiv_relations_mode(
                 max_concurrent=CONCURRENT_LIMIT,
                 min_interval=REQUEST_DELAY,
             )
+            semanticscholar_graph_client = build_client(
+                semanticscholar_graph_client_cls,
+                runtime.session,
+                semantic_scholar_api_key=config["semantic_scholar_api_key"],
+                max_concurrent=CONCURRENT_LIMIT,
+                min_interval=REQUEST_DELAY,
+            )
             content_cache = PaperContentCache(
                 cache_root=Path(CONTENT_CACHE_DIR),
                 content_client=content_client,
@@ -94,6 +103,7 @@ async def run_arxiv_relations_mode(
                 datacite_client=datacite_client,
                 discovery_client=runtime.discovery_client,
                 github_client=runtime.github_client,
+                semanticscholar_graph_client=semanticscholar_graph_client,
                 content_cache=content_cache,
                 relation_resolution_cache=runtime.relation_resolution_cache,
                 arxiv_relation_no_arxiv_recheck_days=config["arxiv_relation_no_arxiv_recheck_days"],

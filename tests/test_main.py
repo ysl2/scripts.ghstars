@@ -22,6 +22,7 @@ def test_load_runtime_config_reads_only_optional_tokens():
         "huggingface_token": "hf_token",
         "alphaxiv_token": "ax_token",
         "openalex_api_key": "",
+        "semantic_scholar_api_key": "",
         "arxiv_relation_no_arxiv_recheck_days": 30,
         "repo_discovery_no_repo_recheck_days": 7,
     }
@@ -33,6 +34,7 @@ def test_load_runtime_config_defaults_missing_values_to_empty_strings():
         "huggingface_token": "",
         "alphaxiv_token": "",
         "openalex_api_key": "",
+        "semantic_scholar_api_key": "",
         "arxiv_relation_no_arxiv_recheck_days": 30,
         "repo_discovery_no_repo_recheck_days": 7,
     }
@@ -65,6 +67,16 @@ def test_load_runtime_config_reads_optional_openalex_token():
     )
 
     assert config["openalex_api_key"] == "oa_key"
+
+
+def test_load_runtime_config_reads_optional_semantic_scholar_api_key():
+    config = load_runtime_config(
+        {
+            "SEMANTIC_SCHOLAR_API_KEY": "ss_key",
+        }
+    )
+
+    assert config["semantic_scholar_api_key"] == "ss_key"
 
 
 def test_load_runtime_config_reads_relation_resolution_recheck_days():

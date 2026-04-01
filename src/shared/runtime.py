@@ -32,6 +32,7 @@ def load_runtime_config(env: dict[str, str]) -> dict[str, str | int]:
         "huggingface_token": (env.get("HUGGINGFACE_TOKEN") or "").strip(),
         "alphaxiv_token": (env.get("ALPHAXIV_TOKEN") or "").strip(),
         "openalex_api_key": (env.get("OPENALEX_API_KEY") or "").strip(),
+        "semantic_scholar_api_key": (env.get("SEMANTIC_SCHOLAR_API_KEY") or "").strip(),
         "arxiv_relation_no_arxiv_recheck_days": _parse_positive_int(
             env.get("ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS"),
             default=ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS,

@@ -3408,6 +3408,7 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
         datacite_client,
         discovery_client,
         github_client,
+        semanticscholar_graph_client,
         content_cache,
         relation_resolution_cache,
         arxiv_relation_no_arxiv_recheck_days,
@@ -3425,6 +3426,7 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
                 "datacite_client": datacite_client,
                 "discovery_client": discovery_client,
                 "github_client": github_client,
+                "semanticscholar_graph_client": semanticscholar_graph_client,
                 "content_cache": content_cache,
                 "relation_resolution_cache": relation_resolution_cache,
                 "arxiv_relation_no_arxiv_recheck_days": arxiv_relation_no_arxiv_recheck_days,
@@ -3524,6 +3526,7 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
     assert export_calls[0]["datacite_client"] is constructed["datacite_client"]
     assert export_calls[0]["discovery_client"] is constructed["discovery_client"]
     assert export_calls[0]["github_client"] is constructed["github_client"]
+    assert export_calls[0]["semanticscholar_graph_client"] is not None
     assert export_calls[0]["content_cache"] is not None
     assert export_calls[0]["content_cache"].content_client is constructed["content_client"]
     assert constructed["content_client"].alphaxiv_token == "ax_token"
@@ -3546,6 +3549,124 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
     assert "Citations resolved: 2" in captured.out
     assert f"Wrote references CSV: {references_csv_path}" in captured.out
     assert f"Wrote citations CSV: {citations_csv_path}" in captured.out
+
+
+@pytest.mark.anyio
+async def test_run_arxiv_relations_mode_wires_semantic_scholar_graph_client_from_runtime_config(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.setenv("SEMANTIC_SCHOLAR_API_KEY", "ss_key")
+
+    references_csv_path = tmp_path / "arxiv-2603.23502-references-20260326113045.csv"
+    citations_csv_path = tmp_path / "arxiv-2603.23502-citations-20260326113045.csv"
+    constructed = {}
+    export_calls = []
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeArxivClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeOpenAlexClient:
+        def __init__(self, session, *, openalex_api_key="", max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeCrossrefClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeDataCiteClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeDiscoveryClient:
+        def __init__(
+            self,
+            session,
+            *,
+            huggingface_token="",
+            repo_cache=None,
+            hf_exact_no_repo_recheck_days=0,
+            max_concurrent=0,
+            min_interval=0,
+        ):
+            self.session = session
+
+    class FakeGitHubClient:
+        def __init__(self, session, *, github_token="", max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeContentClient:
+        def __init__(self, session, *, alphaxiv_token="", max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeSemanticScholarGraphClient:
+        def __init__(
+            self,
+            session,
+            *,
+            semantic_scholar_api_key="",
+            max_concurrent=0,
+            min_interval=0,
+        ):
+            self.session = session
+            self.semantic_scholar_api_key = semantic_scholar_api_key
+            self.max_concurrent = max_concurrent
+            self.min_interval = min_interval
+            constructed["semantic_scholar_graph_client"] = self
+
+    async def fake_export(
+        arxiv_input: str,
+        *,
+        semanticscholar_graph_client=None,
+        **kwargs,
+    ):
+        export_calls.append(
+            {
+                "arxiv_input": arxiv_input,
+                "semanticscholar_graph_client": semanticscholar_graph_client,
+            }
+        )
+        return ArxivRelationsExportResult(
+            arxiv_url="https://arxiv.org/abs/2603.23502",
+            title="Target Paper",
+            references=ConversionResult(csv_path=references_csv_path, resolved=0, skipped=[]),
+            citations=ConversionResult(csv_path=citations_csv_path, resolved=0, skipped=[]),
+        )
+
+    monkeypatch.setattr("src.arxiv_relations.runner.export_arxiv_relations_to_csv", fake_export)
+
+    exit_code = await run_arxiv_relations_mode(
+        "https://arxiv.org/abs/2603.23502",
+        output_dir=tmp_path,
+        session_factory=lambda **kwargs: FakeSession(),
+        arxiv_client_cls=FakeArxivClient,
+        openalex_client_cls=FakeOpenAlexClient,
+        crossref_client_cls=FakeCrossrefClient,
+        datacite_client_cls=FakeDataCiteClient,
+        discovery_client_cls=FakeDiscoveryClient,
+        github_client_cls=FakeGitHubClient,
+        content_client_cls=FakeContentClient,
+        semanticscholar_graph_client_cls=FakeSemanticScholarGraphClient,
+    )
+
+    assert exit_code == 0
+    assert len(export_calls) == 1
+    assert export_calls[0]["arxiv_input"] == "https://arxiv.org/abs/2603.23502"
+    assert (
+        export_calls[0]["semanticscholar_graph_client"]
+        is constructed["semantic_scholar_graph_client"]
+    )
+    assert (
+        constructed["semantic_scholar_graph_client"].semantic_scholar_api_key
+        == "ss_key"
+    )
 
 
 @pytest.mark.anyio
