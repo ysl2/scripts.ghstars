@@ -134,6 +134,34 @@ async def test_find_arxiv_match_by_identifier_can_use_source_url_exact_lookup():
 
 
 @pytest.mark.anyio
+async def test_find_arxiv_match_by_identifier_can_run_in_exact_only_mode():
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "paperId": "published",
+                    "title": "Published Paper",
+                    "externalIds": {"DOI": "10.1145/example"},
+                }
+            )
+        ]
+    )
+    client = SemanticScholarGraphClient(session, min_interval=0, max_concurrent=1)
+
+    arxiv_url, resolved_title, source = await client.find_arxiv_match_by_identifier(
+        "https://doi.org/10.1145/example",
+        title="Published Paper",
+        allow_title_fallback=False,
+    )
+
+    assert arxiv_url is None
+    assert resolved_title is None
+    assert source is None
+    assert len(session.calls) == 1
+    assert session.calls[0]["url"] == f"{SEMANTIC_SCHOLAR_GRAPH_URL}/paper/DOI:10.1145/example"
+
+
+@pytest.mark.anyio
 async def test_find_arxiv_match_by_identifier_falls_back_to_normalized_title_exact_search():
     session = FakeSession(
         [

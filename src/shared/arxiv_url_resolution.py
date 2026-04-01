@@ -134,6 +134,7 @@ async def resolve_arxiv_url(
 
     normalized_doi_key = next((key_value for key_type, key_value in cache_keys if key_type == "doi"), None)
     semantic_lookup = getattr(semanticscholar_graph_client, "find_arxiv_match_by_identifier", None)
+    semantic_title_lookup = getattr(semanticscholar_graph_client, "find_arxiv_match_by_title", None)
     metadata_transient_failure = False
     if callable(semantic_lookup):
         for key_type, key_value in cache_keys:
@@ -141,6 +142,7 @@ async def resolve_arxiv_url(
                 arxiv_url, resolved_title, source = await semantic_lookup(
                     key_value,
                     title=normalized_title or None,
+                    allow_title_fallback=False,
                 )
             except (RuntimeError, aiohttp.ClientError, asyncio.TimeoutError):
                 metadata_transient_failure = True
@@ -158,6 +160,27 @@ async def resolve_arxiv_url(
                     canonical_arxiv_url=arxiv_url,
                     resolved_title=resolved_title or normalized_title or arxiv_url,
                     source=source or f"semantic_scholar_exact_{key_type}",
+                    script_derived=True,
+                )
+
+    if callable(semantic_title_lookup) and normalized_title:
+        try:
+            arxiv_url, resolved_title, source = await semantic_title_lookup(normalized_title)
+        except (RuntimeError, aiohttp.ClientError, asyncio.TimeoutError):
+            metadata_transient_failure = True
+        else:
+            if arxiv_url:
+                _record_positive_resolution(
+                    relation_resolution_cache,
+                    cache_keys,
+                    arxiv_url=arxiv_url,
+                    resolved_title=resolved_title or normalized_title or None,
+                )
+                return ArxivUrlResolutionResult(
+                    resolved_url=arxiv_url,
+                    canonical_arxiv_url=arxiv_url,
+                    resolved_title=resolved_title or normalized_title or arxiv_url,
+                    source=source or "semantic_scholar_title_exact",
                     script_derived=True,
                 )
 

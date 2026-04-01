@@ -78,6 +78,7 @@ async def test_resolve_arxiv_url_resolves_doi_via_semantic_scholar_and_records_p
     semanticscholar_graph_client.find_arxiv_match_by_identifier.assert_awaited_once_with(
         "https://doi.org/10.1007/978-3-031-72933-1_9",
         title="Published Paper",
+        allow_title_fallback=False,
     )
     assert cache.record_calls == [
         {
@@ -93,7 +94,7 @@ async def test_resolve_arxiv_url_resolves_doi_via_semantic_scholar_and_records_p
 async def test_resolve_arxiv_url_uses_source_url_cache_key_for_semantic_scholar_inputs():
     semanticscholar_graph_client = SimpleNamespace(
         find_arxiv_match_by_identifier=AsyncMock(
-            side_effect=lambda identifier, title=None: (
+            side_effect=lambda identifier, title=None, allow_title_fallback=False: (
                 (
                     "https://arxiv.org/abs/2507.01125",
                     "Mapped Title",
@@ -171,7 +172,7 @@ async def test_resolve_arxiv_url_does_not_short_circuit_when_only_subset_of_keys
     )
     semanticscholar_graph_client = SimpleNamespace(
         find_arxiv_match_by_identifier=AsyncMock(
-            side_effect=lambda identifier, title=None: (
+            side_effect=lambda identifier, title=None, allow_title_fallback=False: (
                 (
                     "https://arxiv.org/abs/2501.12345",
                     "Mapped Arxiv Title",
@@ -302,7 +303,7 @@ async def test_resolve_arxiv_url_uses_semantic_scholar_exact_before_all_fallback
 async def test_resolve_arxiv_url_strips_html_markup_before_semantic_scholar_lookup():
     semanticscholar_graph_client = SimpleNamespace(
         find_arxiv_match_by_identifier=AsyncMock(
-            side_effect=lambda identifier, title=None: (
+            side_effect=lambda identifier, title=None, allow_title_fallback=False: (
                 (
                     "https://arxiv.org/abs/2507.01125",
                     "VISTA: Open-Vocabulary, Task-Relevant Robot Exploration with Online Semantic Gaussian Splatting",
@@ -330,6 +331,7 @@ async def test_resolve_arxiv_url_strips_html_markup_before_semantic_scholar_look
     semanticscholar_graph_client.find_arxiv_match_by_identifier.assert_awaited_once_with(
         "https://doi.org/10.1109/lra.2026.3653276",
         title="VISTA : Open-Vocabulary, Task-Relevant Robot Exploration With Online Semantic Gaussian Splatting",
+        allow_title_fallback=False,
     )
     arxiv_client.get_arxiv_id_by_title.assert_not_awaited()
 
@@ -337,7 +339,8 @@ async def test_resolve_arxiv_url_strips_html_markup_before_semantic_scholar_look
 @pytest.mark.anyio
 async def test_resolve_arxiv_url_accepts_semantic_scholar_title_exact_before_arxiv_title_search():
     semanticscholar_graph_client = SimpleNamespace(
-        find_arxiv_match_by_identifier=AsyncMock(
+        find_arxiv_match_by_identifier=AsyncMock(return_value=(None, None, None)),
+        find_arxiv_match_by_title=AsyncMock(
             return_value=(
                 "https://arxiv.org/abs/2507.01125",
                 "Mapped By Semantic Scholar Title",
@@ -365,10 +368,66 @@ async def test_resolve_arxiv_url_accepts_semantic_scholar_title_exact_before_arx
 
     assert result.canonical_arxiv_url == "https://arxiv.org/abs/2507.01125"
     assert result.source == "semantic_scholar_title_exact"
+    semanticscholar_graph_client.find_arxiv_match_by_identifier.assert_awaited_once_with(
+        "https://doi.org/10.1145/example",
+        title="Published Paper",
+        allow_title_fallback=False,
+    )
+    semanticscholar_graph_client.find_arxiv_match_by_title.assert_awaited_once_with("Published Paper")
     arxiv_client.get_arxiv_id_by_title.assert_not_awaited()
     arxiv_client.get_arxiv_match_by_title_from_api.assert_not_awaited()
     crossref_client.find_arxiv_match_by_doi.assert_not_awaited()
     datacite_client.find_arxiv_match_by_doi.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_resolve_arxiv_url_checks_all_semantic_scholar_exact_identifiers_before_title_fallback():
+    call_order: list[tuple[str, str, bool | None]] = []
+
+    async def semantic_exact(identifier: str, title=None, allow_title_fallback=True):
+        call_order.append(("exact", identifier, allow_title_fallback))
+        if identifier == "https://www.semanticscholar.org/paper/Foo/abc123" and allow_title_fallback:
+            return (
+                "https://arxiv.org/abs/2999.99999",
+                "Premature Title Fallback",
+                "semantic_scholar_title_exact",
+            )
+        if identifier == "https://doi.org/10.1145/example":
+            return (
+                "https://arxiv.org/abs/2501.12345",
+                "Exact DOI Match",
+                "semantic_scholar_exact_doi",
+            )
+        return None, None, None
+
+    async def semantic_title(title: str):
+        call_order.append(("title", title, None))
+        return None, None, None
+
+    semanticscholar_graph_client = SimpleNamespace(
+        find_arxiv_match_by_identifier=AsyncMock(side_effect=semantic_exact),
+        find_arxiv_match_by_title=AsyncMock(side_effect=semantic_title),
+    )
+    arxiv_client = SimpleNamespace(get_arxiv_id_by_title=AsyncMock())
+
+    result = await resolve_arxiv_url(
+        title="Published Paper",
+        raw_url="https://doi.org/10.1145/example",
+        semanticscholar_graph_client=semanticscholar_graph_client,
+        arxiv_client=arxiv_client,
+        extra_identifiers=["https://www.semanticscholar.org/paper/Foo/abc123"],
+        allow_title_search=False,
+    )
+
+    assert result.canonical_arxiv_url == "https://arxiv.org/abs/2501.12345"
+    assert result.resolved_title == "Exact DOI Match"
+    assert result.source == "semantic_scholar_exact_doi"
+    assert call_order == [
+        ("exact", "https://www.semanticscholar.org/paper/Foo/abc123", False),
+        ("exact", "https://doi.org/10.1145/example", False),
+    ]
+    semanticscholar_graph_client.find_arxiv_match_by_title.assert_not_awaited()
+    arxiv_client.get_arxiv_id_by_title.assert_not_awaited()
 
 
 @pytest.mark.anyio
@@ -452,7 +511,7 @@ async def test_resolve_arxiv_url_falls_back_to_api_title_search_after_html_miss(
 async def test_resolve_arxiv_url_runs_crossref_then_datacite_after_semantic_scholar_and_title_search_fail():
     call_order: list[str] = []
 
-    async def semantic_exact(identifier: str, title=None):
+    async def semantic_exact(identifier: str, title=None, allow_title_fallback=False):
         call_order.append("semantic_exact")
         return None, None, None
 
@@ -516,7 +575,7 @@ async def test_resolve_arxiv_url_runs_crossref_then_datacite_after_semantic_scho
 async def test_resolve_arxiv_url_can_use_optional_huggingface_fallback_after_metadata_misses():
     call_order: list[str] = []
 
-    async def semantic_exact(identifier: str, title=None):
+    async def semantic_exact(identifier: str, title=None, allow_title_fallback=False):
         call_order.append("semantic_exact")
         return None, None, None
 

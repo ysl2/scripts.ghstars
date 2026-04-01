@@ -105,6 +105,7 @@ class SemanticScholarGraphClient:
         identifier: str,
         *,
         title: str | None = None,
+        allow_title_fallback: bool = True,
     ) -> tuple[str | None, str | None, str | None]:
         normalized_doi = normalize_doi_url(identifier)
         normalized_source_url = self._normalize_source_url(identifier)
@@ -134,6 +135,9 @@ class SemanticScholarGraphClient:
             if arxiv_url:
                 resolved_title = " ".join(str((paper or {}).get("title") or title or "").split()).strip()
                 return arxiv_url, resolved_title or title, source
+
+        if not allow_title_fallback:
+            return None, None, None
 
         return await self.find_arxiv_match_by_title(title or "")
 
