@@ -47,10 +47,16 @@ REPO_DISCOVERY_NO_REPO_RECHECK_DAYS=7
 
 ```bash
 OPENALEX_API_KEY=
+SEMANTIC_SCHOLAR_API_KEY=
+AIFORSCHOLAR_TOKEN=
 ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS=30
 ```
 
 `OPENALEX_API_KEY` is optional but recommended anywhere the shared arXiv URL resolver may need OpenAlex metadata, including CSV update, collection URL export, Notion sync, and single-paper relation export. Even with a key, OpenAlex can still return budget-exhausted `429` responses; the client honors `Retry-After` / `retryAfter` signals and avoids long pointless retry loops when the server asks for a much later retry.
+
+`SEMANTIC_SCHOLAR_API_KEY` is optional for single-paper arXiv relation export against the official Semantic Scholar Graph API.
+
+`AIFORSCHOLAR_TOKEN` is optional for single-paper arXiv relation export through the `https://ai4scholar.net/graph/v1` relay, which mirrors the official Graph API paths behind a Bearer token. If both `SEMANTIC_SCHOLAR_API_KEY` and `AIFORSCHOLAR_TOKEN` are set, the official Semantic Scholar credential is preferred and the relay token is not used for that run.
 
 `ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS` controls how long the shared arXiv-resolution negative cache stays fresh before the resolver retries that unresolved identifier.
 

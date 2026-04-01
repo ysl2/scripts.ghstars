@@ -2,6 +2,7 @@ import pytest
 
 from src.shared.relation_candidates import RelatedWorkCandidate as SharedRelatedWorkCandidate
 from src.shared.semantic_scholar_graph import (
+    AIFORSCHOLAR_GRAPH_URL,
     SEMANTIC_SCHOLAR_GRAPH_URL,
     SemanticScholarGraphClient,
 )
@@ -233,6 +234,41 @@ async def test_build_headers_injects_x_api_key_when_configured():
     await client.search_papers_by_title("example")
 
     assert session.calls[0]["headers"]["x-api-key"] == "secret-key"
+
+
+@pytest.mark.anyio
+async def test_search_papers_by_title_uses_ai4scholar_relay_when_only_relay_token_is_configured():
+    session = FakeSession([FakeResponse({"data": []})])
+    client = SemanticScholarGraphClient(
+        session,
+        aiforscholar_token="relay-token",
+        min_interval=0,
+        max_concurrent=1,
+    )
+
+    await client.search_papers_by_title("example")
+
+    assert session.calls[0]["url"] == f"{AIFORSCHOLAR_GRAPH_URL}/paper/search"
+    assert session.calls[0]["headers"]["Authorization"] == "Bearer relay-token"
+    assert "x-api-key" not in session.calls[0]["headers"]
+
+
+@pytest.mark.anyio
+async def test_search_papers_by_title_prefers_official_api_key_over_ai4scholar_token():
+    session = FakeSession([FakeResponse({"data": []})])
+    client = SemanticScholarGraphClient(
+        session,
+        semantic_scholar_api_key="official-key",
+        aiforscholar_token="relay-token",
+        min_interval=0,
+        max_concurrent=1,
+    )
+
+    await client.search_papers_by_title("example")
+
+    assert session.calls[0]["url"] == f"{SEMANTIC_SCHOLAR_GRAPH_URL}/paper/search"
+    assert session.calls[0]["headers"]["x-api-key"] == "official-key"
+    assert "Authorization" not in session.calls[0]["headers"]
 
 
 @pytest.mark.anyio

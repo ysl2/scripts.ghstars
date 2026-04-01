@@ -3557,6 +3557,7 @@ async def test_run_arxiv_relations_mode_wires_semantic_scholar_graph_client_from
     tmp_path: Path, monkeypatch
 ):
     monkeypatch.setenv("SEMANTIC_SCHOLAR_API_KEY", "ss_key")
+    monkeypatch.setenv("AIFORSCHOLAR_TOKEN", "relay_token")
 
     references_csv_path = tmp_path / "arxiv-2603.23502-references-20260326113045.csv"
     citations_csv_path = tmp_path / "arxiv-2603.23502-citations-20260326113045.csv"
@@ -3613,11 +3614,13 @@ async def test_run_arxiv_relations_mode_wires_semantic_scholar_graph_client_from
             session,
             *,
             semantic_scholar_api_key="",
+            aiforscholar_token="",
             max_concurrent=0,
             min_interval=0,
         ):
             self.session = session
             self.semantic_scholar_api_key = semantic_scholar_api_key
+            self.aiforscholar_token = aiforscholar_token
             self.max_concurrent = max_concurrent
             self.min_interval = min_interval
             constructed["semantic_scholar_graph_client"] = self
@@ -3668,6 +3671,7 @@ async def test_run_arxiv_relations_mode_wires_semantic_scholar_graph_client_from
         constructed["semantic_scholar_graph_client"].semantic_scholar_api_key
         == "ss_key"
     )
+    assert constructed["semantic_scholar_graph_client"].aiforscholar_token == "relay_token"
     assert constructed["semantic_scholar_graph_client"].min_interval == 1.0
 
 

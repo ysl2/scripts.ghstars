@@ -1,4 +1,5 @@
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -13,6 +14,7 @@ def test_load_runtime_config_reads_only_optional_tokens():
             "GITHUB_TOKEN": "gh_token",
             "HUGGINGFACE_TOKEN": "hf_token",
             "ALPHAXIV_TOKEN": "ax_token",
+            "AIFORSCHOLAR_TOKEN": "relay_token",
             "REPO_DISCOVERY_NO_REPO_RECHECK_DAYS": "7",
         }
     )
@@ -21,6 +23,7 @@ def test_load_runtime_config_reads_only_optional_tokens():
         "github_token": "gh_token",
         "huggingface_token": "hf_token",
         "alphaxiv_token": "ax_token",
+        "aiforscholar_token": "relay_token",
         "openalex_api_key": "",
         "semantic_scholar_api_key": "",
         "arxiv_relation_no_arxiv_recheck_days": 30,
@@ -33,6 +36,7 @@ def test_load_runtime_config_defaults_missing_values_to_empty_strings():
         "github_token": "",
         "huggingface_token": "",
         "alphaxiv_token": "",
+        "aiforscholar_token": "",
         "openalex_api_key": "",
         "semantic_scholar_api_key": "",
         "arxiv_relation_no_arxiv_recheck_days": 30,
@@ -79,6 +83,16 @@ def test_load_runtime_config_reads_optional_semantic_scholar_api_key():
     assert config["semantic_scholar_api_key"] == "ss_key"
 
 
+def test_load_runtime_config_reads_optional_aiforscholar_token():
+    config = load_runtime_config(
+        {
+            "AIFORSCHOLAR_TOKEN": "relay_token",
+        }
+    )
+
+    assert config["aiforscholar_token"] == "relay_token"
+
+
 def test_load_runtime_config_reads_relation_resolution_recheck_days():
     config = load_runtime_config(
         {
@@ -93,6 +107,10 @@ def test_load_runtime_config_defaults_relation_resolution_recheck_days():
     config = load_runtime_config({})
 
     assert config["arxiv_relation_no_arxiv_recheck_days"] == 30
+
+
+def test_env_example_includes_aiforscholar_token():
+    assert "AIFORSCHOLAR_TOKEN=" in Path(".env.example").read_text()
 
 
 class FakeSession:

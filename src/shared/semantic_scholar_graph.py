@@ -10,6 +10,7 @@ from src.shared.paper_identity import build_arxiv_abs_url, normalize_arxiv_url, 
 from src.shared.relation_candidates import RelatedWorkCandidate
 
 SEMANTIC_SCHOLAR_GRAPH_URL = "https://api.semanticscholar.org/graph/v1"
+AIFORSCHOLAR_GRAPH_URL = "https://ai4scholar.net/graph/v1"
 SEMANTIC_SCHOLAR_SEARCH_LIMIT = 5
 SEMANTIC_SCHOLAR_RETRY_STATUSES = {500, 502, 503, 504}
 SEMANTIC_SCHOLAR_MAX_RETRY_AFTER_SECONDS = 15.0
@@ -18,11 +19,26 @@ SEMANTIC_SCHOLAR_AUTHENTICATED_MIN_INTERVAL = 1.0
 
 def resolve_semantic_scholar_min_interval(
     semantic_scholar_api_key: str,
+    aiforscholar_token: str,
     requested_min_interval: float,
 ) -> float:
     if semantic_scholar_api_key.strip():
         return max(requested_min_interval, SEMANTIC_SCHOLAR_AUTHENTICATED_MIN_INTERVAL)
     return requested_min_interval
+
+
+def resolve_semantic_scholar_transport(
+    semantic_scholar_api_key: str,
+    aiforscholar_token: str,
+) -> tuple[str, dict[str, str]]:
+    official_api_key = semantic_scholar_api_key.strip()
+    relay_token = aiforscholar_token.strip()
+
+    if official_api_key:
+        return SEMANTIC_SCHOLAR_GRAPH_URL, {"x-api-key": official_api_key}
+    if relay_token:
+        return AIFORSCHOLAR_GRAPH_URL, {"Authorization": f"Bearer {relay_token}"}
+    return SEMANTIC_SCHOLAR_GRAPH_URL, {}
 
 
 class SemanticScholarGraphClient:
@@ -31,20 +47,30 @@ class SemanticScholarGraphClient:
         session: aiohttp.ClientSession,
         *,
         semantic_scholar_api_key: str = "",
+        aiforscholar_token: str = "",
         max_concurrent: int = 4,
         min_interval: float = 0.2,
     ):
         self.session = session
         self.semantic_scholar_api_key = semantic_scholar_api_key.strip()
+        self.aiforscholar_token = aiforscholar_token.strip()
+        self.graph_url, self.auth_headers = resolve_semantic_scholar_transport(
+            self.semantic_scholar_api_key,
+            self.aiforscholar_token,
+        )
         self.semaphore = asyncio.Semaphore(max_concurrent)
         self.rate_limiter = RateLimiter(
-            resolve_semantic_scholar_min_interval(self.semantic_scholar_api_key, min_interval)
+            resolve_semantic_scholar_min_interval(
+                self.semantic_scholar_api_key,
+                self.aiforscholar_token,
+                min_interval,
+            )
         )
 
     async def fetch_paper_by_identifier(self, identifier: str) -> dict[str, Any] | None:
         try:
             payload = await self._get_json(
-                f"{SEMANTIC_SCHOLAR_GRAPH_URL}/paper/{identifier}",
+                f"{self.graph_url}/paper/{identifier}",
                 params={"fields": "paperId,title,externalIds"},
             )
         except RuntimeError as exc:
@@ -60,7 +86,7 @@ class SemanticScholarGraphClient:
         limit: int = SEMANTIC_SCHOLAR_SEARCH_LIMIT,
     ) -> list[dict[str, Any]]:
         payload = await self._get_json(
-            f"{SEMANTIC_SCHOLAR_GRAPH_URL}/paper/search",
+            f"{self.graph_url}/paper/search",
             params={"query": title, "limit": limit, "fields": "paperId,title,externalIds"},
         )
         rows = payload.get("data")
@@ -111,7 +137,7 @@ class SemanticScholarGraphClient:
 
         while next_offset is not None:
             payload = await self._get_json(
-                f"{SEMANTIC_SCHOLAR_GRAPH_URL}/paper/{paper_id}/{relation_path}",
+                f"{self.graph_url}/paper/{paper_id}/{relation_path}",
                 params={"fields": fields, "offset": next_offset},
             )
             rows = payload.get("data")
@@ -188,8 +214,7 @@ class SemanticScholarGraphClient:
 
     def _build_headers(self) -> dict[str, str]:
         headers = {"User-Agent": "scripts.ghstars"}
-        if self.semantic_scholar_api_key:
-            headers["x-api-key"] = self.semantic_scholar_api_key
+        headers.update(self.auth_headers)
         return headers
 
     @classmethod

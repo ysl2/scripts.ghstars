@@ -89,9 +89,11 @@ async def run_arxiv_relations_mode(
                 semanticscholar_graph_client_cls,
                 runtime.session,
                 semantic_scholar_api_key=config["semantic_scholar_api_key"],
+                aiforscholar_token=config["aiforscholar_token"],
                 max_concurrent=CONCURRENT_LIMIT,
                 min_interval=resolve_semantic_scholar_min_interval(
                     config["semantic_scholar_api_key"],
+                    config["aiforscholar_token"],
                     REQUEST_DELAY,
                 ),
             )
