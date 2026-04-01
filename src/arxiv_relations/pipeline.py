@@ -207,6 +207,10 @@ async def _fetch_primary_relation_candidates(
 
     openalex_target_work = await get_openalex_target_work()
     if openalex_target_work is None:
+        if semanticscholar_graph_client is not None and semantic_scholar_target_paper is not None:
+            raise ValueError(
+                f"Semantic Scholar {relation_label} fallback could not resolve OpenAlex target work"
+            )
         return []
 
     if callable(status_callback):
