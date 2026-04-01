@@ -33,10 +33,10 @@ async def test_update_csv_file_updates_rows_in_place_preserving_columns_and_orde
     csv_path.write_text(
         "\n".join(
             [
-                "Name,Url,Notes,Github,Stars,Tag",
-                "Keep Github,https://arxiv.org/abs/2603.20000v2,note-1,https://github.com/foo/existing,1,A",
-                "Discover Github,https://arxiv.org/pdf/2603.10000v1.pdf,note-2,,,B",
-                "Invalid Url,https://example.com/not-arxiv,note-3,,9,C",
+                "Name,Url,Notes,Github,Stars,Created,About,Tag",
+                "Keep Github,https://arxiv.org/abs/2603.20000v2,note-1,https://github.com/foo/existing,1,2024-03-01T00:00:00Z,keep repo,A",
+                "Discover Github,https://arxiv.org/pdf/2603.10000v1.pdf,note-2,,,2024-02-01T00:00:00Z,discover repo,B",
+                "Invalid Url,https://example.com/not-arxiv,note-3,,9,2024-01-01T00:00:00Z,bad row,C",
             ]
         )
         + "\n",
@@ -79,7 +79,7 @@ async def test_update_csv_file_updates_rows_in_place_preserving_columns_and_orde
     assert len(result.skipped) == 1
     assert result.skipped[0]["title"] == "Invalid Url"
     assert result.skipped[0]["reason"] == "No valid arXiv URL found"
-    assert reader.fieldnames == ["Name", "Url", "Notes", "Github", "Stars", "Tag"]
+    assert reader.fieldnames == ["Name", "Url", "Notes", "Github", "Stars", "Created", "About", "Tag"]
     assert discovery_client.urls == ["https://arxiv.org/abs/2603.10000"]
     assert rows == [
         {
@@ -88,6 +88,8 @@ async def test_update_csv_file_updates_rows_in_place_preserving_columns_and_orde
             "Notes": "note-1",
             "Github": "https://github.com/foo/existing",
             "Stars": "99",
+            "Created": "2024-03-01T00:00:00Z",
+            "About": "keep repo",
             "Tag": "A",
         },
         {
@@ -96,6 +98,8 @@ async def test_update_csv_file_updates_rows_in_place_preserving_columns_and_orde
             "Notes": "note-2",
             "Github": "https://github.com/foo/discovered",
             "Stars": "42",
+            "Created": "2024-02-01T00:00:00Z",
+            "About": "discover repo",
             "Tag": "B",
         },
         {
@@ -104,6 +108,8 @@ async def test_update_csv_file_updates_rows_in_place_preserving_columns_and_orde
             "Notes": "note-3",
             "Github": "",
             "Stars": "9",
+            "Created": "2024-01-01T00:00:00Z",
+            "About": "bad row",
             "Tag": "C",
         },
     ]
@@ -384,7 +390,7 @@ async def test_update_csv_file_appends_missing_github_and_stars_columns_at_the_e
     assert result.updated == 1
     assert len(result.skipped) == 1
     assert result.skipped[0]["title"] == "Paper B"
-    assert result.skipped[0]["reason"] == "No valid arXiv URL found"
+    assert result.skipped[0]["reason"] == "Row has neither Github nor Url"
     assert reader.fieldnames == ["Name", "Url", "Notes", "Github", "Stars"]
     assert rows == [
         {
@@ -405,34 +411,54 @@ async def test_update_csv_file_appends_missing_github_and_stars_columns_at_the_e
 
 
 @pytest.mark.anyio
-async def test_update_csv_file_requires_url_column(tmp_path: Path):
+async def test_update_csv_file_skips_row_without_github_or_url(tmp_path: Path):
     csv_path = tmp_path / "papers.csv"
     csv_path.write_text(
         "\n".join(
             [
-                "Name,Github,Stars",
-                "Paper A,,",
+                "Name,Github,Stars,Created,About",
+                "Paper A,,,2024-01-01T00:00:00Z,row about",
             ]
         )
         + "\n",
         encoding="utf-8",
     )
 
-    class FakeDiscoveryClient:
-        async def resolve_github_url(self, seed):
-            raise AssertionError("discovery should not run when Url column is missing")
+    discovery_client = SimpleNamespace(resolve_github_url=AsyncMock())
+    github_client = SimpleNamespace(get_star_count=AsyncMock())
 
-    class FakeGitHubClient:
-        async def get_star_count(self, owner, repo):
-            raise AssertionError("GitHub should not run when Url column is missing")
+    result = await update_csv_file(
+        csv_path,
+        discovery_client=discovery_client,
+        github_client=github_client,
+        content_cache=FakeContentCache(),
+    )
 
-    with pytest.raises(ValueError, match="CSV file must include Url column"):
-        await update_csv_file(
-            csv_path,
-            discovery_client=FakeDiscoveryClient(),
-            github_client=FakeGitHubClient(),
-            content_cache=FakeContentCache(),
-        )
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        rows = list(reader)
+
+    assert result.updated == 0
+    assert result.skipped == [
+        {
+            "title": "Paper A",
+            "github_url": None,
+            "detail_url": "",
+            "reason": "Row has neither Github nor Url",
+        }
+    ]
+    assert reader.fieldnames == ["Name", "Github", "Stars", "Created", "About"]
+    assert rows == [
+        {
+            "Name": "Paper A",
+            "Github": "",
+            "Stars": "",
+            "Created": "2024-01-01T00:00:00Z",
+            "About": "row about",
+        }
+    ]
+    discovery_client.resolve_github_url.assert_not_awaited()
+    github_client.get_star_count.assert_not_awaited()
 
 
 @pytest.mark.anyio
@@ -484,13 +510,13 @@ async def test_update_csv_file_allows_missing_name_column_when_url_exists(tmp_pa
 
 
 @pytest.mark.anyio
-async def test_update_csv_file_fills_blank_stars_for_existing_github_without_adding_content_columns(tmp_path: Path):
+async def test_update_csv_file_refreshes_stars_without_url_when_github_exists(tmp_path: Path):
     csv_path = tmp_path / "papers.csv"
     csv_path.write_text(
         "\n".join(
             [
-                "Name,Url,Github,Stars",
-                "Paper A,https://arxiv.org/abs/2603.20000v2,https://github.com/foo/bar,",
+                "Name,Github,Stars,Created,About",
+                "Paper A,https://github.com/foo/bar,,2024-01-01T00:00:00Z,repo",
             ]
         )
         + "\n",
@@ -506,26 +532,48 @@ async def test_update_csv_file_fills_blank_stars_for_existing_github_without_add
             assert (owner, repo) == ("foo", "bar")
             return 11, None
 
+    semanticscholar_graph_client = SimpleNamespace(
+        find_arxiv_match_by_identifier=AsyncMock(
+            side_effect=AssertionError("identifier lookup should not run when Github already exists")
+        ),
+        find_arxiv_match_by_title=AsyncMock(
+            side_effect=AssertionError("title search should not run when Github already exists")
+        ),
+    )
+    arxiv_client = SimpleNamespace(
+        get_arxiv_id_by_title=AsyncMock(
+            side_effect=AssertionError("arXiv title search should not run when Github already exists")
+        ),
+        get_arxiv_match_by_title_from_api=AsyncMock(
+            side_effect=AssertionError("arXiv API title search should not run when Github already exists")
+        ),
+    )
+
     result = await update_csv_file(
         csv_path,
         discovery_client=FakeDiscoveryClient(),
         github_client=FakeGitHubClient(),
+        arxiv_client=arxiv_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
         content_cache=FakeContentCache(),
     )
 
     with csv_path.open(newline="", encoding="utf-8") as handle:
-        rows = list(csv.DictReader(handle))
+        reader = csv.DictReader(handle)
+        rows = list(reader)
 
     assert result.updated == 1
     assert result.skipped == []
     assert rows == [
         {
             "Name": "Paper A",
-            "Url": "https://arxiv.org/abs/2603.20000v2",
             "Github": "https://github.com/foo/bar",
             "Stars": "11",
+            "Created": "2024-01-01T00:00:00Z",
+            "About": "repo",
         }
     ]
+    assert reader.fieldnames == ["Name", "Github", "Stars", "Created", "About"]
 
 
 @pytest.mark.anyio

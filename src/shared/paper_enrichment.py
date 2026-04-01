@@ -46,9 +46,13 @@ async def process_single_paper(
 ) -> PaperEnrichmentResult:
     title = (request.title or "").strip()
     raw_url = (request.raw_url or "").strip()
+    existing_value = (request.existing_github_url or "").strip()
     if request.url_resolution_authoritative:
         normalized_url = request.precomputed_normalized_url or raw_url or None
         canonical_arxiv_url = request.precomputed_canonical_arxiv_url
+    elif existing_value and not raw_url:
+        normalized_url = None
+        canonical_arxiv_url = None
     else:
         url_resolution = await resolve_arxiv_url(
             title,
@@ -67,7 +71,6 @@ async def process_single_paper(
 
     github_url = None
     github_source = None
-    existing_value = (request.existing_github_url or "").strip()
     if existing_value:
         github_source = "existing"
         github_url = existing_value

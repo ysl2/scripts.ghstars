@@ -116,17 +116,33 @@ async def build_csv_row_outcome(
 ) -> tuple[int, dict[str, str], CsvRowOutcome]:
     updated_row = dict(row)
     name = (updated_row.get(NAME_COLUMN) or "").strip() or f"Row {index}"
-    url = updated_row.get(URL_COLUMN, "") or ""
-    existing_github = updated_row.get(GITHUB_COLUMN, "") or ""
+    url = (updated_row.get(URL_COLUMN, "") or "").strip()
+    existing_github = (updated_row.get(GITHUB_COLUMN, "") or "").strip()
     current_stars = parse_current_stars(updated_row.get(STARS_COLUMN))
+
+    if not existing_github and not url:
+        outcome = CsvRowOutcome(
+            index=index,
+            record=PaperRecord(
+                name=name,
+                url="",
+                github="",
+                stars=updated_row.get(STARS_COLUMN, ""),
+            ),
+            current_stars=current_stars,
+            reason="Row has neither Github nor Url",
+            source_label=None,
+            github_url_set=None,
+        )
+        return index - 1, updated_row, outcome
 
     enrichment = await process_single_paper(
         PaperEnrichmentRequest(
             title=name,
             raw_url=url,
             existing_github_url=existing_github,
-            allow_title_search=True,
-            allow_github_discovery=True,
+            allow_title_search=bool(url),
+            allow_github_discovery=not bool(existing_github),
         ),
         discovery_client=discovery_client,
         github_client=github_client,
@@ -142,7 +158,7 @@ async def build_csv_row_outcome(
     if enrichment.normalized_url and enrichment.normalized_url != url:
         updated_row[URL_COLUMN] = enrichment.normalized_url
 
-    if enrichment.github_url:
+    if not existing_github and enrichment.github_url:
         updated_row[GITHUB_COLUMN] = enrichment.github_url
 
     if enrichment.reason is None and enrichment.stars is not None:
@@ -193,13 +209,8 @@ def _read_csv_rows(csv_path: Path) -> tuple[list[dict[str, str]], list[str]]:
         if reader.fieldnames is None:
             raise ValueError("CSV file must include a header row")
         fieldnames = _normalize_fieldnames(list(reader.fieldnames))
-        if URL_COLUMN not in fieldnames:
-            raise ValueError("CSV file must include Url column")
 
-        rows = []
-        for raw_row in reader:
-            row = {field: raw_row.get(field, "") or "" for field in fieldnames}
-            rows.append(row)
+        rows = [{field: raw_row.get(field, "") or "" for field in fieldnames} for raw_row in reader]
         return rows, fieldnames
 
 
