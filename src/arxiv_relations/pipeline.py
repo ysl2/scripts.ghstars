@@ -149,17 +149,34 @@ async def _resolve_target_semantic_scholar_paper(
     if not arxiv_id:
         return None
 
+    last_stage_error: RuntimeError | aiohttp.ClientError | asyncio.TimeoutError | None = None
+    completed_stage_without_error = False
+
     for identifier in [f"DOI:10.48550/arXiv.{arxiv_id}", f"ARXIV:{arxiv_id}"]:
-        paper = await semanticscholar_graph_client.fetch_paper_by_identifier(identifier)
+        try:
+            paper = await semanticscholar_graph_client.fetch_paper_by_identifier(identifier)
+        except (RuntimeError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            last_stage_error = exc
+            continue
+
+        completed_stage_without_error = True
         if isinstance(paper, dict) and paper.get("paperId"):
             return paper
 
     normalized_title = normalize_title_for_matching(title)
-    matches = await semanticscholar_graph_client.search_papers_by_title(title)
-    for paper in matches:
-        candidate_title = " ".join(str(paper.get("title") or "").split()).strip()
-        if candidate_title and normalize_title_for_matching(candidate_title) == normalized_title:
-            return paper
+    try:
+        matches = await semanticscholar_graph_client.search_papers_by_title(title)
+    except (RuntimeError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        last_stage_error = exc
+    else:
+        completed_stage_without_error = True
+        for paper in matches:
+            candidate_title = " ".join(str(paper.get("title") or "").split()).strip()
+            if candidate_title and normalize_title_for_matching(candidate_title) == normalized_title:
+                return paper
+
+    if last_stage_error is not None and not completed_stage_without_error:
+        raise last_stage_error
 
     return None
 
@@ -180,6 +197,7 @@ async def _fetch_primary_relation_candidates(
         if is_references
         else openalex_client.fetch_citations
     )
+    semantic_fetch_failed = False
 
     if semanticscholar_graph_client is not None and semantic_scholar_target_paper is not None:
         semantic_fetcher = (
@@ -192,6 +210,7 @@ async def _fetch_primary_relation_candidates(
         try:
             semantic_rows = await semantic_fetcher(semantic_scholar_target_paper)
         except (RuntimeError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            semantic_fetch_failed = True
             if callable(status_callback):
                 status_callback(f"⚠️ Semantic Scholar {relation_label} failed ({exc}); falling back to OpenAlex")
         else:
@@ -207,7 +226,7 @@ async def _fetch_primary_relation_candidates(
 
     openalex_target_work = await get_openalex_target_work()
     if openalex_target_work is None:
-        if semanticscholar_graph_client is not None and semantic_scholar_target_paper is not None:
+        if semantic_fetch_failed:
             raise ValueError(
                 f"Semantic Scholar {relation_label} fallback could not resolve OpenAlex target work"
             )

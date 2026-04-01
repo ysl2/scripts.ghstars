@@ -2508,6 +2508,165 @@ async def test_export_arxiv_relations_to_csv_raises_when_side_fallback_cannot_re
 
 
 @pytest.mark.anyio
+async def test_export_arxiv_relations_to_csv_keeps_empty_semantic_side_when_openalex_target_misses(
+    tmp_path: Path, monkeypatch
+):
+    from src.arxiv_relations.pipeline import export_arxiv_relations_to_csv
+
+    class FakeArxivClient:
+        async def get_title(self, arxiv_identifier: str):
+            assert arxiv_identifier == "https://arxiv.org/abs/2510.22706"
+            return "Target Paper", None
+
+    class FakeSemanticScholarGraphClient:
+        def __init__(self):
+            self.reference_queries: list[dict] = []
+            self.citation_queries: list[dict] = []
+
+        async def fetch_paper_by_identifier(self, identifier: str):
+            if identifier == "DOI:10.48550/arXiv.2510.22706":
+                return {"paperId": "ss-target", "title": "Target Paper", "externalIds": {"ArXiv": "2510.22706"}}
+            return None
+
+        async def search_papers_by_title(self, title: str, *, limit: int = 5):
+            raise AssertionError("Semantic Scholar title search should not run when DOI lookup succeeds")
+
+        async def fetch_references(self, paper: dict):
+            self.reference_queries.append(paper)
+            return []
+
+        async def fetch_citations(self, paper: dict):
+            self.citation_queries.append(paper)
+            return [{"paperId": "ss-cite", "title": "Semantic Citation", "externalIds": {"ArXiv": "2502.00020"}}]
+
+        def build_related_work_candidate(self, paper: dict):
+            return RelatedWorkCandidate(
+                title="Semantic Citation",
+                direct_arxiv_url="https://arxiv.org/abs/2502.00020",
+                doi_url=None,
+                landing_page_url="https://www.semanticscholar.org/paper/ss-cite",
+                source_url="https://www.semanticscholar.org/paper/ss-cite",
+            )
+
+    class FakeOpenAlexClient:
+        def __init__(self):
+            self.identifier_queries: list[str] = []
+            self.title_queries: list[str] = []
+            self.reference_queries: list[dict] = []
+            self.citation_queries: list[dict] = []
+
+        async def fetch_work_by_identifier(self, identifier: str):
+            self.identifier_queries.append(identifier)
+            return None
+
+        async def search_first_work(self, title: str):
+            self.title_queries.append(title)
+            return None
+
+        async def fetch_referenced_works(self, work: dict):
+            self.reference_queries.append(work)
+            raise AssertionError("OpenAlex references should not run without a resolved target work")
+
+        async def fetch_citations(self, work: dict):
+            self.citation_queries.append(work)
+            raise AssertionError("OpenAlex citations should not run when Semantic Scholar citations are non-empty")
+
+    export_calls = []
+    statuses = []
+
+    async def fake_export(
+        seeds: list[PaperSeed],
+        csv_path: Path,
+        *,
+        discovery_client,
+        github_client,
+        arxiv_client=None,
+        openalex_client=None,
+        crossref_client=None,
+        datacite_client=None,
+        content_cache=None,
+        relation_resolution_cache=None,
+        arxiv_relation_no_arxiv_recheck_days=30,
+        status_callback=None,
+        progress_callback=None,
+    ):
+        export_calls.append({"seeds": seeds, "csv_path": csv_path})
+        return ConversionResult(csv_path=csv_path, resolved=len(seeds), skipped=[])
+
+    monkeypatch.setattr("src.arxiv_relations.pipeline.export_paper_seeds_to_csv", fake_export)
+
+    openalex_client = FakeOpenAlexClient()
+    semanticscholar_graph_client = FakeSemanticScholarGraphClient()
+    result = await export_arxiv_relations_to_csv(
+        "https://arxiv.org/abs/2510.22706",
+        arxiv_client=FakeArxivClient(),
+        openalex_client=openalex_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
+        discovery_client=object(),
+        github_client=object(),
+        output_dir=tmp_path,
+        status_callback=statuses.append,
+    )
+
+    assert semanticscholar_graph_client.reference_queries == [
+        {"paperId": "ss-target", "title": "Target Paper", "externalIds": {"ArXiv": "2510.22706"}}
+    ]
+    assert semanticscholar_graph_client.citation_queries == [
+        {"paperId": "ss-target", "title": "Target Paper", "externalIds": {"ArXiv": "2510.22706"}}
+    ]
+    assert openalex_client.identifier_queries == ["https://doi.org/10.48550/arxiv.2510.22706"]
+    assert openalex_client.title_queries == ["Target Paper"]
+    assert openalex_client.reference_queries == []
+    assert openalex_client.citation_queries == []
+    assert [call["seeds"] for call in export_calls] == [
+        [],
+        [PaperSeed(name="Semantic Citation", url="https://arxiv.org/abs/2502.00020")],
+    ]
+    assert "📚 Semantic Scholar references empty; falling back to OpenAlex" in statuses
+    assert result.arxiv_url == "https://arxiv.org/abs/2510.22706"
+
+
+@pytest.mark.anyio
+async def test_resolve_target_semantic_scholar_paper_falls_through_after_doi_lookup_error():
+    from src.arxiv_relations.pipeline import _resolve_target_semantic_scholar_paper
+
+    class FakeSemanticScholarGraphClient:
+        def __init__(self):
+            self.identifier_queries: list[str] = []
+            self.title_queries: list[str] = []
+
+        async def fetch_paper_by_identifier(self, identifier: str):
+            self.identifier_queries.append(identifier)
+            if identifier == "DOI:10.48550/arXiv.2510.22706":
+                raise RuntimeError("Semantic Scholar DOI lookup timed out")
+            if identifier == "ARXIV:2510.22706":
+                return {"paperId": "ss-target", "title": "Target Paper", "externalIds": {"ArXiv": "2510.22706"}}
+            return None
+
+        async def search_papers_by_title(self, title: str, *, limit: int = 5):
+            self.title_queries.append(title)
+            raise AssertionError("Semantic Scholar title search should not run when ARXIV lookup succeeds")
+
+    semanticscholar_graph_client = FakeSemanticScholarGraphClient()
+    paper = await _resolve_target_semantic_scholar_paper(
+        "https://arxiv.org/abs/2510.22706",
+        "Target Paper",
+        semanticscholar_graph_client,
+    )
+
+    assert paper == {
+        "paperId": "ss-target",
+        "title": "Target Paper",
+        "externalIds": {"ArXiv": "2510.22706"},
+    }
+    assert semanticscholar_graph_client.identifier_queries == [
+        "DOI:10.48550/arXiv.2510.22706",
+        "ARXIV:2510.22706",
+    ]
+    assert semanticscholar_graph_client.title_queries == []
+
+
+@pytest.mark.anyio
 async def test_export_arxiv_relations_to_csv_uses_hf_fallback_for_unresolved_relations(
     tmp_path: Path, monkeypatch
 ):
