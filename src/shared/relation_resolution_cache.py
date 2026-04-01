@@ -128,6 +128,12 @@ class RelationResolutionCacheStore:
             self.connection.execute(
                 "ALTER TABLE relation_resolution_cache ADD COLUMN resolved_title TEXT"
             )
+        self.connection.execute(
+            """
+            DELETE FROM relation_resolution_cache
+            WHERE key_type NOT IN ('doi', 'source_url')
+            """
+        )
         self.connection.commit()
 
 

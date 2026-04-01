@@ -83,7 +83,7 @@ def print_item_skip(
 def _humanize_resolution_source_kind(kind: str) -> str:
     mapping = {
         "doi": "DOI",
-        "openalex_work": "OpenAlex work",
+        "source_url": "Source URL",
     }
     return mapping.get(kind, kind.replace("_", " "))
 
@@ -98,6 +98,7 @@ def format_relation_resolution_source_label(source: str | None) -> str | None:
         "crossref": "Crossref",
         "datacite": "DataCite",
         "huggingface_title_search": "Hugging Face title search",
+        "semantic_scholar_title_exact": "Semantic Scholar title exact",
         "relation_resolution_cache": "Resolution cache",
         "relation_resolution_cache_negative": "Resolution cache negative",
         "unresolved": "Unresolved",
@@ -105,13 +106,9 @@ def format_relation_resolution_source_label(source: str | None) -> str | None:
     if source in mapping:
         return mapping[source]
 
-    if source.startswith("openalex_exact_"):
-        kind = source.removeprefix("openalex_exact_")
-        return f"OpenAlex exact ({_humanize_resolution_source_kind(kind)})"
-
-    if source.startswith("openalex_preprint_"):
-        kind = source.removeprefix("openalex_preprint_")
-        return f"OpenAlex preprint ({_humanize_resolution_source_kind(kind)})"
+    if source.startswith("semantic_scholar_exact_"):
+        kind = source.removeprefix("semantic_scholar_exact_")
+        return f"Semantic Scholar exact ({_humanize_resolution_source_kind(kind)})"
 
     return source.replace("_", " ")
 

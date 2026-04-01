@@ -4,9 +4,9 @@ from src.shared.paper_identity import (
     extract_arxiv_id_from_single_paper_url,
     is_arxiv_hosted_url,
     is_single_arxiv_paper_url,
-    normalize_doi_url,
-    normalize_openalex_work_url,
     normalize_arxiv_url,
+    normalize_doi_url,
+    normalize_semanticscholar_paper_url,
 )
 
 
@@ -68,10 +68,15 @@ def test_normalize_doi_url_accepts_bare_and_prefixed_doi_values():
     assert normalize_doi_url("https://example.com/not-a-doi") is None
 
 
-def test_normalize_openalex_work_url_accepts_public_and_api_forms():
-    assert normalize_openalex_work_url("https://openalex.org/W1234567890") == "https://openalex.org/W1234567890"
-    assert (
-        normalize_openalex_work_url("https://api.openalex.org/works/W1234567890")
-        == "https://openalex.org/W1234567890"
+def test_normalize_semanticscholar_paper_url_accepts_paper_pages():
+    assert normalize_semanticscholar_paper_url("https://www.semanticscholar.org/paper/Foo/abc123") == (
+        "https://www.semanticscholar.org/paper/Foo/abc123"
     )
-    assert normalize_openalex_work_url("https://example.com/W1234567890") is None
+    assert normalize_semanticscholar_paper_url("https://semanticscholar.org/paper/Foo/abc123/") == (
+        "https://www.semanticscholar.org/paper/Foo/abc123"
+    )
+
+
+def test_normalize_semanticscholar_paper_url_rejects_non_paper_pages():
+    assert normalize_semanticscholar_paper_url("https://www.semanticscholar.org/search?q=foo") is None
+    assert normalize_semanticscholar_paper_url("https://example.com/paper/Foo/abc123") is None

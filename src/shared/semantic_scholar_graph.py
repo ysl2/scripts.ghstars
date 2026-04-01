@@ -5,8 +5,14 @@ from typing import Any
 
 import aiohttp
 
+from src.shared.arxiv import normalize_title_for_matching
 from src.shared.http import MAX_RETRIES, RateLimiter
-from src.shared.paper_identity import build_arxiv_abs_url, normalize_arxiv_url, normalize_doi_url
+from src.shared.paper_identity import (
+    build_arxiv_abs_url,
+    normalize_arxiv_url,
+    normalize_doi_url,
+    normalize_semanticscholar_paper_url,
+)
 from src.shared.relation_candidates import RelatedWorkCandidate
 
 SEMANTIC_SCHOLAR_GRAPH_URL = "https://api.semanticscholar.org/graph/v1"
@@ -93,6 +99,65 @@ class SemanticScholarGraphClient:
         if not isinstance(rows, list):
             return []
         return [row for row in rows if isinstance(row, dict)]
+
+    async def find_arxiv_match_by_identifier(
+        self,
+        identifier: str,
+        *,
+        title: str | None = None,
+    ) -> tuple[str | None, str | None, str | None]:
+        normalized_doi = normalize_doi_url(identifier)
+        normalized_source_url = self._normalize_source_url(identifier)
+        lookup_identifiers: list[tuple[str, str]] = []
+
+        if normalized_doi:
+            lookup_identifiers.append(
+                (
+                    f"DOI:{normalized_doi.removeprefix('https://doi.org/')}",
+                    "semantic_scholar_exact_doi",
+                )
+            )
+        if normalized_source_url:
+            lookup_identifiers.append(
+                (
+                    f"URL:{normalized_source_url}",
+                    "semantic_scholar_exact_source_url",
+                )
+            )
+
+        for paper_identifier, source in lookup_identifiers:
+            paper = await self.fetch_paper_by_identifier(paper_identifier)
+            external_ids = (paper or {}).get("externalIds") or {}
+            if not isinstance(external_ids, dict):
+                external_ids = {}
+            arxiv_url = self._build_arxiv_url(external_ids.get("ArXiv"))
+            if arxiv_url:
+                resolved_title = " ".join(str((paper or {}).get("title") or title or "").split()).strip()
+                return arxiv_url, resolved_title or title, source
+
+        return await self.find_arxiv_match_by_title(title or "")
+
+    async def find_arxiv_match_by_title(
+        self,
+        title: str,
+    ) -> tuple[str | None, str | None, str | None]:
+        normalized_title = normalize_title_for_matching(title)
+        if not normalized_title:
+            return None, None, None
+
+        matches = await self.search_papers_by_title(title)
+        for paper in matches:
+            candidate_title = " ".join(str(paper.get("title") or "").split()).strip()
+            if normalize_title_for_matching(candidate_title) != normalized_title:
+                continue
+
+            external_ids = paper.get("externalIds") or {}
+            if not isinstance(external_ids, dict):
+                external_ids = {}
+            arxiv_url = self._build_arxiv_url(external_ids.get("ArXiv"))
+            if arxiv_url:
+                return arxiv_url, candidate_title or title, "semantic_scholar_title_exact"
+        return None, None, None
 
     async def fetch_references(self, paper: dict[str, Any]) -> list[dict[str, Any]]:
         return await self._fetch_relation_rows(paper, relation_path="references", row_key="citedPaper")
@@ -236,6 +301,22 @@ class SemanticScholarGraphClient:
         if not paper_id:
             return ""
         return f"https://www.semanticscholar.org/paper/{paper_id}"
+
+    @staticmethod
+    def _normalize_source_url(identifier: Any) -> str | None:
+        if not isinstance(identifier, str):
+            return None
+
+        normalized_source_url = normalize_semanticscholar_paper_url(identifier)
+        if normalized_source_url:
+            return normalized_source_url
+
+        candidate = " ".join(identifier.split()).strip()
+        if not candidate or normalize_doi_url(candidate):
+            return None
+        if not candidate.startswith(("http://", "https://")):
+            return None
+        return candidate
 
     @staticmethod
     def _build_arxiv_url(arxiv_id: Any) -> str | None:

@@ -10,7 +10,7 @@ from src.shared.paper_identity import (
     is_arxiv_hosted_url,
     normalize_arxiv_url,
     normalize_doi_url,
-    normalize_openalex_work_url,
+    normalize_semanticscholar_paper_url,
 )
 
 
@@ -39,9 +39,20 @@ def _build_cache_keys(identifiers: list[str]) -> list[tuple[str, str]]:
     seen: set[tuple[str, str]] = set()
 
     for raw_identifier in identifiers:
-        normalized_openalex = normalize_openalex_work_url(raw_identifier)
-        if normalized_openalex:
-            key = ("openalex_work", normalized_openalex)
+        candidate = " ".join(str(raw_identifier or "").split()).strip()
+        normalized_source_url = normalize_semanticscholar_paper_url(candidate)
+        if normalized_source_url:
+            key = ("source_url", normalized_source_url)
+            if key not in seen:
+                keys.append(key)
+                seen.add(key)
+            continue
+
+        if normalize_doi_url(candidate):
+            continue
+
+        if candidate.startswith(("http://", "https://")):
+            key = ("source_url", candidate)
             if key not in seen:
                 keys.append(key)
                 seen.add(key)
@@ -62,14 +73,13 @@ async def resolve_arxiv_url(
     raw_url: str,
     *,
     arxiv_client=None,
-    openalex_client=None,
+    semanticscholar_graph_client=None,
     crossref_client=None,
     datacite_client=None,
     discovery_client=None,
     relation_resolution_cache=None,
     arxiv_relation_no_arxiv_recheck_days: int = 30,
     allow_title_search: bool = True,
-    allow_openalex_preprint_crosswalk: bool = True,
     allow_huggingface_fallback: bool = True,
     extra_identifiers: list[str] | None = None,
 ) -> ArxivUrlResolutionResult:
@@ -123,13 +133,15 @@ async def resolve_arxiv_url(
             )
 
     normalized_doi_key = next((key_value for key_type, key_value in cache_keys if key_type == "doi"), None)
-    openalex_exact_lookup = getattr(openalex_client, "find_exact_arxiv_match_by_identifier", None)
-    openalex_preprint_lookup = getattr(openalex_client, "find_preprint_match_by_identifier", None)
+    semantic_lookup = getattr(semanticscholar_graph_client, "find_arxiv_match_by_identifier", None)
     metadata_transient_failure = False
-    if callable(openalex_exact_lookup):
+    if callable(semantic_lookup):
         for key_type, key_value in cache_keys:
             try:
-                arxiv_url, resolved_title = await openalex_exact_lookup(key_value, title=normalized_title or None)
+                arxiv_url, resolved_title, source = await semantic_lookup(
+                    key_value,
+                    title=normalized_title or None,
+                )
             except (RuntimeError, aiohttp.ClientError, asyncio.TimeoutError):
                 metadata_transient_failure = True
                 continue
@@ -145,30 +157,7 @@ async def resolve_arxiv_url(
                     resolved_url=arxiv_url,
                     canonical_arxiv_url=arxiv_url,
                     resolved_title=resolved_title or normalized_title or arxiv_url,
-                    source=f"openalex_exact_{key_type}",
-                    script_derived=True,
-                )
-
-    if allow_openalex_preprint_crosswalk and callable(openalex_preprint_lookup):
-        for key_type, key_value in cache_keys:
-            try:
-                arxiv_url, resolved_title = await openalex_preprint_lookup(key_value, title=normalized_title or None)
-            except (RuntimeError, aiohttp.ClientError, asyncio.TimeoutError):
-                metadata_transient_failure = True
-                continue
-
-            if arxiv_url:
-                _record_positive_resolution(
-                    relation_resolution_cache,
-                    cache_keys,
-                    arxiv_url=arxiv_url,
-                    resolved_title=resolved_title or normalized_title or None,
-                )
-                return ArxivUrlResolutionResult(
-                    resolved_url=arxiv_url,
-                    canonical_arxiv_url=arxiv_url,
-                    resolved_title=resolved_title or normalized_title or arxiv_url,
-                    source=f"openalex_preprint_{key_type}",
+                    source=source or f"semantic_scholar_exact_{key_type}",
                     script_derived=True,
                 )
 

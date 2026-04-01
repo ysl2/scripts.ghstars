@@ -79,6 +79,132 @@ async def test_fetch_paper_by_identifier_returns_none_on_404():
 
 
 @pytest.mark.anyio
+async def test_find_arxiv_match_by_identifier_prefers_doi_exact_lookup():
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "paperId": "abc123",
+                    "title": "Published Paper",
+                    "externalIds": {"ArXiv": "2501.12345v2", "DOI": "10.1000/example"},
+                }
+            )
+        ]
+    )
+    client = SemanticScholarGraphClient(session, min_interval=0, max_concurrent=1)
+
+    arxiv_url, resolved_title, source = await client.find_arxiv_match_by_identifier(
+        "https://doi.org/10.1000/example",
+        title="Published Paper",
+    )
+
+    assert arxiv_url == "https://arxiv.org/abs/2501.12345"
+    assert resolved_title == "Published Paper"
+    assert source == "semantic_scholar_exact_doi"
+    assert session.calls[0]["url"] == f"{SEMANTIC_SCHOLAR_GRAPH_URL}/paper/DOI:10.1000/example"
+
+
+@pytest.mark.anyio
+async def test_find_arxiv_match_by_identifier_can_use_source_url_exact_lookup():
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "paperId": "abc123",
+                    "title": "Published Paper",
+                    "externalIds": {"ArXiv": "2501.12345"},
+                }
+            )
+        ]
+    )
+    client = SemanticScholarGraphClient(session, min_interval=0, max_concurrent=1)
+
+    arxiv_url, resolved_title, source = await client.find_arxiv_match_by_identifier(
+        "https://semanticscholar.org/paper/Foo/abc123/",
+        title="Published Paper",
+    )
+
+    assert arxiv_url == "https://arxiv.org/abs/2501.12345"
+    assert resolved_title == "Published Paper"
+    assert source == "semantic_scholar_exact_source_url"
+    assert (
+        session.calls[0]["url"]
+        == f"{SEMANTIC_SCHOLAR_GRAPH_URL}/paper/URL:https://www.semanticscholar.org/paper/Foo/abc123"
+    )
+
+
+@pytest.mark.anyio
+async def test_find_arxiv_match_by_identifier_falls_back_to_normalized_title_exact_search():
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "paperId": "published",
+                    "title": "Published Paper",
+                    "externalIds": {"DOI": "10.1145/example"},
+                }
+            ),
+            FakeResponse(
+                {
+                    "data": [
+                        {
+                            "paperId": "partial",
+                            "title": "Published Paper Extended",
+                            "externalIds": {"ArXiv": "2999.99999"},
+                        },
+                        {
+                            "paperId": "exact",
+                            "title": "Published   Paper",
+                            "externalIds": {"ArXiv": "2501.12345v2"},
+                        },
+                    ]
+                }
+            ),
+        ]
+    )
+    client = SemanticScholarGraphClient(session, min_interval=0, max_concurrent=1)
+
+    arxiv_url, resolved_title, source = await client.find_arxiv_match_by_identifier(
+        "https://doi.org/10.1145/example",
+        title="Published Paper",
+    )
+
+    assert arxiv_url == "https://arxiv.org/abs/2501.12345"
+    assert resolved_title == "Published Paper"
+    assert source == "semantic_scholar_title_exact"
+    assert session.calls[1]["url"] == f"{SEMANTIC_SCHOLAR_GRAPH_URL}/paper/search"
+    assert session.calls[1]["params"]["query"] == "Published Paper"
+
+
+@pytest.mark.anyio
+async def test_find_arxiv_match_by_title_rejects_non_exact_normalized_matches():
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "data": [
+                        {
+                            "paperId": "p1",
+                            "title": "Generalizable Visual Localization for Gaussian Splatting",
+                            "externalIds": {"ArXiv": "2501.12345"},
+                        }
+                    ]
+                }
+            )
+        ]
+    )
+    client = SemanticScholarGraphClient(session, min_interval=0, max_concurrent=1)
+
+    arxiv_url, resolved_title, source = await client.find_arxiv_match_by_title(
+        "Generalizable Visual Localization",
+    )
+
+    assert arxiv_url is None
+    assert resolved_title is None
+    assert source is None
+
+
+@pytest.mark.anyio
 async def test_fetch_references_unwraps_cited_paper_rows():
     session = FakeSession(
         [
@@ -364,3 +490,4 @@ def test_build_related_work_candidate_prefers_arxiv_then_doi_then_paper_url():
         landing_page_url="https://www.semanticscholar.org/paper/paper-only",
         source_url="https://www.semanticscholar.org/paper/paper-only",
     )
+    assert not hasattr(arxiv_candidate, "openalex_url")

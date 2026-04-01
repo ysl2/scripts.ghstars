@@ -26,13 +26,13 @@ def test_relation_resolution_cache_store_records_and_reads_positive_mapping(tmp_
     store = RelationResolutionCacheStore(tmp_path / "cache.db")
 
     store.record_resolution(
-        key_type="openalex_work",
-        key_value="https://openalex.org/W123",
+        key_type="source_url",
+        key_value="https://www.semanticscholar.org/paper/Foo/abc123",
         arxiv_url="https://arxiv.org/abs/2501.12345",
         resolved_title="Mapped Arxiv Title",
     )
 
-    entry = store.get("openalex_work", "https://openalex.org/W123")
+    entry = store.get("source_url", "https://www.semanticscholar.org/paper/Foo/abc123")
 
     assert entry is not None
     assert entry.arxiv_url == "https://arxiv.org/abs/2501.12345"
@@ -77,8 +77,8 @@ def test_relation_resolution_cache_store_migrates_existing_db_without_resolved_t
         VALUES (?, ?, ?, ?)
         """,
         (
-            "openalex_work",
-            "https://openalex.org/W123",
+            "source_url",
+            "https://www.semanticscholar.org/paper/Foo/abc123",
             "https://arxiv.org/abs/2501.12345",
             datetime.now(timezone.utc).isoformat(),
         ),
@@ -94,7 +94,7 @@ def test_relation_resolution_cache_store_migrates_existing_db_without_resolved_t
             "PRAGMA table_info(relation_resolution_cache)"
         ).fetchall()
     }
-    entry = store.get("openalex_work", "https://openalex.org/W123")
+    entry = store.get("source_url", "https://www.semanticscholar.org/paper/Foo/abc123")
 
     assert "resolved_title" in columns
     assert entry is not None
@@ -102,16 +102,52 @@ def test_relation_resolution_cache_store_migrates_existing_db_without_resolved_t
     assert entry.resolved_title is None
 
     store.record_resolution(
-        key_type="openalex_work",
-        key_value="https://openalex.org/W123",
+        key_type="source_url",
+        key_value="https://www.semanticscholar.org/paper/Foo/abc123",
         arxiv_url="https://arxiv.org/abs/2501.12345",
         resolved_title="Migrated Cached Title",
     )
 
-    updated = store.get("openalex_work", "https://openalex.org/W123")
+    updated = store.get("source_url", "https://www.semanticscholar.org/paper/Foo/abc123")
 
     assert updated is not None
     assert updated.resolved_title == "Migrated Cached Title"
+
+
+def test_relation_resolution_cache_store_deletes_legacy_openalex_rows_on_init(tmp_path):
+    db_path = tmp_path / "cache.db"
+    connection = sqlite3.connect(db_path)
+    connection.execute(
+        """
+        CREATE TABLE relation_resolution_cache (
+            key_type TEXT NOT NULL,
+            key_value TEXT NOT NULL,
+            arxiv_url TEXT,
+            resolved_title TEXT,
+            checked_at TEXT NOT NULL,
+            PRIMARY KEY (key_type, key_value)
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO relation_resolution_cache (key_type, key_value, arxiv_url, resolved_title, checked_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            "openalex_work",
+            "https://openalex.org/W123",
+            "https://arxiv.org/abs/2501.12345",
+            "Old",
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    connection.commit()
+    connection.close()
+
+    store = RelationResolutionCacheStore(db_path)
+
+    assert store.get("openalex_work", "https://openalex.org/W123") is None
 
 
 def test_relation_resolution_cache_negative_freshness_uses_days_threshold():
@@ -130,8 +166,8 @@ def test_relation_resolution_cache_can_count_and_delete_negative_entries(tmp_pat
         arxiv_url=None,
     )
     store.record_resolution(
-        key_type="openalex_work",
-        key_value="https://openalex.org/W1",
+        key_type="source_url",
+        key_value="https://www.semanticscholar.org/paper/Foo/abc123",
         arxiv_url="https://arxiv.org/abs/2501.12345",
         resolved_title="Mapped Arxiv Title",
     )
@@ -139,4 +175,4 @@ def test_relation_resolution_cache_can_count_and_delete_negative_entries(tmp_pat
     assert store.count_negative_entries() == 1
     assert store.delete_negative_entries() == 1
     assert store.count_negative_entries() == 0
-    assert store.get("openalex_work", "https://openalex.org/W1") is not None
+    assert store.get("source_url", "https://www.semanticscholar.org/paper/Foo/abc123") is not None
