@@ -839,10 +839,6 @@ async def test_run_url_mode_builds_and_passes_content_cache(tmp_path: Path, monk
         def __init__(self, session, *, max_concurrent=0, min_interval=0):
             self.session = session
 
-    class FakeSemanticScholarClient:
-        def __init__(self, session, *, max_concurrent=0, min_interval=0):
-            self.session = session
-
     class FakeArxivClient:
         def __init__(self, session, *, max_concurrent=0, min_interval=0):
             self.session = session
@@ -924,7 +920,6 @@ async def test_run_url_mode_builds_and_passes_content_cache(tmp_path: Path, monk
         search_client_cls=FakeSearchClient,
         arxiv_org_client_cls=FakeArxivOrgClient,
         huggingface_papers_client_cls=FakeHuggingFacePapersClient,
-        semanticscholar_client_cls=FakeSemanticScholarClient,
         discovery_client_cls=FakeDiscoveryClient,
         github_client_cls=FakeGitHubClient,
         semanticscholar_graph_client_cls=FakeSemanticScholarGraphClient,
@@ -989,13 +984,6 @@ async def test_run_url_mode_supports_arxiv_org_url(tmp_path: Path, capsys):
         async def fetch_collection_html(self, url: str):
             raise AssertionError("Hugging Face client should not be used for arXiv.org URLs")
 
-    class FakeSemanticScholarClient:
-        def __init__(self, session, *, max_concurrent=0, min_interval=0):
-            self.session = session
-
-        async def fetch_search_page_html(self, url: str):
-            raise AssertionError("Semantic Scholar client should not be used for arXiv.org URLs")
-
     class FakeDiscoveryClient:
         def __init__(self, session, *, huggingface_token="", max_concurrent=0, min_interval=0):
             self.session = session
@@ -1019,7 +1007,6 @@ async def test_run_url_mode_supports_arxiv_org_url(tmp_path: Path, capsys):
         search_client_cls=FakeSearchClient,
         arxiv_org_client_cls=FakeArxivOrgClient,
         huggingface_papers_client_cls=FakeHuggingFacePapersClient,
-        semanticscholar_client_cls=FakeSemanticScholarClient,
         discovery_client_cls=FakeDiscoveryClient,
         github_client_cls=FakeGitHubClient,
     )
@@ -1165,8 +1152,12 @@ async def test_run_url_mode_supports_huggingface_papers_collection_url(tmp_path:
 
 
 @pytest.mark.anyio
-async def test_run_url_mode_supports_semanticscholar_url(tmp_path: Path, capsys):
+async def test_run_url_mode_supports_semanticscholar_url_without_constructing_extra_search_client(
+    tmp_path: Path,
+    capsys,
+):
     input_url = "https://www.semanticscholar.org/search?q=semantic%203d%20reconstruction&sort=pub-date"
+    assert "semanticscholar_client_cls" not in run_url_mode.__kwdefaults__
 
     class FakeSession:
         async def __aenter__(self):
@@ -1188,10 +1179,6 @@ async def test_run_url_mode_supports_semanticscholar_url(tmp_path: Path, capsys)
 
         async def fetch_collection_html(self, url: str):
             raise AssertionError("Hugging Face client should not be used for Semantic Scholar URLs")
-
-    class FakeSemanticScholarClient:
-        def __init__(self, session, *, max_concurrent=0, min_interval=0):
-            self.session = session
 
     class FakeArxivClient:
         def __init__(self, session, *, max_concurrent=0, min_interval=0):
@@ -1257,7 +1244,6 @@ async def test_run_url_mode_supports_semanticscholar_url(tmp_path: Path, capsys)
         session_factory=lambda **kwargs: FakeSession(),
         search_client_cls=FakeSearchClient,
         huggingface_papers_client_cls=FakeHuggingFacePapersClient,
-        semanticscholar_client_cls=FakeSemanticScholarClient,
         arxiv_client_cls=FakeArxivClient,
         semanticscholar_graph_client_cls=FakeSemanticScholarGraphClient,
         discovery_client_cls=FakeDiscoveryClient,

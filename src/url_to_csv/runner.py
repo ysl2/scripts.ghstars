@@ -23,7 +23,6 @@ from src.url_to_csv.arxivxplorer import ArxivXplorerSearchClient
 from src.url_to_csv.arxiv_org import ArxivOrgClient
 from src.url_to_csv.huggingface_papers import HuggingFacePapersClient
 from src.url_to_csv.pipeline import export_url_to_csv
-from src.url_to_csv.semanticscholar import SemanticScholarSearchClient
 from src.url_to_csv.sources import is_supported_url_source
 
 
@@ -40,7 +39,6 @@ async def run_url_mode(
     search_client_cls=ArxivXplorerSearchClient,
     arxiv_org_client_cls=ArxivOrgClient,
     huggingface_papers_client_cls=HuggingFacePapersClient,
-    semanticscholar_client_cls=SemanticScholarSearchClient,
     discovery_client_cls=DiscoveryClient,
     github_client_cls=GitHubClient,
     semanticscholar_graph_client_cls=SemanticScholarGraphClient,
@@ -87,18 +85,6 @@ async def run_url_mode(
             max_concurrent=CONCURRENT_LIMIT,
             min_interval=REQUEST_DELAY,
         )
-        semanticscholar_client = build_client(
-            semanticscholar_client_cls,
-            runtime.session,
-            semantic_scholar_api_key=config["semantic_scholar_api_key"],
-            aiforscholar_token=config["aiforscholar_token"],
-            max_concurrent=CONCURRENT_LIMIT,
-            min_interval=resolve_semantic_scholar_min_interval(
-                config["semantic_scholar_api_key"],
-                config["aiforscholar_token"],
-                REQUEST_DELAY,
-            ),
-        )
         semanticscholar_graph_client = build_client(
             semanticscholar_graph_client_cls,
             runtime.session,
@@ -141,7 +127,6 @@ async def run_url_mode(
             search_client=search_client,
             arxiv_org_client=arxiv_org_client,
             huggingface_papers_client=huggingface_papers_client,
-            semanticscholar_client=semanticscholar_client,
             arxiv_client=arxiv_client,
             semanticscholar_graph_client=semanticscholar_graph_client,
             crossref_client=crossref_client,

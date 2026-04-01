@@ -60,6 +60,7 @@ async def process_single_paper(
             discovery_client=discovery_client,
             relation_resolution_cache=relation_resolution_cache,
             arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
+            allow_title_search=request.allow_title_search,
         )
         normalized_url = url_resolution.resolved_url
         canonical_arxiv_url = url_resolution.canonical_arxiv_url

@@ -157,7 +157,7 @@ async def test_process_single_paper_reports_discovery_miss():
 
 
 @pytest.mark.anyio
-async def test_process_single_paper_uses_shared_title_search_even_when_request_flag_is_false():
+async def test_process_single_paper_skips_title_search_when_request_flag_is_false():
     discovery_client = types.SimpleNamespace(
         huggingface_token="",
         resolve_github_url=AsyncMock(return_value="https://github.com/foo/from-title"),
@@ -180,13 +180,13 @@ async def test_process_single_paper_uses_shared_title_search_even_when_request_f
         arxiv_client=arxiv_client,
     )
 
-    assert result.normalized_url == "https://arxiv.org/abs/2603.10004"
-    assert result.canonical_arxiv_url == "https://arxiv.org/abs/2603.10004"
-    assert result.github_url == "https://github.com/foo/from-title"
-    assert result.reason is None
-    discovery_client.resolve_github_url.assert_awaited_once()
-    github_client.get_star_count.assert_awaited_once_with("foo", "from-title")
-    arxiv_client.get_arxiv_id_by_title.assert_awaited_once_with("Paper F")
+    assert result.normalized_url is None
+    assert result.canonical_arxiv_url is None
+    assert result.github_url is None
+    assert result.reason == "No valid arXiv URL found"
+    discovery_client.resolve_github_url.assert_not_awaited()
+    github_client.get_star_count.assert_not_awaited()
+    arxiv_client.get_arxiv_id_by_title.assert_not_awaited()
 
 
 @pytest.mark.anyio
