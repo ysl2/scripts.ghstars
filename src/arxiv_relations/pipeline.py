@@ -230,6 +230,8 @@ async def _fetch_primary_relation_candidates(
             raise ValueError(
                 f"Semantic Scholar {relation_label} fallback could not resolve OpenAlex target work"
             )
+        if callable(status_callback):
+            status_callback(f"⚠️ OpenAlex target lookup missed; keeping empty {relation_label}")
         return []
 
     if callable(status_callback):

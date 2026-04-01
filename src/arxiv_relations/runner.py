@@ -16,7 +16,10 @@ from src.shared.openalex import OpenAlexClient
 from src.shared.paper_content import PaperContentCache
 from src.shared.progress import print_paper_progress, print_relation_progress, print_summary
 from src.shared.runtime import build_client, load_runtime_config, open_runtime_clients
-from src.shared.semantic_scholar_graph import SemanticScholarGraphClient
+from src.shared.semantic_scholar_graph import (
+    SemanticScholarGraphClient,
+    resolve_semantic_scholar_min_interval,
+)
 from src.shared.settings import CONTENT_CACHE_DIR, DEFAULT_CONCURRENT_LIMIT
 from src.shared.skip_reasons import is_minor_skip_reason
 
@@ -87,7 +90,10 @@ async def run_arxiv_relations_mode(
                 runtime.session,
                 semantic_scholar_api_key=config["semantic_scholar_api_key"],
                 max_concurrent=CONCURRENT_LIMIT,
-                min_interval=REQUEST_DELAY,
+                min_interval=resolve_semantic_scholar_min_interval(
+                    config["semantic_scholar_api_key"],
+                    REQUEST_DELAY,
+                ),
             )
             content_cache = PaperContentCache(
                 cache_root=Path(CONTENT_CACHE_DIR),

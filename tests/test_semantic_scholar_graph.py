@@ -166,6 +166,31 @@ async def test_fetch_citations_unwraps_citing_paper_rows():
 
 
 @pytest.mark.anyio
+async def test_fetch_references_skips_malformed_nested_related_papers_without_identity_or_title():
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "data": [
+                        {"citedPaper": {"paperId": "", "title": "", "externalIds": {}}},
+                        {"citedPaper": {"paperId": "p1", "title": "", "externalIds": {}}},
+                        {"citedPaper": {"paperId": "", "title": "Named Ref", "externalIds": {}}},
+                    ]
+                }
+            )
+        ]
+    )
+    client = SemanticScholarGraphClient(session, min_interval=0, max_concurrent=1)
+
+    references = await client.fetch_references({"paperId": "target-id"})
+
+    assert references == [
+        {"paperId": "p1", "title": "", "externalIds": {}},
+        {"paperId": "", "title": "Named Ref", "externalIds": {}},
+    ]
+
+
+@pytest.mark.anyio
 async def test_search_papers_by_title_uses_search_endpoint_and_filters_rows():
     session = FakeSession(
         [

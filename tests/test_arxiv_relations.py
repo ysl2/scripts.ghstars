@@ -2623,6 +2623,7 @@ async def test_export_arxiv_relations_to_csv_keeps_empty_semantic_side_when_open
         [PaperSeed(name="Semantic Citation", url="https://arxiv.org/abs/2502.00020")],
     ]
     assert "📚 Semantic Scholar references empty; falling back to OpenAlex" in statuses
+    assert "⚠️ OpenAlex target lookup missed; keeping empty references" in statuses
     assert result.arxiv_url == "https://arxiv.org/abs/2510.22706"
 
 
@@ -3667,6 +3668,7 @@ async def test_run_arxiv_relations_mode_wires_semantic_scholar_graph_client_from
         constructed["semantic_scholar_graph_client"].semantic_scholar_api_key
         == "ss_key"
     )
+    assert constructed["semantic_scholar_graph_client"].min_interval == 1.0
 
 
 @pytest.mark.anyio

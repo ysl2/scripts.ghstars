@@ -13,6 +13,16 @@ SEMANTIC_SCHOLAR_GRAPH_URL = "https://api.semanticscholar.org/graph/v1"
 SEMANTIC_SCHOLAR_SEARCH_LIMIT = 5
 SEMANTIC_SCHOLAR_RETRY_STATUSES = {500, 502, 503, 504}
 SEMANTIC_SCHOLAR_MAX_RETRY_AFTER_SECONDS = 15.0
+SEMANTIC_SCHOLAR_AUTHENTICATED_MIN_INTERVAL = 1.0
+
+
+def resolve_semantic_scholar_min_interval(
+    semantic_scholar_api_key: str,
+    requested_min_interval: float,
+) -> float:
+    if semantic_scholar_api_key.strip():
+        return max(requested_min_interval, SEMANTIC_SCHOLAR_AUTHENTICATED_MIN_INTERVAL)
+    return requested_min_interval
 
 
 class SemanticScholarGraphClient:
@@ -27,7 +37,9 @@ class SemanticScholarGraphClient:
         self.session = session
         self.semantic_scholar_api_key = semantic_scholar_api_key.strip()
         self.semaphore = asyncio.Semaphore(max_concurrent)
-        self.rate_limiter = RateLimiter(min_interval)
+        self.rate_limiter = RateLimiter(
+            resolve_semantic_scholar_min_interval(self.semantic_scholar_api_key, min_interval)
+        )
 
     async def fetch_paper_by_identifier(self, identifier: str) -> dict[str, Any] | None:
         try:
@@ -108,7 +120,7 @@ class SemanticScholarGraphClient:
                     if not isinstance(row, dict):
                         continue
                     related_paper = row.get(row_key)
-                    if isinstance(related_paper, dict):
+                    if self._has_usable_related_paper_data(related_paper):
                         unwrapped.append(related_paper)
 
             maybe_next = payload.get("next")
@@ -179,6 +191,20 @@ class SemanticScholarGraphClient:
         if self.semantic_scholar_api_key:
             headers["x-api-key"] = self.semantic_scholar_api_key
         return headers
+
+    @classmethod
+    def _has_usable_related_paper_data(cls, paper: Any) -> bool:
+        if not isinstance(paper, dict):
+            return False
+
+        paper_id = str(paper.get("paperId") or "").strip()
+        title = " ".join(str(paper.get("title") or "").split()).strip()
+        external_ids = paper.get("externalIds")
+        if not isinstance(external_ids, dict):
+            external_ids = {}
+        arxiv_url = cls._build_arxiv_url(external_ids.get("ArXiv"))
+        doi_url = normalize_doi_url(external_ids.get("DOI"))
+        return bool(paper_id or title or arxiv_url or doi_url)
 
     def _build_paper_url(self, paper: dict[str, Any]) -> str:
         paper_id = str(paper.get("paperId") or "").strip()
