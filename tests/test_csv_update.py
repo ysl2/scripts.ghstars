@@ -114,7 +114,7 @@ async def test_update_csv_file_updates_rows_in_place_preserving_columns_and_orde
 
 
 @pytest.mark.anyio
-async def test_update_csv_file_rewrites_doi_to_arxiv_when_openalex_crosswalk_resolves_it(tmp_path: Path):
+async def test_update_csv_file_rewrites_doi_to_arxiv_when_semantic_scholar_exact_lookup_resolves_it(tmp_path: Path):
     csv_path = tmp_path / "papers.csv"
     csv_path.write_text(
         "\n".join(
@@ -127,9 +127,9 @@ async def test_update_csv_file_rewrites_doi_to_arxiv_when_openalex_crosswalk_res
         encoding="utf-8",
     )
 
-    openalex_client = SimpleNamespace(
-        find_exact_arxiv_match_by_identifier=AsyncMock(
-            return_value=("https://arxiv.org/abs/2501.12345", "Mapped Arxiv Title")
+    semanticscholar_graph_client = SimpleNamespace(
+        find_arxiv_match_by_identifier=AsyncMock(
+            return_value=("https://arxiv.org/abs/2501.12345", "Mapped Arxiv Title", "semantic_scholar_exact_doi")
         )
     )
 
@@ -147,7 +147,7 @@ async def test_update_csv_file_rewrites_doi_to_arxiv_when_openalex_crosswalk_res
         csv_path,
         discovery_client=FakeDiscoveryClient(),
         github_client=FakeGitHubClient(),
-        openalex_client=openalex_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
         content_cache=FakeContentCache(),
     )
 
@@ -163,10 +163,15 @@ async def test_update_csv_file_rewrites_doi_to_arxiv_when_openalex_crosswalk_res
             "Stars": "7",
         }
     ]
+    semanticscholar_graph_client.find_arxiv_match_by_identifier.assert_awaited_once_with(
+        "https://doi.org/10.1007/978-3-031-72933-1_9",
+        title="DOI Paper",
+        allow_title_fallback=False,
+    )
 
 
 @pytest.mark.anyio
-async def test_update_csv_file_uses_arxiv_html_title_search_after_openalex_exact_miss(tmp_path: Path):
+async def test_update_csv_file_uses_arxiv_html_title_search_after_semantic_scholar_misses(tmp_path: Path):
     csv_path = tmp_path / "papers.csv"
     csv_path.write_text(
         "\n".join(
@@ -179,8 +184,9 @@ async def test_update_csv_file_uses_arxiv_html_title_search_after_openalex_exact
         encoding="utf-8",
     )
 
-    openalex_client = SimpleNamespace(
-        find_exact_arxiv_match_by_identifier=AsyncMock(return_value=(None, "DOI Paper"))
+    semanticscholar_graph_client = SimpleNamespace(
+        find_arxiv_match_by_identifier=AsyncMock(return_value=(None, None, None)),
+        find_arxiv_match_by_title=AsyncMock(return_value=(None, None, None)),
     )
     arxiv_client = SimpleNamespace(
         get_arxiv_id_by_title=AsyncMock(return_value=("2501.54321", "title_search_exact", None)),
@@ -206,7 +212,7 @@ async def test_update_csv_file_uses_arxiv_html_title_search_after_openalex_exact
         discovery_client=FakeDiscoveryClient(),
         github_client=FakeGitHubClient(),
         arxiv_client=arxiv_client,
-        openalex_client=openalex_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
         content_cache=FakeContentCache(),
@@ -224,6 +230,12 @@ async def test_update_csv_file_uses_arxiv_html_title_search_after_openalex_exact
             "Stars": "7",
         }
     ]
+    semanticscholar_graph_client.find_arxiv_match_by_identifier.assert_awaited_once_with(
+        "https://doi.org/10.1145/example",
+        title="DOI Paper",
+        allow_title_fallback=False,
+    )
+    semanticscholar_graph_client.find_arxiv_match_by_title.assert_awaited_once_with("DOI Paper")
     arxiv_client.get_arxiv_id_by_title.assert_awaited_once_with("DOI Paper")
     arxiv_client.get_arxiv_match_by_title_from_api.assert_not_awaited()
     crossref_client.find_arxiv_match_by_doi.assert_not_awaited()
@@ -233,6 +245,8 @@ async def test_update_csv_file_uses_arxiv_html_title_search_after_openalex_exact
 @pytest.mark.anyio
 async def test_run_csv_mode_builds_and_passes_metadata_clients(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("ALPHAXIV_TOKEN", "ax_token")
+    monkeypatch.setenv("SEMANTIC_SCHOLAR_API_KEY", "ss_key")
+    monkeypatch.setenv("AIFORSCHOLAR_TOKEN", "relay_token")
     csv_path = tmp_path / "papers.csv"
     csv_path.write_text("Name,Url,Github,Stars\nPaper A,https://arxiv.org/abs/2603.20000v2,,\n", encoding="utf-8")
     received = {}
@@ -252,9 +266,20 @@ async def test_run_csv_mode_builds_and_passes_metadata_clients(tmp_path: Path, m
         def __init__(self, session, *, github_token="", max_concurrent=0, min_interval=0):
             self.session = session
 
-    class FakeOpenAlexClient:
-        def __init__(self, session, *, openalex_api_key="", max_concurrent=0, min_interval=0):
+    class FakeSemanticScholarGraphClient:
+        def __init__(
+            self,
+            session,
+            *,
+            semantic_scholar_api_key="",
+            aiforscholar_token="",
+            max_concurrent=0,
+            min_interval=0,
+        ):
             self.session = session
+            self.semantic_scholar_api_key = semantic_scholar_api_key
+            self.aiforscholar_token = aiforscholar_token
+            received["semanticscholar_graph_client"] = self
 
     class FakeArxivClient:
         def __init__(self, session, *, max_concurrent=0, min_interval=0):
@@ -281,7 +306,7 @@ async def test_run_csv_mode_builds_and_passes_metadata_clients(tmp_path: Path, m
         discovery_client,
         github_client,
         arxiv_client=None,
-        openalex_client=None,
+        semanticscholar_graph_client=None,
         crossref_client=None,
         datacite_client=None,
         content_cache=None,
@@ -291,6 +316,7 @@ async def test_run_csv_mode_builds_and_passes_metadata_clients(tmp_path: Path, m
         progress_callback=None,
     ):
         received["arxiv_arg"] = arxiv_client
+        received["semanticscholar_arg"] = semanticscholar_graph_client
         received["crossref_arg"] = crossref_client
         received["datacite_arg"] = datacite_client
         return SimpleNamespace(csv_path=path, updated=0, skipped=[])
@@ -303,7 +329,7 @@ async def test_run_csv_mode_builds_and_passes_metadata_clients(tmp_path: Path, m
         arxiv_client_cls=FakeArxivClient,
         discovery_client_cls=FakeDiscoveryClient,
         github_client_cls=FakeGitHubClient,
-        openalex_client_cls=FakeOpenAlexClient,
+        semanticscholar_graph_client_cls=FakeSemanticScholarGraphClient,
         crossref_client_cls=FakeCrossrefClient,
         datacite_client_cls=FakeDataCiteClient,
         content_client_cls=FakeContentClient,
@@ -312,6 +338,9 @@ async def test_run_csv_mode_builds_and_passes_metadata_clients(tmp_path: Path, m
 
     assert exit_code == 0
     assert received["arxiv_arg"] is received["arxiv_client"]
+    assert received["semanticscholar_arg"] is received["semanticscholar_graph_client"]
+    assert received["semanticscholar_graph_client"].semantic_scholar_api_key == "ss_key"
+    assert received["semanticscholar_graph_client"].aiforscholar_token == "relay_token"
     assert received["crossref_arg"] is received["crossref_client"]
     assert received["datacite_arg"] is received["datacite_client"]
 

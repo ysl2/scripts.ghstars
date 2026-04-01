@@ -59,6 +59,7 @@ async def test_build_paper_outcome_threads_metadata_clients_to_process_single_pa
 
     async def fake_process_single_paper(request, **kwargs):
         received["arxiv_client"] = kwargs.get("arxiv_client")
+        received["semanticscholar_graph_client"] = kwargs.get("semanticscholar_graph_client")
         received["crossref_client"] = kwargs.get("crossref_client")
         received["datacite_client"] = kwargs.get("datacite_client")
         received["relation_resolution_cache"] = kwargs.get("relation_resolution_cache")
@@ -78,6 +79,7 @@ async def test_build_paper_outcome_threads_metadata_clients_to_process_single_pa
     monkeypatch.setattr(paper_export, "process_single_paper", fake_process_single_paper)
 
     arxiv_client = SimpleNamespace()
+    semanticscholar_graph_client = SimpleNamespace()
     crossref_client = SimpleNamespace()
     datacite_client = SimpleNamespace()
     relation_resolution_cache = SimpleNamespace(name="relation-cache")
@@ -87,6 +89,7 @@ async def test_build_paper_outcome_threads_metadata_clients_to_process_single_pa
         discovery_client=SimpleNamespace(),
         github_client=SimpleNamespace(),
         arxiv_client=arxiv_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
         relation_resolution_cache=relation_resolution_cache,
@@ -95,6 +98,7 @@ async def test_build_paper_outcome_threads_metadata_clients_to_process_single_pa
 
     assert outcome.record.url == "https://arxiv.org/abs/2501.00001"
     assert received["arxiv_client"] is arxiv_client
+    assert received["semanticscholar_graph_client"] is semanticscholar_graph_client
     assert received["crossref_client"] is crossref_client
     assert received["datacite_client"] is datacite_client
     assert received["relation_resolution_cache"] is relation_resolution_cache
@@ -103,15 +107,16 @@ async def test_build_paper_outcome_threads_metadata_clients_to_process_single_pa
 
 
 @pytest.mark.anyio
-async def test_build_paper_outcome_uses_arxiv_html_title_search_after_openalex_exact_miss():
+async def test_build_paper_outcome_uses_arxiv_html_title_search_after_semantic_scholar_misses():
     arxiv_client = SimpleNamespace(
         get_arxiv_id_by_title=AsyncMock(return_value=("2501.54321", "title_search_exact", None)),
         get_arxiv_match_by_title_from_api=AsyncMock(
             return_value=("2999.99999", "Wrong API Match", "title_search_exact", None)
         ),
     )
-    openalex_client = SimpleNamespace(
-        find_exact_arxiv_match_by_identifier=AsyncMock(return_value=(None, "Paper A"))
+    semanticscholar_graph_client = SimpleNamespace(
+        find_arxiv_match_by_identifier=AsyncMock(return_value=(None, None, None)),
+        find_arxiv_match_by_title=AsyncMock(return_value=(None, None, None)),
     )
     crossref_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock())
     datacite_client = SimpleNamespace(find_arxiv_match_by_doi=AsyncMock())
@@ -132,7 +137,7 @@ async def test_build_paper_outcome_uses_arxiv_html_title_search_after_openalex_e
         discovery_client=FakeDiscoveryClient(),
         github_client=FakeGitHubClient(),
         arxiv_client=arxiv_client,
-        openalex_client=openalex_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
     )
@@ -141,6 +146,12 @@ async def test_build_paper_outcome_uses_arxiv_html_title_search_after_openalex_e
     assert outcome.record.url == "https://arxiv.org/abs/2501.54321"
     assert outcome.record.github == "https://github.com/foo/bar"
     assert outcome.record.stars == 12
+    semanticscholar_graph_client.find_arxiv_match_by_identifier.assert_awaited_once_with(
+        "https://doi.org/10.1145/example",
+        title="Paper A",
+        allow_title_fallback=False,
+    )
+    semanticscholar_graph_client.find_arxiv_match_by_title.assert_awaited_once_with("Paper A")
     arxiv_client.get_arxiv_id_by_title.assert_awaited_once_with("Paper A")
     arxiv_client.get_arxiv_match_by_title_from_api.assert_not_awaited()
     crossref_client.find_arxiv_match_by_doi.assert_not_awaited()

@@ -10,10 +10,13 @@ from src.shared.crossref import CrossrefClient
 from src.shared.datacite import DataCiteClient
 from src.shared.discovery import DiscoveryClient
 from src.shared.github import GitHubClient
-from src.shared.openalex import OpenAlexClient
 from src.shared.paper_content import PaperContentCache
 from src.shared.progress import print_paper_progress, print_summary
 from src.shared.runtime import build_client, load_runtime_config, open_runtime_clients
+from src.shared.semantic_scholar_graph import (
+    SemanticScholarGraphClient,
+    resolve_semantic_scholar_min_interval,
+)
 from src.shared.settings import CONTENT_CACHE_DIR, DEFAULT_CONCURRENT_LIMIT
 from src.shared.skip_reasons import is_minor_skip_reason
 from src.url_to_csv.arxivxplorer import ArxivXplorerSearchClient
@@ -40,7 +43,7 @@ async def run_url_mode(
     semanticscholar_client_cls=SemanticScholarSearchClient,
     discovery_client_cls=DiscoveryClient,
     github_client_cls=GitHubClient,
-    openalex_client_cls=OpenAlexClient,
+    semanticscholar_graph_client_cls=SemanticScholarGraphClient,
     crossref_client_cls=CrossrefClient,
     datacite_client_cls=DataCiteClient,
     content_client_cls=AlphaXivContentClient,
@@ -90,12 +93,17 @@ async def run_url_mode(
             max_concurrent=CONCURRENT_LIMIT,
             min_interval=REQUEST_DELAY,
         )
-        openalex_client = build_client(
-            openalex_client_cls,
+        semanticscholar_graph_client = build_client(
+            semanticscholar_graph_client_cls,
             runtime.session,
-            openalex_api_key=config["openalex_api_key"],
+            semantic_scholar_api_key=config["semantic_scholar_api_key"],
+            aiforscholar_token=config["aiforscholar_token"],
             max_concurrent=CONCURRENT_LIMIT,
-            min_interval=REQUEST_DELAY,
+            min_interval=resolve_semantic_scholar_min_interval(
+                config["semantic_scholar_api_key"],
+                config["aiforscholar_token"],
+                REQUEST_DELAY,
+            ),
         )
         crossref_client = build_client(
             crossref_client_cls,
@@ -129,7 +137,7 @@ async def run_url_mode(
             huggingface_papers_client=huggingface_papers_client,
             semanticscholar_client=semanticscholar_client,
             arxiv_client=arxiv_client,
-            openalex_client=openalex_client,
+            semanticscholar_graph_client=semanticscholar_graph_client,
             crossref_client=crossref_client,
             datacite_client=datacite_client,
             discovery_client=runtime.discovery_client,

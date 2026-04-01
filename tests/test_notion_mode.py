@@ -32,6 +32,8 @@ def test_load_config_accepts_env_values():
             "DATABASE_ID": "db_123",
             "HUGGINGFACE_TOKEN": "hf_test",
             "ALPHAXIV_TOKEN": "ax_token",
+            "AIFORSCHOLAR_TOKEN": "relay_token",
+            "SEMANTIC_SCHOLAR_API_KEY": "ss_test",
             "REPO_DISCOVERY_NO_REPO_RECHECK_DAYS": "7",
         }
     )
@@ -42,7 +44,8 @@ def test_load_config_accepts_env_values():
         "database_id": "db_123",
         "huggingface_token": "hf_test",
         "alphaxiv_token": "ax_token",
-        "openalex_api_key": "",
+        "aiforscholar_token": "relay_token",
+        "semantic_scholar_api_key": "ss_test",
         "arxiv_relation_no_arxiv_recheck_days": 30,
         "repo_discovery_no_repo_recheck_days": 7,
     }
@@ -513,11 +516,14 @@ async def test_run_notion_mode_builds_and_passes_content_cache(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "ghp_xxx")
     monkeypatch.setenv("HUGGINGFACE_TOKEN", "hf_xxx")
     monkeypatch.setenv("ALPHAXIV_TOKEN", "ax_token")
+    monkeypatch.setenv("SEMANTIC_SCHOLAR_API_KEY", "ss_key")
+    monkeypatch.setenv("AIFORSCHOLAR_TOKEN", "relay_token")
 
     received = {}
 
     async def fake_process_page(page, index, total, **kwargs):
         received["content_cache"] = kwargs.get("content_cache")
+        received["semanticscholar_graph_client"] = kwargs.get("semanticscholar_graph_client")
         received["crossref_client"] = kwargs.get("crossref_client")
         received["datacite_client"] = kwargs.get("datacite_client")
         received["page"] = page
@@ -552,6 +558,20 @@ async def test_run_notion_mode_builds_and_passes_content_cache(monkeypatch):
         def __init__(self, session, *, github_token="", max_concurrent=0, min_interval=0):
             self.session = session
 
+    class FakeSemanticScholarGraphClient:
+        def __init__(
+            self,
+            session,
+            *,
+            semantic_scholar_api_key="",
+            aiforscholar_token="",
+            max_concurrent=0,
+            min_interval=0,
+        ):
+            self.session = session
+            self.semantic_scholar_api_key = semantic_scholar_api_key
+            self.aiforscholar_token = aiforscholar_token
+
     class FakeContentClient:
         def __init__(self, session, *, alphaxiv_token="", max_concurrent=0, min_interval=0):
             self.session = session
@@ -581,6 +601,7 @@ async def test_run_notion_mode_builds_and_passes_content_cache(monkeypatch):
         arxiv_client_cls=FakeArxivClient,
         discovery_client_cls=FakeDiscoveryClient,
         github_client_cls=FakeGitHubClient,
+        semanticscholar_graph_client_cls=FakeSemanticScholarGraphClient,
         crossref_client_cls=FakeCrossrefClient,
         datacite_client_cls=FakeDataCiteClient,
         notion_client_cls=FakeNotionClient,
@@ -591,6 +612,9 @@ async def test_run_notion_mode_builds_and_passes_content_cache(monkeypatch):
     assert received["page"]["id"] == "page-1"
     assert received["content_cache"] is not None
     assert received["content_cache"].content_client.alphaxiv_token == "ax_token"
+    assert received["semanticscholar_graph_client"] is not None
+    assert received["semanticscholar_graph_client"].semantic_scholar_api_key == "ss_key"
+    assert received["semanticscholar_graph_client"].aiforscholar_token == "relay_token"
     assert isinstance(received["crossref_client"], FakeCrossrefClient)
     assert isinstance(received["datacite_client"], FakeDataCiteClient)
 

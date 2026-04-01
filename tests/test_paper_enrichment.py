@@ -275,7 +275,7 @@ async def test_process_single_paper_keeps_repo_and_stars_when_no_canonical_arxiv
 
 
 @pytest.mark.anyio
-async def test_process_single_paper_resolves_doi_via_openalex_before_github_discovery():
+async def test_process_single_paper_resolves_doi_via_semantic_scholar_before_github_discovery():
     github_client = types.SimpleNamespace(get_star_count=AsyncMock(return_value=(5, None)))
     content_cache = RecordingContentCache()
 
@@ -288,9 +288,9 @@ async def test_process_single_paper_resolves_doi_via_openalex_before_github_disc
             return "https://github.com/foo/from-doi"
 
     discovery_client = FakeDiscoveryClient()
-    openalex_client = types.SimpleNamespace(
-        find_exact_arxiv_match_by_identifier=AsyncMock(
-            return_value=("https://arxiv.org/abs/2501.12345", "Mapped Arxiv Title")
+    semanticscholar_graph_client = types.SimpleNamespace(
+        find_arxiv_match_by_identifier=AsyncMock(
+            return_value=("https://arxiv.org/abs/2501.12345", "Mapped Arxiv Title", "semantic_scholar_exact_doi")
         )
     )
 
@@ -304,7 +304,7 @@ async def test_process_single_paper_resolves_doi_via_openalex_before_github_disc
         ),
         discovery_client=discovery_client,
         github_client=github_client,
-        openalex_client=openalex_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
         content_cache=content_cache,
     )
 
@@ -314,14 +314,15 @@ async def test_process_single_paper_resolves_doi_via_openalex_before_github_disc
     assert result.reason is None
     assert discovery_client.seen_urls == ["https://arxiv.org/abs/2501.12345"]
     assert content_cache.calls == ["https://arxiv.org/abs/2501.12345"]
-    openalex_client.find_exact_arxiv_match_by_identifier.assert_awaited_once_with(
+    semanticscholar_graph_client.find_arxiv_match_by_identifier.assert_awaited_once_with(
         "https://doi.org/10.1007/978-3-031-72933-1_9",
         title="Published DOI Paper",
+        allow_title_fallback=False,
     )
 
 
 @pytest.mark.anyio
-async def test_process_single_paper_threads_crossref_after_openalex_and_title_miss():
+async def test_process_single_paper_threads_crossref_after_semantic_scholar_and_title_misses():
     github_client = types.SimpleNamespace(get_star_count=AsyncMock(return_value=(5, None)))
     content_cache = RecordingContentCache()
 
@@ -334,8 +335,9 @@ async def test_process_single_paper_threads_crossref_after_openalex_and_title_mi
             return "https://github.com/foo/from-crossref"
 
     discovery_client = FakeDiscoveryClient()
-    openalex_client = types.SimpleNamespace(
-        find_exact_arxiv_match_by_identifier=AsyncMock(return_value=(None, "Published DOI Paper"))
+    semanticscholar_graph_client = types.SimpleNamespace(
+        find_arxiv_match_by_identifier=AsyncMock(return_value=(None, None, None)),
+        find_arxiv_match_by_title=AsyncMock(return_value=(None, None, None)),
     )
     arxiv_client = types.SimpleNamespace(
         get_arxiv_id_by_title=AsyncMock(return_value=(None, None, "No arXiv ID found from title search"))
@@ -356,7 +358,7 @@ async def test_process_single_paper_threads_crossref_after_openalex_and_title_mi
         discovery_client=discovery_client,
         github_client=github_client,
         arxiv_client=arxiv_client,
-        openalex_client=openalex_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
         content_cache=content_cache,
@@ -367,5 +369,11 @@ async def test_process_single_paper_threads_crossref_after_openalex_and_title_mi
     assert result.github_url == "https://github.com/foo/from-crossref"
     assert result.reason is None
     assert discovery_client.seen_urls == ["https://arxiv.org/abs/2501.54321"]
+    semanticscholar_graph_client.find_arxiv_match_by_identifier.assert_awaited_once_with(
+        "https://doi.org/10.1145/example",
+        title="Published DOI Paper",
+        allow_title_fallback=False,
+    )
+    semanticscholar_graph_client.find_arxiv_match_by_title.assert_awaited_once_with("Published DOI Paper")
     crossref_client.find_arxiv_match_by_doi.assert_awaited_once_with("https://doi.org/10.1145/example")
     datacite_client.find_arxiv_match_by_doi.assert_not_awaited()

@@ -32,7 +32,6 @@ def load_runtime_config(env: dict[str, str]) -> dict[str, str | int]:
         "huggingface_token": (env.get("HUGGINGFACE_TOKEN") or "").strip(),
         "alphaxiv_token": (env.get("ALPHAXIV_TOKEN") or "").strip(),
         "aiforscholar_token": (env.get("AIFORSCHOLAR_TOKEN") or "").strip(),
-        "openalex_api_key": (env.get("OPENALEX_API_KEY") or "").strip(),
         "semantic_scholar_api_key": (env.get("SEMANTIC_SCHOLAR_API_KEY") or "").strip(),
         "arxiv_relation_no_arxiv_recheck_days": _parse_positive_int(
             env.get("ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS"),
@@ -67,7 +66,7 @@ def load_notion_config(env: dict[str, str]) -> dict[str, str | int]:
         "huggingface_token": runtime_config["huggingface_token"],
         "alphaxiv_token": runtime_config["alphaxiv_token"],
         "aiforscholar_token": runtime_config["aiforscholar_token"],
-        "openalex_api_key": runtime_config["openalex_api_key"],
+        "semantic_scholar_api_key": runtime_config["semantic_scholar_api_key"],
         "arxiv_relation_no_arxiv_recheck_days": runtime_config["arxiv_relation_no_arxiv_recheck_days"],
         "repo_discovery_no_repo_recheck_days": runtime_config["repo_discovery_no_repo_recheck_days"],
     }

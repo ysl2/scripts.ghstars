@@ -414,11 +414,11 @@ async def test_normalize_paper_seeds_to_arxiv_preserves_existing_arxiv_urls_exac
 
 
 @pytest.mark.anyio
-async def test_normalize_paper_seeds_to_arxiv_rewrites_doi_via_openalex_crosswalk():
+async def test_normalize_paper_seeds_to_arxiv_rewrites_doi_via_semantic_scholar_exact_lookup():
     seeds = [PaperSeed(name="Published Paper", url="https://doi.org/10.1007/978-3-031-72933-1_9")]
-    openalex_client = SimpleNamespace(
-        find_exact_arxiv_match_by_identifier=AsyncMock(
-            return_value=("https://arxiv.org/abs/2501.12345", "Mapped Arxiv Title")
+    semanticscholar_graph_client = SimpleNamespace(
+        find_arxiv_match_by_identifier=AsyncMock(
+            return_value=("https://arxiv.org/abs/2501.12345", "Mapped Arxiv Title", "semantic_scholar_exact_doi")
         )
     )
 
@@ -426,21 +426,23 @@ async def test_normalize_paper_seeds_to_arxiv_rewrites_doi_via_openalex_crosswal
         seeds,
         discovery_client=SimpleNamespace(huggingface_token=""),
         arxiv_client=SimpleNamespace(get_arxiv_id_by_title=AsyncMock()),
-        openalex_client=openalex_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
     )
 
     assert resolved == [PaperSeed(name="Published Paper", url="https://arxiv.org/abs/2501.12345")]
-    openalex_client.find_exact_arxiv_match_by_identifier.assert_awaited_once_with(
+    semanticscholar_graph_client.find_arxiv_match_by_identifier.assert_awaited_once_with(
         "https://doi.org/10.1007/978-3-031-72933-1_9",
         title="Published Paper",
+        allow_title_fallback=False,
     )
 
 
 @pytest.mark.anyio
-async def test_normalize_paper_seeds_to_arxiv_uses_datacite_after_crossref_miss():
+async def test_normalize_paper_seeds_to_arxiv_uses_datacite_after_semantic_scholar_and_crossref_misses():
     seeds = [PaperSeed(name="Published Paper", url="https://doi.org/10.1145/example")]
-    openalex_client = SimpleNamespace(
-        find_exact_arxiv_match_by_identifier=AsyncMock(return_value=(None, "Published Paper"))
+    semanticscholar_graph_client = SimpleNamespace(
+        find_arxiv_match_by_identifier=AsyncMock(return_value=(None, None, None)),
+        find_arxiv_match_by_title=AsyncMock(return_value=(None, None, None)),
     )
     arxiv_client = SimpleNamespace(
         get_arxiv_id_by_title=AsyncMock(return_value=(None, None, "No arXiv ID found from title search"))
@@ -454,12 +456,18 @@ async def test_normalize_paper_seeds_to_arxiv_uses_datacite_after_crossref_miss(
         seeds,
         discovery_client=SimpleNamespace(huggingface_token=""),
         arxiv_client=arxiv_client,
-        openalex_client=openalex_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
     )
 
     assert resolved == [PaperSeed(name="Published Paper", url="https://arxiv.org/abs/2501.54321")]
+    semanticscholar_graph_client.find_arxiv_match_by_identifier.assert_awaited_once_with(
+        "https://doi.org/10.1145/example",
+        title="Published Paper",
+        allow_title_fallback=False,
+    )
+    semanticscholar_graph_client.find_arxiv_match_by_title.assert_awaited_once_with("Published Paper")
     crossref_client.find_arxiv_match_by_doi.assert_awaited_once_with("https://doi.org/10.1145/example")
     datacite_client.find_arxiv_match_by_doi.assert_awaited_once_with("https://doi.org/10.1145/example")
 
@@ -746,6 +754,8 @@ async def test_export_url_to_csv_warms_content_and_reuses_cached_files(tmp_path:
 @pytest.mark.anyio
 async def test_run_url_mode_builds_and_passes_content_cache(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("ALPHAXIV_TOKEN", "ax_token")
+    monkeypatch.setenv("SEMANTIC_SCHOLAR_API_KEY", "ss_key")
+    monkeypatch.setenv("AIFORSCHOLAR_TOKEN", "relay_token")
     received = {}
 
     class FakeSession:
@@ -775,9 +785,20 @@ async def test_run_url_mode_builds_and_passes_content_cache(tmp_path: Path, monk
         def __init__(self, session, *, max_concurrent=0, min_interval=0):
             self.session = session
 
-    class FakeOpenAlexClient:
-        def __init__(self, session, *, openalex_api_key="", max_concurrent=0, min_interval=0):
+    class FakeSemanticScholarGraphClient:
+        def __init__(
+            self,
+            session,
+            *,
+            semantic_scholar_api_key="",
+            aiforscholar_token="",
+            max_concurrent=0,
+            min_interval=0,
+        ):
             self.session = session
+            self.semantic_scholar_api_key = semantic_scholar_api_key
+            self.aiforscholar_token = aiforscholar_token
+            received["semanticscholar_graph_client"] = self
 
     class FakeCrossrefClient:
         def __init__(self, session, *, max_concurrent=0, min_interval=0):
@@ -811,7 +832,7 @@ async def test_run_url_mode_builds_and_passes_content_cache(tmp_path: Path, monk
         huggingface_papers_client=None,
         semanticscholar_client=None,
         arxiv_client=None,
-        openalex_client=None,
+        semanticscholar_graph_client=None,
         crossref_client=None,
         datacite_client=None,
         discovery_client,
@@ -825,6 +846,7 @@ async def test_run_url_mode_builds_and_passes_content_cache(tmp_path: Path, monk
     ):
         received["input_url"] = input_url
         received["content_cache"] = content_cache
+        received["semanticscholar_arg"] = semanticscholar_graph_client
         received["crossref_arg"] = crossref_client
         received["datacite_arg"] = datacite_client
         received["output_dir"] = output_dir
@@ -843,7 +865,7 @@ async def test_run_url_mode_builds_and_passes_content_cache(tmp_path: Path, monk
         semanticscholar_client_cls=FakeSemanticScholarClient,
         discovery_client_cls=FakeDiscoveryClient,
         github_client_cls=FakeGitHubClient,
-        openalex_client_cls=FakeOpenAlexClient,
+        semanticscholar_graph_client_cls=FakeSemanticScholarGraphClient,
         crossref_client_cls=FakeCrossrefClient,
         datacite_client_cls=FakeDataCiteClient,
         content_client_cls=FakeContentClient,
@@ -859,6 +881,9 @@ async def test_run_url_mode_builds_and_passes_content_cache(tmp_path: Path, monk
     assert received["content_cache"].cache_root == tmp_path / "cache"
     assert received["content_cache"].content_client is received["content_client"]
     assert received["content_client"].alphaxiv_token == "ax_token"
+    assert received["semanticscholar_arg"] is received["semanticscholar_graph_client"]
+    assert received["semanticscholar_graph_client"].semantic_scholar_api_key == "ss_key"
+    assert received["semanticscholar_graph_client"].aiforscholar_token == "relay_token"
     assert received["crossref_arg"] is received["crossref_client"]
     assert received["datacite_arg"] is received["datacite_client"]
 
@@ -1119,8 +1144,28 @@ async def test_run_url_mode_supports_semanticscholar_url(tmp_path: Path, capsys)
             self.session = session
 
         async def get_arxiv_id_by_title(self, title: str):
+            raise AssertionError("Semantic Scholar graph exact lookup should resolve Semantic Scholar paper URLs")
+
+    class FakeSemanticScholarGraphClient:
+        def __init__(
+            self,
+            session,
+            *,
+            semantic_scholar_api_key="",
+            aiforscholar_token="",
+            max_concurrent=0,
+            min_interval=0,
+        ):
+            self.session = session
+
+        async def find_arxiv_match_by_identifier(self, identifier: str, *, title=None, allow_title_fallback=True):
+            assert identifier == "https://www.semanticscholar.org/paper/Paper-A/abc123"
             assert title == "Paper A"
-            return "2501.00001", "title_search_exact", None
+            assert allow_title_fallback is False
+            return "https://arxiv.org/abs/2501.00001", "Paper A", "semantic_scholar_exact_source_url"
+
+        async def find_arxiv_match_by_title(self, title: str):
+            raise AssertionError("Semantic Scholar title lookup should not run after exact source-url resolution")
 
     class FakeDiscoveryClient:
         def __init__(self, session, *, huggingface_token="", max_concurrent=0, min_interval=0):
@@ -1146,6 +1191,7 @@ async def test_run_url_mode_supports_semanticscholar_url(tmp_path: Path, capsys)
         huggingface_papers_client_cls=FakeHuggingFacePapersClient,
         semanticscholar_client_cls=FakeSemanticScholarClient,
         arxiv_client_cls=FakeArxivClient,
+        semanticscholar_graph_client_cls=FakeSemanticScholarGraphClient,
         discovery_client_cls=FakeDiscoveryClient,
         github_client_cls=FakeGitHubClient,
     )

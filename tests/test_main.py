@@ -24,7 +24,6 @@ def test_load_runtime_config_reads_only_optional_tokens():
         "huggingface_token": "hf_token",
         "alphaxiv_token": "ax_token",
         "aiforscholar_token": "relay_token",
-        "openalex_api_key": "",
         "semantic_scholar_api_key": "",
         "arxiv_relation_no_arxiv_recheck_days": 30,
         "repo_discovery_no_repo_recheck_days": 7,
@@ -37,7 +36,6 @@ def test_load_runtime_config_defaults_missing_values_to_empty_strings():
         "huggingface_token": "",
         "alphaxiv_token": "",
         "aiforscholar_token": "",
-        "openalex_api_key": "",
         "semantic_scholar_api_key": "",
         "arxiv_relation_no_arxiv_recheck_days": 30,
         "repo_discovery_no_repo_recheck_days": 7,
@@ -63,14 +61,14 @@ def test_load_runtime_config_falls_back_to_default_recheck_days_for_invalid_valu
     assert load_runtime_config({"REPO_DISCOVERY_NO_REPO_RECHECK_DAYS": "abc"})["repo_discovery_no_repo_recheck_days"] == 7
 
 
-def test_load_runtime_config_reads_optional_openalex_token():
+def test_load_runtime_config_does_not_expose_openalex_token():
     config = load_runtime_config(
         {
             "OPENALEX_API_KEY": "oa_key",
         }
     )
 
-    assert config["openalex_api_key"] == "oa_key"
+    assert "openalex_api_key" not in config
 
 
 def test_load_runtime_config_reads_optional_semantic_scholar_api_key():

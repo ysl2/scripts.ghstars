@@ -186,17 +186,11 @@ async def _fetch_primary_relation_candidates(
     relation_label: str,
     semanticscholar_graph_client=None,
     semantic_scholar_target_paper: dict | None = None,
-    openalex_client,
+    openalex_client=None,
     get_openalex_target_work,
     status_callback=None,
 ) -> list[RelatedWorkCandidate]:
     is_references = relation_label == "references"
-    openalex_label = "referenced works" if is_references else "citations"
-    openalex_fetcher = (
-        openalex_client.fetch_referenced_works
-        if is_references
-        else openalex_client.fetch_citations
-    )
     semantic_fetch_failed = False
 
     if semanticscholar_graph_client is not None and semantic_scholar_target_paper is not None:
@@ -231,9 +225,18 @@ async def _fetch_primary_relation_candidates(
                 f"Semantic Scholar {relation_label} fallback could not resolve OpenAlex target work"
             )
         if callable(status_callback):
-            status_callback(f"⚠️ OpenAlex target lookup missed; keeping empty {relation_label}")
+            if openalex_client is None:
+                status_callback(f"⚠️ OpenAlex fallback unavailable; keeping empty {relation_label}")
+            else:
+                status_callback(f"⚠️ OpenAlex target lookup missed; keeping empty {relation_label}")
         return []
 
+    openalex_label = "referenced works" if is_references else "citations"
+    openalex_fetcher = (
+        openalex_client.fetch_referenced_works
+        if is_references
+        else openalex_client.fetch_citations
+    )
     if callable(status_callback):
         status_callback(f"🔎 Fetching OpenAlex {openalex_label}")
     openalex_rows = await openalex_fetcher(openalex_target_work)
@@ -263,6 +266,7 @@ async def _resolve_related_work_row(
     candidate,
     *,
     arxiv_client,
+    semanticscholar_graph_client=None,
     openalex_client=None,
     crossref_client=None,
     datacite_client=None,
@@ -288,7 +292,7 @@ async def _resolve_related_work_row(
         title=candidate.title,
         raw_url=fallback_url,
         arxiv_client=arxiv_client,
-        openalex_client=openalex_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
         discovery_client=discovery_client,
@@ -315,6 +319,7 @@ async def _resolve_related_work_rows(
     candidates: list,
     *,
     arxiv_client,
+    semanticscholar_graph_client=None,
     openalex_client=None,
     crossref_client=None,
     datacite_client=None,
@@ -331,6 +336,7 @@ async def _resolve_related_work_rows(
         row = await _resolve_related_work_row(
             candidate,
             arxiv_client=arxiv_client,
+            semanticscholar_graph_client=semanticscholar_graph_client,
             openalex_client=openalex_client,
             crossref_client=crossref_client,
             datacite_client=datacite_client,
@@ -376,6 +382,7 @@ async def normalize_related_works_to_rows(
     *,
     openalex_client,
     arxiv_client,
+    semanticscholar_graph_client=None,
     crossref_client=None,
     datacite_client=None,
     discovery_client=None,
@@ -389,6 +396,7 @@ async def normalize_related_works_to_rows(
         candidates,
         openalex_client=openalex_client,
         arxiv_client=arxiv_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
         discovery_client=discovery_client,
@@ -403,6 +411,7 @@ async def normalize_related_work_candidates_to_rows(
     related_work_candidates: list[RelatedWorkCandidate],
     *,
     arxiv_client,
+    semanticscholar_graph_client=None,
     openalex_client=None,
     crossref_client=None,
     datacite_client=None,
@@ -415,6 +424,7 @@ async def normalize_related_work_candidates_to_rows(
     normalized_rows = await _resolve_related_work_rows(
         related_work_candidates,
         arxiv_client=arxiv_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
         openalex_client=openalex_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
@@ -431,6 +441,7 @@ async def normalize_related_work_candidates_to_seeds(
     related_work_candidates: list[RelatedWorkCandidate],
     *,
     arxiv_client,
+    semanticscholar_graph_client=None,
     openalex_client=None,
     crossref_client=None,
     datacite_client=None,
@@ -442,6 +453,7 @@ async def normalize_related_work_candidates_to_seeds(
     deduped_rows = await normalize_related_work_candidates_to_rows(
         related_work_candidates,
         arxiv_client=arxiv_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
         openalex_client=openalex_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
@@ -466,6 +478,7 @@ async def normalize_related_works_to_seeds(
     *,
     openalex_client,
     arxiv_client,
+    semanticscholar_graph_client=None,
     crossref_client=None,
     datacite_client=None,
     discovery_client=None,
@@ -480,6 +493,7 @@ async def normalize_related_works_to_seeds(
     return await normalize_related_work_candidates_to_seeds(
         related_work_candidates,
         arxiv_client=arxiv_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
         openalex_client=openalex_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
@@ -545,7 +559,10 @@ async def export_arxiv_relations_to_csv(
         nonlocal openalex_target_work
         nonlocal openalex_target_work_resolved
         if not openalex_target_work_resolved:
-            openalex_target_work = await _resolve_target_openalex_work(arxiv_url, title, openalex_client)
+            if openalex_client is None:
+                openalex_target_work = None
+            else:
+                openalex_target_work = await _resolve_target_openalex_work(arxiv_url, title, openalex_client)
             openalex_target_work_resolved = True
         return openalex_target_work
 
@@ -578,6 +595,7 @@ async def export_arxiv_relations_to_csv(
     reference_seeds = await normalize_related_work_candidates_to_seeds(
         reference_candidates,
         arxiv_client=arxiv_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
         openalex_client=openalex_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
@@ -596,6 +614,7 @@ async def export_arxiv_relations_to_csv(
     citation_seeds = await normalize_related_work_candidates_to_seeds(
         citation_candidates,
         arxiv_client=arxiv_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
         openalex_client=openalex_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
@@ -615,7 +634,7 @@ async def export_arxiv_relations_to_csv(
         discovery_client=discovery_client,
         github_client=github_client,
         arxiv_client=arxiv_client,
-        openalex_client=openalex_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
         content_cache=content_cache,
@@ -630,7 +649,7 @@ async def export_arxiv_relations_to_csv(
         discovery_client=discovery_client,
         github_client=github_client,
         arxiv_client=arxiv_client,
-        openalex_client=openalex_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
         content_cache=content_cache,
