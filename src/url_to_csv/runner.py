@@ -90,8 +90,14 @@ async def run_url_mode(
         semanticscholar_client = build_client(
             semanticscholar_client_cls,
             runtime.session,
+            semantic_scholar_api_key=config["semantic_scholar_api_key"],
+            aiforscholar_token=config["aiforscholar_token"],
             max_concurrent=CONCURRENT_LIMIT,
-            min_interval=REQUEST_DELAY,
+            min_interval=resolve_semantic_scholar_min_interval(
+                config["semantic_scholar_api_key"],
+                config["aiforscholar_token"],
+                REQUEST_DELAY,
+            ),
         )
         semanticscholar_graph_client = build_client(
             semanticscholar_graph_client_cls,

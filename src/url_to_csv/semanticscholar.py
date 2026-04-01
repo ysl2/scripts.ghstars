@@ -1,25 +1,28 @@
-import asyncio
-import html as html_lib
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from typing import Any
+from urllib.parse import parse_qsl, urlparse
 
-from src.shared.headless_browser import dump_rendered_html
-from src.shared.http import MAX_RETRIES, RateLimiter
-from src.shared.paper_identity import normalize_semanticscholar_paper_url
+from src.shared.paper_identity import (
+    build_arxiv_abs_url,
+    normalize_arxiv_url,
+    normalize_semanticscholar_paper_url,
+)
 from src.shared.papers import PaperSeed
+from src.shared.semantic_scholar_graph import SemanticScholarGraphClient
 from src.url_to_csv.filenames import build_url_export_csv_path
 from src.url_to_csv.models import FetchedSeedsResult
 
 
 SEMANTIC_SCHOLAR_HOSTS = {"semanticscholar.org", "www.semanticscholar.org"}
 INDEXED_FILTER_PATTERN = re.compile(r"^(?P<name>year|fos|venue)\[(?P<index>[0-9]+)\]$")
-TOTAL_PAGES_PATTERN = re.compile(r'<[^>]*data-test-id="result-page-pagination"[^>]*>', re.IGNORECASE)
-TITLE_LINK_PATTERN = re.compile(
-    r'<a[^>]*data-test-id="title-link"[^>]*href="([^"]+)"[^>]*>\s*<h2[^>]*class="cl-paper-title"[^>]*>(.*?)</h2>\s*</a>',
-    re.IGNORECASE | re.S,
-)
+SEMANTIC_SCHOLAR_BULK_SEARCH_FIELDS = "paperId,title,externalIds,url"
+SEMANTIC_SCHOLAR_SORT_MAPPING = {
+    "pub-date": "publicationDate:desc",
+    "citation-count": "citationCount:desc",
+    "total-citations": "citationCount:desc",
+}
 
 
 @dataclass(frozen=True)
@@ -31,6 +34,11 @@ class SemanticScholarSearchSpec:
     sort: str
 
 
+class SemanticScholarSearchClient(SemanticScholarGraphClient):
+    async def fetch_search_bulk_page(self, params: dict[str, str]) -> dict[str, Any]:
+        return await self._get_json(f"{self.graph_url}/paper/search/bulk", params=params)
+
+
 def is_supported_semanticscholar_url(raw_url: str) -> bool:
     if not raw_url or not isinstance(raw_url, str):
         return False
@@ -39,10 +47,6 @@ def is_supported_semanticscholar_url(raw_url: str) -> bool:
     host = (parsed.netloc or parsed.hostname or "").lower()
     path = parsed.path.rstrip("/")
     return parsed.scheme in {"http", "https"} and host in SEMANTIC_SCHOLAR_HOSTS and path == "/search"
-
-
-def is_supported_semanticscholar_paper_url(raw_url: str) -> bool:
-    return normalize_semanticscholar_paper_url(raw_url) is not None
 
 
 def parse_semanticscholar_url(raw_url: str) -> SemanticScholarSearchSpec:
@@ -104,42 +108,6 @@ def output_csv_path_for_semanticscholar_url(raw_url: str, *, output_dir: Path | 
     return build_url_export_csv_path(parts, output_dir=output_dir)
 
 
-def extract_total_pages_from_semanticscholar_html(html_text: str) -> int:
-    if not html_text or not isinstance(html_text, str):
-        return 1
-
-    container_match = TOTAL_PAGES_PATTERN.search(html_text)
-    if not container_match:
-        return 1
-
-    page_match = re.search(r'data-total-pages="([0-9]+)"', container_match.group(0), flags=re.IGNORECASE)
-    if not page_match:
-        return 1
-
-    return max(int(page_match.group(1)), 1)
-
-
-def extract_paper_seeds_from_semanticscholar_html(html_text: str) -> list[PaperSeed]:
-    if not html_text or not isinstance(html_text, str):
-        return []
-
-    seeds: list[PaperSeed] = []
-    seen_urls: set[str] = set()
-    for href, title_html in TITLE_LINK_PATTERN.findall(html_text):
-        normalized_url = normalize_semanticscholar_paper_url(_make_absolute_semanticscholar_url(href))
-        if not normalized_url or normalized_url in seen_urls:
-            continue
-
-        title = _normalize_html_text(title_html)
-        if not title:
-            continue
-
-        seeds.append(PaperSeed(name=title, url=normalized_url))
-        seen_urls.add(normalized_url)
-
-    return seeds
-
-
 async def fetch_paper_seeds_from_semanticscholar_url(
     input_url: str,
     *,
@@ -147,96 +115,138 @@ async def fetch_paper_seeds_from_semanticscholar_url(
     output_dir: Path | None = None,
     status_callback=None,
 ) -> FetchedSeedsResult:
-    parse_semanticscholar_url(input_url)
+    spec = parse_semanticscholar_url(input_url)
     csv_path = output_csv_path_for_semanticscholar_url(input_url, output_dir=output_dir)
 
     seeds: list[PaperSeed] = []
     seen_urls: set[str] = set()
+    next_token: str | None = None
+    seen_tokens: set[str] = set()
+    batch = 1
 
-    first_page_seeds, total_pages = await _fetch_search_page(
-        semanticscholar_client,
-        build_semanticscholar_search_page_url(input_url, page=1),
-        page=1,
-        status_callback=status_callback,
-    )
-    _append_unique_seeds(seeds, seen_urls, first_page_seeds)
-
-    if total_pages > 1:
+    while True:
         if callable(status_callback):
-            status_callback(f"📚 Found {total_pages} Semantic Scholar result pages")
-            status_callback("🔄 Starting concurrent page crawl")
+            status_callback(f"🔎 Fetching Semantic Scholar bulk search batch {batch}")
 
-        tasks = [
-            asyncio.create_task(
-                _fetch_search_page(
-                    semanticscholar_client,
-                    build_semanticscholar_search_page_url(input_url, page=page),
-                    page=page,
-                    status_callback=status_callback,
-                )
-            )
-            for page in range(2, total_pages + 1)
-        ]
+        payload = await _fetch_search_bulk_page(
+            semanticscholar_client,
+            _build_bulk_search_params(spec, token=next_token),
+        )
 
-        for task in asyncio.as_completed(tasks):
-            page_seeds, _ = await task
-            _append_unique_seeds(seeds, seen_urls, page_seeds)
+        if batch == 1 and callable(status_callback):
+            maybe_total = payload.get("total")
+            if isinstance(maybe_total, int) and maybe_total >= 0:
+                status_callback(f"📚 Estimated {maybe_total} Semantic Scholar matches")
+
+        batch_seeds = _extract_paper_seeds_from_search_payload(payload)
+        _append_unique_seeds(seeds, seen_urls, batch_seeds)
+
+        if callable(status_callback):
+            status_callback(f"📄 Fetched batch {batch}: {len(batch_seeds)} results")
+
+        token = str(payload.get("token") or "").strip()
+        if not token or token in seen_tokens:
+            break
+
+        seen_tokens.add(token)
+        next_token = token
+        batch += 1
 
     return FetchedSeedsResult(seeds=seeds, csv_path=csv_path)
 
 
-class SemanticScholarSearchClient:
-    def __init__(self, _session=None, max_concurrent: int = 5, min_interval: float = 0.2):
-        self.semaphore = asyncio.Semaphore(max_concurrent)
-        self.rate_limiter = RateLimiter(min_interval)
+async def _fetch_search_bulk_page(client, params: dict[str, str]) -> dict[str, Any]:
+    fetch_page = getattr(client, "fetch_search_bulk_page", None)
+    if callable(fetch_page):
+        payload = await fetch_page(params)
+    else:
+        get_json = getattr(client, "_get_json", None)
+        graph_url = str(getattr(client, "graph_url", "") or "").rstrip("/")
+        if not callable(get_json) or not graph_url:
+            raise ValueError("Missing Semantic Scholar bulk search client")
+        payload = await get_json(f"{graph_url}/paper/search/bulk", params=params)
 
-    async def fetch_search_page_html(self, url: str) -> str:
-        for attempt in range(MAX_RETRIES + 1):
-            async with self.semaphore:
-                await self.rate_limiter.acquire()
-                try:
-                    return await dump_rendered_html(
-                        url,
-                        virtual_time_budget_ms=8000,
-                        timeout_seconds=20.0,
-                    )
-                except asyncio.TimeoutError:
-                    if attempt < MAX_RETRIES:
-                        await asyncio.sleep(0.5 * (2**attempt))
-                        continue
-                    raise ValueError("Semantic Scholar search timeout") from None
-                except Exception as exc:
-                    if attempt < MAX_RETRIES:
-                        await asyncio.sleep(0.5 * (2**attempt))
-                        continue
-                    raise ValueError(f"Semantic Scholar search failed: {exc}") from exc
-
-        raise ValueError("Semantic Scholar search error")
+    return payload if isinstance(payload, dict) else {}
 
 
-def build_semanticscholar_search_page_url(raw_url: str, *, page: int) -> str:
-    parsed = urlparse(raw_url)
-    params = parse_qsl(parsed.query, keep_blank_values=False)
-    if page <= 1 and all(key != "page" for key, _ in params):
-        return raw_url
+def _build_bulk_search_params(spec: SemanticScholarSearchSpec, *, token: str | None) -> dict[str, str]:
+    params = {
+        "query": spec.search_text,
+        "fields": SEMANTIC_SCHOLAR_BULK_SEARCH_FIELDS,
+    }
 
-    params = [(key, value) for key, value in params if key != "page"]
-    if page > 1:
-        params.append(("page", str(page)))
-    return urlunparse(parsed._replace(query=urlencode(params, doseq=True)))
+    year_filter = _build_year_filter(spec.years)
+    if year_filter:
+        params["year"] = year_filter
+
+    fields_of_study_filter = _join_filter_values(spec.fields_of_study)
+    if fields_of_study_filter:
+        params["fieldsOfStudy"] = fields_of_study_filter
+
+    venue_filter = _join_filter_values(spec.venues)
+    if venue_filter:
+        params["venue"] = venue_filter
+
+    sort_filter = _map_sort(spec.sort)
+    if sort_filter:
+        params["sort"] = sort_filter
+
+    if token:
+        params["token"] = token
+
+    return params
 
 
-async def _fetch_search_page(client, url: str, *, page: int, status_callback=None) -> tuple[list[PaperSeed], int]:
-    if callable(status_callback):
-        status_callback(f"🔎 Fetching Semantic Scholar search results page {page}")
+def _extract_paper_seeds_from_search_payload(payload: dict[str, Any]) -> list[PaperSeed]:
+    rows = payload.get("data")
+    if not isinstance(rows, list):
+        return []
 
-    html_text = await client.fetch_search_page_html(url)
-    page_seeds = extract_paper_seeds_from_semanticscholar_html(html_text)
+    seeds: list[PaperSeed] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
 
-    if callable(status_callback):
-        status_callback(f"📄 Fetched page {page}: {len(page_seeds)} results")
+        title = " ".join(str(row.get("title") or "").split()).strip()
+        if not title:
+            continue
 
-    return page_seeds, extract_total_pages_from_semanticscholar_html(html_text)
+        seed_url = _resolve_seed_url(row)
+        if not seed_url:
+            continue
+
+        seeds.append(PaperSeed(name=title, url=seed_url))
+    return seeds
+
+
+def _resolve_seed_url(row: dict[str, Any]) -> str | None:
+    external_ids = row.get("externalIds")
+    if not isinstance(external_ids, dict):
+        external_ids = {}
+
+    arxiv_url = _build_arxiv_url(external_ids.get("ArXiv"))
+    if arxiv_url:
+        return arxiv_url
+
+    normalized_url = normalize_semanticscholar_paper_url(str(row.get("url") or "").strip())
+    if normalized_url:
+        return normalized_url
+
+    paper_id = " ".join(str(row.get("paperId") or "").split()).strip()
+    if not paper_id:
+        return None
+    return normalize_semanticscholar_paper_url(f"https://www.semanticscholar.org/paper/{paper_id}")
+
+
+def _build_arxiv_url(arxiv_identifier: Any) -> str | None:
+    candidate = " ".join(str(arxiv_identifier or "").split()).strip()
+    if not candidate:
+        return None
+
+    normalized_url = normalize_arxiv_url(candidate)
+    if normalized_url:
+        return normalized_url
+    return normalize_arxiv_url(build_arxiv_abs_url(candidate))
 
 
 def _append_unique_seeds(target: list[PaperSeed], seen_urls: set[str], page_seeds: list[PaperSeed]) -> None:
@@ -247,18 +257,38 @@ def _append_unique_seeds(target: list[PaperSeed], seen_urls: set[str], page_seed
         seen_urls.add(seed.url)
 
 
-def _make_absolute_semanticscholar_url(url: str) -> str:
-    if not url:
-        return url
-    if url.startswith("http://") or url.startswith("https://"):
-        return url
-    return f"https://www.semanticscholar.org{url}"
+def _build_year_filter(years: tuple[str, ...]) -> str:
+    normalized_years = []
+    for year in years:
+        candidate = " ".join(str(year or "").split()).strip()
+        if not re.fullmatch(r"[0-9]{4}", candidate):
+            return ",".join(value for value in years if str(value).strip())
+        normalized_years.append(int(candidate))
+
+    if not normalized_years:
+        return ""
+    if len(normalized_years) == 1:
+        return str(normalized_years[0])
+    return f"{min(normalized_years)}-{max(normalized_years)}"
 
 
-def _normalize_html_text(inner_html: str) -> str:
-    without_comments = re.sub(r"<!--.*?-->", " ", inner_html, flags=re.S)
-    without_tags = re.sub(r"<[^>]+>", " ", without_comments)
-    return html_lib.unescape(" ".join(without_tags.split())).strip()
+def _join_filter_values(values: tuple[str, ...]) -> str:
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        candidate = " ".join(str(value or "").split()).strip()
+        if not candidate or candidate in seen:
+            continue
+        output.append(candidate)
+        seen.add(candidate)
+    return ",".join(output)
+
+
+def _map_sort(sort: str) -> str:
+    normalized_sort = " ".join(str(sort or "").split()).strip()
+    if not normalized_sort or normalized_sort == "relevance":
+        return ""
+    return SEMANTIC_SCHOLAR_SORT_MAPPING.get(normalized_sort, normalized_sort)
 
 
 def _slugify(value: str) -> str:

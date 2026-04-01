@@ -68,11 +68,12 @@ async def fetch_paper_seeds_from_url(
             status_callback=status_callback,
         )
     elif source == UrlSource.SEMANTIC_SCHOLAR:
-        if semanticscholar_client is None:
+        semantic_search_client = semanticscholar_graph_client or semanticscholar_client
+        if semantic_search_client is None:
             raise ValueError("Missing Semantic Scholar client")
         fetched = await fetch_paper_seeds_from_semanticscholar_url(
             input_url,
-            semanticscholar_client=semanticscholar_client,
+            semanticscholar_client=semantic_search_client,
             output_dir=output_dir,
             status_callback=status_callback,
         )

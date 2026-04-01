@@ -217,36 +217,73 @@ async def test_fetch_paper_seeds_from_url_fails_for_incomplete_arxiv_org_catchup
 
 @pytest.mark.anyio
 async def test_fetch_paper_seeds_from_url_reads_semanticscholar_search_results():
-    class FakeSemanticScholarClient:
-        async def fetch_search_page_html(self, url: str):
-            assert "q=semantic%203d%20reconstruction" in url
-            return """
-            <div class="cl-pager" data-total-pages="1" data-test-id="result-page-pagination"></div>
-            <a data-test-id="title-link" href="/paper/Search-Match/abc123">
-              <h2 class="cl-paper-title">Search Match</h2>
-            </a>
-            <a data-test-id="title-link" href="/paper/Missing/def456">
-              <h2 class="cl-paper-title">Missing</h2>
-            </a>
-            """
+    class FakeSemanticScholarGraphClient:
+        def __init__(self):
+            self.search_calls = []
+
+        async def fetch_search_bulk_page(self, params: dict[str, str]):
+            self.search_calls.append(dict(params))
+            return {
+                "data": [
+                    {
+                        "paperId": "abc123",
+                        "title": "Search Match",
+                        "externalIds": {},
+                        "url": "https://www.semanticscholar.org/paper/Search-Match/abc123",
+                    },
+                    {
+                        "paperId": "def456",
+                        "title": "Missing",
+                        "externalIds": {},
+                        "url": "https://www.semanticscholar.org/paper/Missing/def456",
+                    },
+                ]
+            }
 
     class FakeArxivClient:
+        def __init__(self):
+            self.calls = []
+
         async def get_arxiv_id_by_title(self, title: str):
-            if title == "Search Match":
-                return "2502.00002", "title_search_exact", None
+            self.calls.append(title)
             return None, None, "No arXiv ID found from title search"
 
+    class FakeExactMatchGraphClient(FakeSemanticScholarGraphClient):
+        async def find_arxiv_match_by_identifier(self, identifier: str, *, title=None, allow_title_fallback=True):
+            if identifier == "https://www.semanticscholar.org/paper/Search-Match/abc123":
+                assert title == "Search Match"
+                assert allow_title_fallback is False
+                return "https://arxiv.org/abs/2502.00002", "Search Match", "semantic_scholar_exact_source_url"
+            if identifier == "https://www.semanticscholar.org/paper/Missing/def456":
+                return None, None, None
+            raise AssertionError(f"Unexpected identifier: {identifier}")
+
+        async def find_arxiv_match_by_title(self, title: str):
+            if title == "Missing":
+                return None, None, None
+            raise AssertionError(f"Unexpected title lookup: {title}")
+
     messages = []
+    client = FakeExactMatchGraphClient()
+    arxiv_client = FakeArxivClient()
     result = await fetch_paper_seeds_from_url(
         "https://www.semanticscholar.org/search?q=semantic%203d%20reconstruction&sort=pub-date",
-        semanticscholar_client=FakeSemanticScholarClient(),
-        arxiv_client=FakeArxivClient(),
+        semanticscholar_graph_client=client,
+        arxiv_client=arxiv_client,
         status_callback=messages.append,
     )
 
     assert [seed.name for seed in result.seeds] == ["Search Match"]
     assert [seed.url for seed in result.seeds] == ["https://arxiv.org/abs/2502.00002"]
-    assert any("Fetching Semantic Scholar search results page 1" in message for message in messages)
+    assert arxiv_client.calls == ["Missing"]
+    assert client.search_calls == [
+        {
+            "query": "semantic 3d reconstruction",
+            "sort": "publicationDate:desc",
+            "fields": "paperId,title,externalIds,url",
+        }
+    ]
+    assert any("Fetching Semantic Scholar bulk search batch 1" in message for message in messages)
     assert any("Normalizing to arXiv-backed papers" in message for message in messages)
     assert any("Kept 1/2 arXiv-backed papers" in message for message in messages)
 
@@ -600,29 +637,52 @@ async def test_export_url_to_csv_writes_arxiv_org_results_in_output_dir(tmp_path
 
 @pytest.mark.anyio
 async def test_export_url_to_csv_writes_semanticscholar_results_in_output_dir(tmp_path: Path):
-    class FakeSemanticScholarClient:
-        async def fetch_search_page_html(self, url: str):
-            return """
-            <div class="cl-pager" data-total-pages="1" data-test-id="result-page-pagination"></div>
-            <a data-test-id="title-link" href="/paper/Newer/def456">
-              <h2 class="cl-paper-title">Newer</h2>
-            </a>
-            <a data-test-id="title-link" href="/paper/Older/abc123">
-              <h2 class="cl-paper-title">Older</h2>
-            </a>
-            <a data-test-id="title-link" href="/paper/Missing/ghi789">
-              <h2 class="cl-paper-title">Missing</h2>
-            </a>
-            """
+    class FakeSemanticScholarGraphClient:
+        async def fetch_search_bulk_page(self, params: dict[str, str]):
+            return {
+                "data": [
+                    {
+                        "paperId": "def456",
+                        "title": "Newer",
+                        "externalIds": {"ArXiv": "2502.00002"},
+                        "url": "https://www.semanticscholar.org/paper/Newer/def456",
+                    },
+                    {
+                        "paperId": "abc123",
+                        "title": "Older",
+                        "externalIds": {},
+                        "url": "https://www.semanticscholar.org/paper/Older/abc123",
+                    },
+                    {
+                        "paperId": "ghi789",
+                        "title": "Missing",
+                        "externalIds": {},
+                        "url": "https://www.semanticscholar.org/paper/Missing/ghi789",
+                    },
+                ]
+            }
+
+        async def find_arxiv_match_by_identifier(self, identifier: str, *, title=None, allow_title_fallback=True):
+            if identifier == "https://www.semanticscholar.org/paper/Older/abc123":
+                assert title == "Older"
+                assert allow_title_fallback is False
+                return "https://arxiv.org/abs/2501.00001", "Older", "semantic_scholar_exact_source_url"
+            if identifier == "https://www.semanticscholar.org/paper/Missing/ghi789":
+                return None, None, None
+            raise AssertionError(f"Unexpected identifier: {identifier}")
+
+        async def find_arxiv_match_by_title(self, title: str):
+            if title == "Missing":
+                return None, None, None
+            raise AssertionError(f"Unexpected title lookup: {title}")
 
     class FakeArxivClient:
+        def __init__(self):
+            self.calls = []
+
         async def get_arxiv_id_by_title(self, title: str):
-            mapping = {
-                "Older": ("2501.00001", "title_search_exact", None),
-                "Newer": ("2502.00002", "title_search_exact", None),
-                "Missing": (None, None, "No arXiv ID found from title search"),
-            }
-            return mapping[title]
+            self.calls.append(title)
+            return None, None, "No arXiv ID found from title search"
 
     class FakeDiscoveryClient:
         async def resolve_github_url(self, seed):
@@ -640,11 +700,12 @@ async def test_export_url_to_csv_writes_semanticscholar_results_in_output_dir(tm
             }
             return mapping[(owner, repo)]
 
+    arxiv_client = FakeArxivClient()
     result = await export_url_to_csv(
         "https://www.semanticscholar.org/search?q=semantic%203d%20reconstruction&sort=pub-date",
         output_dir=tmp_path,
-        semanticscholar_client=FakeSemanticScholarClient(),
-        arxiv_client=FakeArxivClient(),
+        semanticscholar_graph_client=FakeSemanticScholarGraphClient(),
+        arxiv_client=arxiv_client,
         discovery_client=FakeDiscoveryClient(),
         github_client=FakeGitHubClient(),
     )
@@ -667,6 +728,7 @@ async def test_export_url_to_csv_writes_semanticscholar_results_in_output_dir(tm
             "Stars": "10",
         },
     ]
+    assert arxiv_client.calls == ["Missing"]
 
 
 @pytest.mark.anyio
@@ -1131,14 +1193,6 @@ async def test_run_url_mode_supports_semanticscholar_url(tmp_path: Path, capsys)
         def __init__(self, session, *, max_concurrent=0, min_interval=0):
             self.session = session
 
-        async def fetch_search_page_html(self, url: str):
-            return """
-            <div class="cl-pager" data-total-pages="1" data-test-id="result-page-pagination"></div>
-            <a data-test-id="title-link" href="/paper/Paper-A/abc123">
-              <h2 class="cl-paper-title">Paper A</h2>
-            </a>
-            """
-
     class FakeArxivClient:
         def __init__(self, session, *, max_concurrent=0, min_interval=0):
             self.session = session
@@ -1157,6 +1211,20 @@ async def test_run_url_mode_supports_semanticscholar_url(tmp_path: Path, capsys)
             min_interval=0,
         ):
             self.session = session
+            self.search_calls = []
+
+        async def fetch_search_bulk_page(self, params: dict[str, str]):
+            self.search_calls.append(dict(params))
+            return {
+                "data": [
+                    {
+                        "paperId": "abc123",
+                        "title": "Paper A",
+                        "externalIds": {},
+                        "url": "https://www.semanticscholar.org/paper/Paper-A/abc123",
+                    }
+                ]
+            }
 
         async def find_arxiv_match_by_identifier(self, identifier: str, *, title=None, allow_title_fallback=True):
             assert identifier == "https://www.semanticscholar.org/paper/Paper-A/abc123"
@@ -1198,7 +1266,7 @@ async def test_run_url_mode_supports_semanticscholar_url(tmp_path: Path, capsys)
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert "Fetching Semantic Scholar search results page 1" in captured.out
+    assert "Fetching Semantic Scholar bulk search batch 1" in captured.out
     assert "Normalizing to arXiv-backed papers" in captured.out
     assert "Found 1 papers" in captured.out
     assert "[1/1] Paper A" in captured.out
