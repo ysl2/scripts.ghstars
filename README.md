@@ -1,10 +1,11 @@
 # scripts.ghstars
 
-One CLI, four modes:
+One CLI, five input shapes:
 
 - No positional argument: sync GitHub links and star counts into Notion
 - One existing `.csv` file path: update that CSV in place
 - One supported papers collection URL: fetch the full result set and write a CSV under `./output` in the current working directory
+- One supported GitHub repository-search URL: fetch the full repository result set and write a CSV under `./output` in the current working directory
 - One supported single-paper arXiv URL: export related references and citations into two CSV files under `./output` in the current working directory
 
 Repository discovery for arXiv-backed papers now uses:
@@ -40,7 +41,7 @@ REPO_DISCOVERY_NO_REPO_RECHECK_DAYS=7
 `HUGGINGFACE_TOKEN` enables both Hugging Face exact repo discovery and the shared final-stage Hugging Face paper title-search fallback inside arXiv URL resolution.
 `ALPHAXIV_TOKEN` is optional. When set, AlphaXiv page fetches and API requests send `Authorization: Bearer <token>`; when empty, they keep using the current anonymous public behavior.
 
-`cache.db` is created automatically in the current working directory and shared across all four modes.
+`cache.db` is created automatically in the current working directory and shared across all five input shapes.
 `HF_EXACT_NO_REPO_RECHECK_DAYS` is still accepted as a backward-compatible alias, but `REPO_DISCOVERY_NO_REPO_RECHECK_DAYS` is the preferred name.
 
 ### Optional in modes that may normalize non-arXiv paper URLs
@@ -267,7 +268,7 @@ URL mode behavior:
 - source-specific fetching is kept in separate adapters under `url_to_csv/`
 - every URL export appends a run timestamp in `YYYYMMDDHHMMSS` form before `.csv`
 - CLI URL exports default to `./output` in the current working directory and create that directory automatically if needed
-- URL exports always write the standard columns: `Name`, `Url`, `Github`, `Stars`
+- URL exports always write the shared six-column export schema: `Name`, `Url`, `Github`, `Stars`, `Created`, `About`
 - standard arXiv `list/...` and `search/...` collection pages, including `/search/advanced`, are crawled across all pages, not just the first page
 - archive-style arXiv `list/<category>/YYYY-MM` pages reuse the same multi-page `list/...` crawling path
 - arXiv `new` pages include all visible sections, including new submissions, cross-lists, and replacements
@@ -281,6 +282,36 @@ URL mode behavior:
 - repo discovery reuses the shared `cache.db` mapping of canonical arXiv URL to GitHub repo
 - the shared resolver uses `cache -> Semantic Scholar exact -> Semantic Scholar title exact -> arXiv title search (HTML -> API) -> Crossref -> DataCite -> Hugging Face` for non-arXiv rows before downstream repo discovery
 - downstream repository discovery, star lookup, sorting, progress printing, and CSV writing reuse the same shared export logic as CSV update mode where applicable
+
+### GitHub repository search to CSV mode
+
+Reads one supported GitHub repository-search URL and writes a CSV under `./output` in the current working directory by default.
+
+Command shape:
+
+```bash
+uv run main.py '<github-search-url>'
+```
+
+Representative supported URL shape:
+
+- `https://github.com/search?q=cvpr+2026&type=repositories&s=stars&o=desc`
+
+Mode-specific behavior:
+
+- only GitHub repository-search URLs are supported in this first version
+- output rows use the shared six-column export schema: `Name`, `Url`, `Github`, `Stars`, `Created`, `About`
+- `Name` and `Url` are intentionally empty for GitHub-search exports
+- rows are sorted by `Created` descending before the CSV is written
+- the output filename includes the GitHub search query and sort/order parameters
+
+```bash
+uv run main.py 'https://github.com/search?q=cvpr+2026&type=repositories&s=stars&o=desc'
+```
+
+Output example:
+
+- `./output/github-search-cvpr-2026-o-desc-s-stars-type-repositories-20260326113045.csv`
 
 ### Single-paper arXiv relation export mode
 
@@ -331,7 +362,7 @@ Single-paper mode behavior:
 - relation normalization reuses `./cache.db` to cache non-direct relation resolution by source URL and DOI
 - cached positive matches store canonical arXiv `abs` URLs; cached negative matches are written only when all actually attempted resolver stages finish without transient/network failure and still find no accepted arXiv match, then retried after `ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS`
 - referenced and citing works are deduplicated by final normalized URL before export
-- both CSVs use the standard columns: `Name`, `Url`, `Github`, `Stars`
+- both CSVs use the shared six-column export schema: `Name`, `Url`, `Github`, `Stars`, `Created`, `About`
 - shared GitHub discovery, local overview / abs cache warming, and star enrichment are reused, so resolved and unresolved rows remain in the CSV even when no repo is found; in that case `Github` and `Stars` are left blank
 - the CLI reports success only after both CSV files are written; other arXiv or Semantic Scholar hard failures still return a nonzero exit code
 

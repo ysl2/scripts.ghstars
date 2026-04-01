@@ -7,6 +7,8 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 from src.csv_update.runner import run_csv_mode
+from src.github_search_to_csv.runner import run_github_search_mode
+from src.github_search_to_csv.search import is_supported_github_search_url
 from src.notion_sync.runner import run_notion_mode
 from src.url_to_csv.runner import run_url_mode
 from src.url_to_csv.sources import is_supported_url_source
@@ -97,6 +99,8 @@ async def async_main(argv: list[str] | None = None) -> int:
         return await run_arxiv_relations_mode(raw_input)
 
     if _is_url(raw_input):
+        if is_supported_github_search_url(raw_input):
+            return await run_github_search_mode(raw_input)
         if not is_supported_url_source(raw_input):
             print(f"Input file or URL not supported: {raw_input}", file=sys.stderr)
             return 1

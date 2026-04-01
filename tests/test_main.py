@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+import src.app as app_module
 from src.shared import runtime as runtime_module
 from src.shared.relation_resolution_cache import RelationResolutionCacheStore
 from src.shared.runtime import load_runtime_config, open_runtime_clients
@@ -280,3 +281,34 @@ async def test_open_runtime_clients_degrades_to_uncached_mode_if_relation_cache_
     assert close_calls == ["repo_cache"]
 
     assert close_calls == ["repo_cache"]
+
+
+@pytest.mark.anyio
+async def test_async_main_routes_supported_github_search_url_to_github_search_runner(
+    monkeypatch,
+):
+    called = []
+
+    async def fake_run_github_search_mode(raw_url: str):
+        called.append(raw_url)
+        return 0
+
+    async def fail_run_url_mode(raw_url: str):
+        raise AssertionError(f"unexpected url-mode dispatch for {raw_url}")
+
+    monkeypatch.setattr(
+        app_module,
+        "run_github_search_mode",
+        fake_run_github_search_mode,
+        raising=False,
+    )
+    monkeypatch.setattr(app_module, "run_url_mode", fail_run_url_mode, raising=False)
+
+    exit_code = await app_module.async_main(
+        ["https://github.com/search?q=cvpr+2026&type=repositories&s=stars&o=desc"]
+    )
+
+    assert exit_code == 0
+    assert called == [
+        "https://github.com/search?q=cvpr+2026&type=repositories&s=stars&o=desc"
+    ]

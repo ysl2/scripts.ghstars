@@ -17,7 +17,7 @@ Responsibilities by layer:
 - `main.py`
   Re-exports the real entrypoint from `src.app`.
 - `src/app.py`
-  Parses the single positional argument shape and dispatches to one of four modes.
+  Parses the single positional argument shape and dispatches to one of five modes.
 - `src/<mode>/runner.py`
   Builds config, HTTP clients, caches, and progress callbacks.
 - `src/<mode>/pipeline.py`
@@ -27,7 +27,7 @@ Responsibilities by layer:
 
 This split is the core architectural rule of the repository: keep input-shape dispatch and mode wiring thin; keep reusable paper-processing logic in `src/shared/`.
 
-## The Four Modes
+## The Five Modes
 
 ### 1. Notion sync
 
@@ -83,7 +83,29 @@ Special rule:
 - Existing arXiv URLs are preserved as-is in the output row.
 - Canonical arXiv URLs are still used internally for identity, dedupe, and downstream cache lookups.
 
-### 4. Single-paper arXiv relation export
+### 4. GitHub repository search -> CSV
+
+Path:
+
+- `src/github_search_to_csv/runner.py`
+- `src/github_search_to_csv/pipeline.py`
+- `src/github_search_to_csv/search.py`
+- `src/github_search_to_csv/models.py`
+
+Purpose:
+
+- Accept GitHub repository-search URLs on the main CLI.
+- Harvest repositories through the GitHub Search API.
+- Split oversized searches recursively by `stars` and `created`.
+- Export fresh rows into the shared six-column CSV schema under `./output`.
+
+Special rule:
+
+- This family is intentionally separate from paper normalization and paper enrichment.
+- `Name` and `Url` stay empty by design for GitHub-search exports.
+- Fresh GitHub-search exports sort rows by `Created` descending before write.
+
+### 5. Single-paper arXiv relation export
 
 Path:
 
@@ -161,6 +183,7 @@ Key files:
 
 - `src/shared/paper_enrichment.py`
 - `src/shared/paper_export.py`
+- `src/shared/csv_rows.py`
 - `src/shared/papers.py`
 - `src/shared/csv_io.py`
 - `src/shared/paper_content.py`
@@ -170,6 +193,7 @@ Responsibilities:
 
 - Apply shared paper processing once a row is in the common enrichment path.
 - Normalize URLs, discover GitHub, warm local content cache, fetch stars, and write CSV records.
+- Define the shared six-column CSV row contract reused by paper exports and GitHub-search exports.
 
 Design intent:
 
