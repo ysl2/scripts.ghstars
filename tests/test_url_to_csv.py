@@ -1199,9 +1199,11 @@ async def test_run_url_mode_supports_semanticscholar_url_without_constructing_ex
         ):
             self.session = session
             self.search_calls = []
+            self.graph_url = "https://api.semanticscholar.org/graph/v1"
 
-        async def fetch_search_bulk_page(self, params: dict[str, str]):
-            self.search_calls.append(dict(params))
+        async def _get_json(self, url: str, *, params=None):
+            assert url == f"{self.graph_url}/paper/search/bulk"
+            self.search_calls.append(dict(params or {}))
             return {
                 "data": [
                     {

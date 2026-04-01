@@ -163,7 +163,7 @@ async def resolve_arxiv_url(
                     script_derived=True,
                 )
 
-    if callable(semantic_title_lookup) and normalized_title:
+    if allow_title_search and callable(semantic_title_lookup) and normalized_title:
         try:
             arxiv_url, resolved_title, source = await semantic_title_lookup(normalized_title)
         except (RuntimeError, aiohttp.ClientError, asyncio.TimeoutError):

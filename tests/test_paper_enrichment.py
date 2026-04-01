@@ -166,6 +166,12 @@ async def test_process_single_paper_skips_title_search_when_request_flag_is_fals
     arxiv_client = types.SimpleNamespace(
         get_arxiv_id_by_title=AsyncMock(return_value=("2603.10004", "title_search_arxiv", None))
     )
+    semanticscholar_graph_client = types.SimpleNamespace(
+        find_arxiv_match_by_identifier=AsyncMock(return_value=(None, None, None)),
+        find_arxiv_match_by_title=AsyncMock(
+            return_value=("https://arxiv.org/abs/2603.10004", "Mapped Title", "semantic_scholar_title_exact")
+        ),
+    )
 
     result = await process_single_paper(
         PaperEnrichmentRequest(
@@ -178,6 +184,7 @@ async def test_process_single_paper_skips_title_search_when_request_flag_is_fals
         discovery_client=discovery_client,
         github_client=github_client,
         arxiv_client=arxiv_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
     )
 
     assert result.normalized_url is None
@@ -187,6 +194,12 @@ async def test_process_single_paper_skips_title_search_when_request_flag_is_fals
     discovery_client.resolve_github_url.assert_not_awaited()
     github_client.get_star_count.assert_not_awaited()
     arxiv_client.get_arxiv_id_by_title.assert_not_awaited()
+    semanticscholar_graph_client.find_arxiv_match_by_identifier.assert_awaited_once_with(
+        "https://example.com/no-arxiv",
+        title="Paper F",
+        allow_title_fallback=False,
+    )
+    semanticscholar_graph_client.find_arxiv_match_by_title.assert_not_awaited()
 
 
 @pytest.mark.anyio
