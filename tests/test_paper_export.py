@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 import src.shared.paper_export as paper_export
-from src.shared.papers import PaperOutcome, PaperRecord, PaperSeed
+from src.shared.csv_rows import CsvRow
+from src.shared.papers import PaperOutcome, PaperSeed
 
 
 @pytest.mark.anyio
@@ -19,11 +20,13 @@ async def test_export_paper_seeds_to_csv_limits_started_tasks_to_worker_count(tm
         await release.wait()
         return PaperOutcome(
             index=index,
-            record=PaperRecord(
+            record=CsvRow(
                 name=seed.name,
                 url=seed.url,
                 github="",
                 stars="",
+                created="",
+                about="",
                 sort_index=index,
             ),
             reason=None,
@@ -97,6 +100,9 @@ async def test_build_paper_outcome_threads_metadata_clients_to_process_single_pa
     )
 
     assert outcome.record.url == "https://arxiv.org/abs/2501.00001"
+    assert isinstance(outcome.record, CsvRow)
+    assert outcome.record.created == ""
+    assert outcome.record.about == ""
     assert received["arxiv_client"] is arxiv_client
     assert received["semanticscholar_graph_client"] is semanticscholar_graph_client
     assert received["crossref_client"] is crossref_client
@@ -143,9 +149,12 @@ async def test_build_paper_outcome_uses_arxiv_html_title_search_after_semantic_s
     )
 
     assert outcome.reason is None
+    assert isinstance(outcome.record, CsvRow)
     assert outcome.record.url == "https://arxiv.org/abs/2501.54321"
     assert outcome.record.github == "https://github.com/foo/bar"
     assert outcome.record.stars == 12
+    assert outcome.record.created == ""
+    assert outcome.record.about == ""
     semanticscholar_graph_client.find_arxiv_match_by_identifier.assert_awaited_once_with(
         "https://doi.org/10.1145/example",
         title="Paper A",

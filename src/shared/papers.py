@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from src.shared.csv_rows import CsvRow
 from src.shared.paper_identity import arxiv_url_sort_key, extract_arxiv_id
 
 
@@ -24,7 +25,7 @@ class PaperRecord:
 @dataclass(frozen=True)
 class PaperOutcome:
     index: int
-    record: PaperRecord
+    record: PaperRecord | CsvRow
     reason: str | None
 
 

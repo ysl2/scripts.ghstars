@@ -1,9 +1,10 @@
 from pathlib import Path
 
 from src.shared.async_batch import iter_bounded_as_completed, resolve_worker_count
-from src.shared.csv_io import write_records_to_csv_path
+from src.shared.csv_io import write_rows_to_csv_path
+from src.shared.csv_rows import CsvRow
 from src.shared.paper_enrichment import PaperEnrichmentRequest, process_single_paper
-from src.shared.papers import ConversionResult, PaperOutcome, PaperRecord, PaperSeed
+from src.shared.papers import ConversionResult, PaperOutcome, PaperSeed
 
 
 async def build_paper_outcome(
@@ -44,11 +45,13 @@ async def build_paper_outcome(
 
     return PaperOutcome(
         index=index,
-        record=PaperRecord(
+        record=CsvRow(
             name=enrichment.title,
             url=enrichment.normalized_url or enrichment.raw_url or "",
             github=enrichment.github_url or "",
             stars=enrichment.stars if enrichment.reason is None else "",
+            created="",
+            about="",
             sort_index=index,
         ),
         reason=enrichment.reason,
@@ -93,7 +96,7 @@ async def export_paper_seeds_to_csv(
             arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
         )
 
-    records = []
+    rows = []
     resolved = 0
     skipped = []
     async for outcome in iter_bounded_as_completed(
@@ -101,7 +104,7 @@ async def export_paper_seeds_to_csv(
         build_seed_outcome,
         max_concurrent=worker_count,
     ):
-        records.append(outcome.record)
+        rows.append(outcome.record)
         if outcome.reason is None:
             resolved += 1
         else:
@@ -117,7 +120,7 @@ async def export_paper_seeds_to_csv(
             progress_callback(outcome, total)
 
     return ConversionResult(
-        csv_path=write_records_to_csv_path(records, csv_path),
+        csv_path=write_rows_to_csv_path(rows, csv_path),
         resolved=resolved,
         skipped=skipped,
     )
