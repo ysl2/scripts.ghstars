@@ -16,6 +16,7 @@ from src.shared.http import MAX_RETRIES, RateLimiter
 
 
 GITHUB_SEARCH_HOSTS = {"github.com", "www.github.com"}
+GITHUB_SEARCH_AUTHENTICATED_MIN_INTERVAL = 2.0
 GITHUB_SEARCH_UNAUTHENTICATED_MIN_INTERVAL = 6.0
 
 
@@ -132,8 +133,98 @@ def resolve_github_search_min_interval(
     requested_min_interval: float,
 ) -> float:
     if github_token.strip():
-        return requested_min_interval
+        return max(requested_min_interval, GITHUB_SEARCH_AUTHENTICATED_MIN_INTERVAL)
     return max(requested_min_interval, GITHUB_SEARCH_UNAUTHENTICATED_MIN_INTERVAL)
+
+
+def validate_search_payload(payload: dict) -> dict:
+    if payload.get("incomplete_results"):
+        raise RuntimeError(
+            "GitHub search returned incomplete_results; aborting to avoid partial export"
+        )
+    return payload
+
+
+def choose_partition_split(
+    partition: SearchPartition,
+    *,
+    default_created_after: date,
+    default_created_before: date,
+    default_stars_min: int,
+    default_stars_max: int,
+) -> tuple[str, tuple[SearchPartition, SearchPartition]] | None:
+    star_children = split_star_range(partition)
+    created_children = split_created_range(partition)
+
+    if star_children is None:
+        if created_children is None:
+            return None
+        return "created", created_children
+    if created_children is None:
+        return "stars", star_children
+
+    if _matches_default_star_range(partition, default_stars_min, default_stars_max):
+        return "stars", star_children
+    if _matches_default_created_range(
+        partition,
+        default_created_after,
+        default_created_before,
+    ):
+        return "created", created_children
+
+    star_fraction = _relative_star_span(partition, default_stars_min, default_stars_max)
+    created_fraction = _relative_created_span(
+        partition,
+        default_created_after,
+        default_created_before,
+    )
+    if created_fraction >= star_fraction:
+        return "created", created_children
+    return "stars", star_children
+
+
+def _matches_default_star_range(
+    partition: SearchPartition,
+    default_stars_min: int,
+    default_stars_max: int,
+) -> bool:
+    return (
+        partition.stars_min == default_stars_min
+        and partition.stars_max == default_stars_max
+    )
+
+
+def _matches_default_created_range(
+    partition: SearchPartition,
+    default_created_after: date,
+    default_created_before: date,
+) -> bool:
+    return (
+        partition.created_after == default_created_after
+        and partition.created_before == default_created_before
+    )
+
+
+def _relative_star_span(
+    partition: SearchPartition,
+    default_stars_min: int,
+    default_stars_max: int,
+) -> float:
+    if partition.stars_min is None or partition.stars_max is None:
+        return -1.0
+    default_span = max(default_stars_max - default_stars_min, 1)
+    return max(partition.stars_max - partition.stars_min, 0) / default_span
+
+
+def _relative_created_span(
+    partition: SearchPartition,
+    default_created_after: date,
+    default_created_before: date,
+) -> float:
+    if partition.created_after is None or partition.created_before is None:
+        return -1.0
+    default_span = max((default_created_before - default_created_after).days, 1)
+    return max((partition.created_before - partition.created_after).days, 0) / default_span
 
 
 class GitHubRepositorySearchClient:
@@ -173,7 +264,7 @@ class GitHubRepositorySearchClient:
                         headers=headers,
                     ) as response:
                         if response.status == 200:
-                            return await response.json()
+                            return validate_search_payload(await response.json())
 
                         if (
                             response.status == 403
@@ -311,24 +402,22 @@ async def collect_repositories(
                 progress(f"Collected {len(rows_by_url)} unique repositories so far")
             continue
 
-        star_children = split_star_range(partition)
-        if star_children is not None:
+        split_choice = choose_partition_split(
+            partition,
+            default_created_after=default_created_after,
+            default_created_before=default_created_before,
+            default_stars_min=default_stars_min,
+            default_stars_max=default_stars_max,
+        )
+        if split_choice is not None:
+            split_kind, children = split_choice
             if progress is not None:
+                label = "stars" if split_kind == "stars" else "created date"
                 progress(
-                    "Splitting by stars "
+                    f"Splitting by {label} "
                     f"({total_count} results): {render_query(partition)}"
                 )
-            pending.extend(reversed(star_children))
-            continue
-
-        created_children = split_created_range(partition)
-        if created_children is not None:
-            if progress is not None:
-                progress(
-                    "Splitting by created date "
-                    f"({total_count} results): {render_query(partition)}"
-                )
-            pending.extend(reversed(created_children))
+            pending.extend(reversed(children))
             continue
 
         raise RuntimeError(f"Could not reduce partition below API limit: {partition}")
