@@ -30,10 +30,15 @@ class SemanticScholarGraphClient:
         self.rate_limiter = RateLimiter(min_interval)
 
     async def fetch_paper_by_identifier(self, identifier: str) -> dict[str, Any] | None:
-        payload = await self._get_json(
-            f"{SEMANTIC_SCHOLAR_GRAPH_URL}/paper/{identifier}",
-            params={"fields": "paperId,title,externalIds"},
-        )
+        try:
+            payload = await self._get_json(
+                f"{SEMANTIC_SCHOLAR_GRAPH_URL}/paper/{identifier}",
+                params={"fields": "paperId,title,externalIds"},
+            )
+        except RuntimeError as exc:
+            if "(404)" in str(exc):
+                return None
+            raise
         return payload if isinstance(payload, dict) and payload.get("paperId") else None
 
     async def search_papers_by_title(
@@ -89,21 +94,28 @@ class SemanticScholarGraphClient:
                 f"{row_key}.externalIds",
             ]
         )
-        payload = await self._get_json(
-            f"{SEMANTIC_SCHOLAR_GRAPH_URL}/paper/{paper_id}/{relation_path}",
-            params={"fields": fields},
-        )
-        rows = payload.get("data")
-        if not isinstance(rows, list):
-            return []
-
         unwrapped: list[dict[str, Any]] = []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            related_paper = row.get(row_key)
-            if isinstance(related_paper, dict):
-                unwrapped.append(related_paper)
+        next_offset: int | None = 0
+
+        while next_offset is not None:
+            payload = await self._get_json(
+                f"{SEMANTIC_SCHOLAR_GRAPH_URL}/paper/{paper_id}/{relation_path}",
+                params={"fields": fields, "offset": next_offset},
+            )
+            rows = payload.get("data")
+            if isinstance(rows, list):
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    related_paper = row.get(row_key)
+                    if isinstance(related_paper, dict):
+                        unwrapped.append(related_paper)
+
+            maybe_next = payload.get("next")
+            if not isinstance(maybe_next, int) or maybe_next < 0 or maybe_next == next_offset:
+                next_offset = None
+            else:
+                next_offset = maybe_next
         return unwrapped
 
     async def _get_json(self, url: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:

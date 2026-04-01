@@ -68,6 +68,16 @@ async def test_fetch_paper_by_identifier_uses_graph_identifier_endpoint():
 
 
 @pytest.mark.anyio
+async def test_fetch_paper_by_identifier_returns_none_on_404():
+    session = FakeSession([FakeResponse(status=404)])
+    client = SemanticScholarGraphClient(session, min_interval=0, max_concurrent=1)
+
+    paper = await client.fetch_paper_by_identifier("DOI:10.1000/missing")
+
+    assert paper is None
+
+
+@pytest.mark.anyio
 async def test_fetch_references_unwraps_cited_paper_rows():
     session = FakeSession(
         [
@@ -92,6 +102,158 @@ async def test_fetch_references_unwraps_cited_paper_rows():
     ]
     assert session.calls[0]["url"] == f"{SEMANTIC_SCHOLAR_GRAPH_URL}/paper/target-id/references"
     assert session.calls[0]["params"]["fields"] == "citedPaper.paperId,citedPaper.title,citedPaper.externalIds"
+
+
+@pytest.mark.anyio
+async def test_fetch_references_follows_next_offset_for_second_page():
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "offset": 0,
+                    "next": 2,
+                    "data": [
+                        {"citedPaper": {"paperId": "p1", "title": "Ref 1", "externalIds": {}}},
+                        {"citedPaper": {"paperId": "p2", "title": "Ref 2", "externalIds": {}}},
+                    ],
+                }
+            ),
+            FakeResponse(
+                {
+                    "offset": 2,
+                    "data": [
+                        {"citedPaper": {"paperId": "p3", "title": "Ref 3", "externalIds": {}}},
+                    ],
+                }
+            ),
+        ]
+    )
+    client = SemanticScholarGraphClient(session, min_interval=0, max_concurrent=1)
+
+    references = await client.fetch_references({"paperId": "target-id"})
+
+    assert [row["paperId"] for row in references] == ["p1", "p2", "p3"]
+    assert len(session.calls) == 2
+    assert session.calls[0]["params"]["offset"] == 0
+    assert session.calls[1]["params"]["offset"] == 2
+
+
+@pytest.mark.anyio
+async def test_fetch_citations_unwraps_citing_paper_rows():
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "data": [
+                        {"citingPaper": {"paperId": "c1", "title": "Cit 1", "externalIds": {"DOI": "10.1000/c1"}}},
+                        {"ignored": {"paperId": "missing"}},
+                        {"citingPaper": {"paperId": "c2", "title": "Cit 2", "externalIds": {}}},
+                    ]
+                }
+            )
+        ]
+    )
+    client = SemanticScholarGraphClient(session, min_interval=0, max_concurrent=1)
+
+    citations = await client.fetch_citations({"paperId": "target-id"})
+
+    assert citations == [
+        {"paperId": "c1", "title": "Cit 1", "externalIds": {"DOI": "10.1000/c1"}},
+        {"paperId": "c2", "title": "Cit 2", "externalIds": {}},
+    ]
+    assert session.calls[0]["url"] == f"{SEMANTIC_SCHOLAR_GRAPH_URL}/paper/target-id/citations"
+    assert session.calls[0]["params"]["fields"] == "citingPaper.paperId,citingPaper.title,citingPaper.externalIds"
+
+
+@pytest.mark.anyio
+async def test_search_papers_by_title_uses_search_endpoint_and_filters_rows():
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "offset": 0,
+                    "next": 2,
+                    "data": [
+                        {"paperId": "p1", "title": "Paper 1", "externalIds": {}},
+                        "not-a-dict",
+                        {"paperId": "p2", "title": "Paper 2", "externalIds": {"DOI": "10.1000/p2"}},
+                    ],
+                }
+            )
+        ]
+    )
+    client = SemanticScholarGraphClient(session, min_interval=0, max_concurrent=1)
+
+    rows = await client.search_papers_by_title("example title", limit=2)
+
+    assert rows == [
+        {"paperId": "p1", "title": "Paper 1", "externalIds": {}},
+        {"paperId": "p2", "title": "Paper 2", "externalIds": {"DOI": "10.1000/p2"}},
+    ]
+    assert session.calls[0]["url"] == f"{SEMANTIC_SCHOLAR_GRAPH_URL}/paper/search"
+    assert session.calls[0]["params"]["query"] == "example title"
+    assert session.calls[0]["params"]["limit"] == 2
+
+
+@pytest.mark.anyio
+async def test_build_headers_injects_x_api_key_when_configured():
+    session = FakeSession([FakeResponse({"data": []})])
+    client = SemanticScholarGraphClient(
+        session,
+        semantic_scholar_api_key="secret-key",
+        min_interval=0,
+        max_concurrent=1,
+    )
+
+    await client.search_papers_by_title("example")
+
+    assert session.calls[0]["headers"]["x-api-key"] == "secret-key"
+
+
+@pytest.mark.anyio
+async def test_get_json_retries_429_using_retry_after_header(monkeypatch):
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(delay: float):
+        sleep_calls.append(delay)
+
+    monkeypatch.setattr("src.shared.semantic_scholar_graph.asyncio.sleep", fake_sleep)
+    session = FakeSession(
+        [
+            FakeResponse(status=429, headers={"Retry-After": "1.5"}),
+            FakeResponse({"data": []}, status=200),
+        ]
+    )
+    client = SemanticScholarGraphClient(session, min_interval=0, max_concurrent=1)
+
+    payload = await client._get_json(f"{SEMANTIC_SCHOLAR_GRAPH_URL}/paper/search")
+
+    assert payload == {"data": []}
+    assert sleep_calls == [1.5]
+    assert len(session.calls) == 2
+
+
+@pytest.mark.anyio
+async def test_get_json_retries_retryable_5xx(monkeypatch):
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(delay: float):
+        sleep_calls.append(delay)
+
+    monkeypatch.setattr("src.shared.semantic_scholar_graph.asyncio.sleep", fake_sleep)
+    session = FakeSession(
+        [
+            FakeResponse(status=503),
+            FakeResponse({"data": []}, status=200),
+        ]
+    )
+    client = SemanticScholarGraphClient(session, min_interval=0, max_concurrent=1)
+
+    payload = await client._get_json(f"{SEMANTIC_SCHOLAR_GRAPH_URL}/paper/search")
+
+    assert payload == {"data": []}
+    assert sleep_calls == [0.5]
+    assert len(session.calls) == 2
 
 
 def test_build_related_work_candidate_prefers_arxiv_then_doi_then_paper_url():
