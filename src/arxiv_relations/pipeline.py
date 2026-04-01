@@ -12,7 +12,6 @@ from src.shared.paper_identity import (
     build_arxiv_abs_url,
     extract_arxiv_id,
     extract_arxiv_id_from_single_paper_url,
-    normalize_doi_url,
 )
 from src.shared.papers import ConversionResult, PaperSeed
 from src.shared.relation_candidates import RelatedWorkCandidate
@@ -85,61 +84,6 @@ def _build_arxiv_doi_url(arxiv_url: str) -> str | None:
         return None
     return f"https://doi.org/10.48550/arxiv.{arxiv_id}"
 
-
-def _extract_openalex_work_title(work: dict) -> str:
-    return " ".join(str(work.get("display_name") or work.get("title") or "").split()).strip()
-
-
-def _matches_target_openalex_work(work: dict, *, arxiv_url: str, title: str, expected_doi: str | None) -> bool:
-    candidate_doi = normalize_doi_url(str(work.get("doi") or ""))
-    if expected_doi and candidate_doi == expected_doi:
-        return True
-
-    ids = work.get("ids") or {}
-    candidate_arxiv_id = str(ids.get("arxiv") or "").strip()
-    if candidate_arxiv_id and build_arxiv_abs_url(candidate_arxiv_id) == arxiv_url:
-        return True
-
-    candidate_title = _extract_openalex_work_title(work)
-    if candidate_title and normalize_title_for_matching(candidate_title) == normalize_title_for_matching(title):
-        return True
-
-    return False
-
-
-async def _resolve_target_openalex_work(arxiv_url: str, title: str, openalex_client) -> dict | None:
-    expected_doi = _build_arxiv_doi_url(arxiv_url)
-    exact_lookup = getattr(openalex_client, "fetch_work_by_identifier", None)
-    if expected_doi and callable(exact_lookup):
-        exact_work = await exact_lookup(expected_doi)
-        if isinstance(exact_work, dict) and _matches_target_openalex_work(
-            exact_work,
-            arxiv_url=arxiv_url,
-            title=title,
-            expected_doi=expected_doi,
-        ):
-            return exact_work
-
-    search_first_work = getattr(openalex_client, "search_first_work", None)
-    if not callable(search_first_work):
-        return None
-
-    fallback_work = await search_first_work(title)
-    if not isinstance(fallback_work, dict):
-        return None
-
-    if not callable(exact_lookup):
-        return fallback_work
-
-    fallback_identifier = str(fallback_work.get("id") or "").strip()
-    hydrated_work = await exact_lookup(fallback_identifier) if fallback_identifier else None
-    candidate = hydrated_work if isinstance(hydrated_work, dict) else fallback_work
-    if _matches_target_openalex_work(candidate, arxiv_url=arxiv_url, title=title, expected_doi=expected_doi):
-        return candidate
-
-    return None
-
-
 async def _resolve_target_semantic_scholar_paper(
     arxiv_url: str,
     title: str,
@@ -184,68 +128,31 @@ async def _resolve_target_semantic_scholar_paper(
 async def _fetch_primary_relation_candidates(
     *,
     relation_label: str,
-    semanticscholar_graph_client=None,
-    semantic_scholar_target_paper: dict | None = None,
-    openalex_client=None,
-    get_openalex_target_work,
+    semanticscholar_graph_client,
+    semantic_scholar_target_paper: dict,
     status_callback=None,
 ) -> list[RelatedWorkCandidate]:
-    is_references = relation_label == "references"
-    openalex_label = "referenced works" if is_references else "citations"
-    openalex_fetcher = (
-        openalex_client.fetch_referenced_works
-        if is_references
-        else openalex_client.fetch_citations
-    ) if openalex_client is not None else None
-    semantic_fetch_failed = False
-
-    if semanticscholar_graph_client is not None and semantic_scholar_target_paper is not None:
-        semantic_fetcher = (
-            semanticscholar_graph_client.fetch_references
-            if is_references
-            else semanticscholar_graph_client.fetch_citations
-        )
-        if callable(status_callback):
-            status_callback(f"🔎 Fetching Semantic Scholar {relation_label}")
-        try:
-            semantic_rows = await semantic_fetcher(semantic_scholar_target_paper)
-        except (RuntimeError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
-            semantic_fetch_failed = True
-            if callable(status_callback):
-                status_callback(f"⚠️ Semantic Scholar {relation_label} failed ({exc}); falling back to OpenAlex")
-        else:
-            if semantic_rows:
-                if callable(status_callback):
-                    status_callback(f"📚 Semantic Scholar returned {len(semantic_rows)} {relation_label}")
-                return [
-                    semanticscholar_graph_client.build_related_work_candidate(row)
-                    for row in semantic_rows
-                ]
-            if callable(status_callback):
-                status_callback(f"📚 Semantic Scholar {relation_label} empty; falling back to OpenAlex")
-
-    openalex_target_work = await get_openalex_target_work()
-    if openalex_target_work is None:
-        if semantic_fetch_failed:
-            raise ValueError(
-                f"Semantic Scholar {relation_label} fallback could not resolve OpenAlex target work"
-            )
-        if callable(status_callback):
-            status_callback(f"⚠️ OpenAlex target lookup missed; keeping empty {relation_label}")
-        return []
-
-    if openalex_fetcher is None:
-        return []
+    semantic_fetcher = (
+        semanticscholar_graph_client.fetch_references
+        if relation_label == "references"
+        else semanticscholar_graph_client.fetch_citations
+    )
     if callable(status_callback):
-        status_callback(f"🔎 Fetching OpenAlex {openalex_label}")
-    openalex_rows = await openalex_fetcher(openalex_target_work)
+        status_callback(f"🔎 Fetching Semantic Scholar {relation_label}")
+    try:
+        semantic_rows = await semantic_fetcher(semantic_scholar_target_paper)
+    except (RuntimeError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        raise RuntimeError(f"Semantic Scholar {relation_label} fetch failed: {exc}") from exc
     if callable(status_callback):
-        status_callback(f"📚 Retrieved {len(openalex_rows)} {openalex_label}")
-    return [openalex_client.build_related_work_candidate(row) for row in openalex_rows]
+        status_callback(f"📚 Semantic Scholar returned {len(semantic_rows)} {relation_label}")
+    return [
+        semanticscholar_graph_client.build_related_work_candidate(row)
+        for row in semantic_rows
+    ]
 
 
 def _fallback_related_work_url(candidate) -> str:
-    return candidate.doi_url or candidate.landing_page_url or candidate.openalex_url
+    return candidate.doi_url or candidate.landing_page_url or candidate.source_url
 
 
 def _build_retained_related_row(candidate, *, resolution_source: str | None = None) -> NormalizedRelatedRow:
@@ -266,7 +173,6 @@ async def _resolve_related_work_row(
     *,
     arxiv_client,
     semanticscholar_graph_client=None,
-    openalex_client=None,
     crossref_client=None,
     datacite_client=None,
     discovery_client=None,
@@ -297,7 +203,7 @@ async def _resolve_related_work_row(
         discovery_client=discovery_client,
         relation_resolution_cache=relation_resolution_cache,
         arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
-        extra_identifiers=[candidate.openalex_url, candidate.doi_url],
+        extra_identifiers=[candidate.source_url, candidate.doi_url],
     )
     if resolution.canonical_arxiv_url:
         resolved_title = resolution.resolved_title or candidate.title or resolution.canonical_arxiv_url
@@ -319,7 +225,6 @@ async def _resolve_related_work_rows(
     *,
     arxiv_client,
     semanticscholar_graph_client=None,
-    openalex_client=None,
     crossref_client=None,
     datacite_client=None,
     discovery_client=None,
@@ -336,7 +241,6 @@ async def _resolve_related_work_rows(
             candidate,
             arxiv_client=arxiv_client,
             semanticscholar_graph_client=semanticscholar_graph_client,
-            openalex_client=openalex_client,
             crossref_client=crossref_client,
             datacite_client=datacite_client,
             discovery_client=discovery_client,
@@ -393,7 +297,6 @@ async def normalize_related_works_to_rows(
     candidates = [openalex_client.build_related_work_candidate(work) for work in related_works]
     return await normalize_related_work_candidates_to_rows(
         candidates,
-        openalex_client=openalex_client,
         arxiv_client=arxiv_client,
         semanticscholar_graph_client=semanticscholar_graph_client,
         crossref_client=crossref_client,
@@ -411,7 +314,6 @@ async def normalize_related_work_candidates_to_rows(
     *,
     arxiv_client,
     semanticscholar_graph_client=None,
-    openalex_client=None,
     crossref_client=None,
     datacite_client=None,
     discovery_client=None,
@@ -424,7 +326,6 @@ async def normalize_related_work_candidates_to_rows(
         related_work_candidates,
         arxiv_client=arxiv_client,
         semanticscholar_graph_client=semanticscholar_graph_client,
-        openalex_client=openalex_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
         discovery_client=discovery_client,
@@ -441,7 +342,6 @@ async def normalize_related_work_candidates_to_seeds(
     *,
     arxiv_client,
     semanticscholar_graph_client=None,
-    openalex_client=None,
     crossref_client=None,
     datacite_client=None,
     discovery_client=None,
@@ -453,7 +353,6 @@ async def normalize_related_work_candidates_to_seeds(
         related_work_candidates,
         arxiv_client=arxiv_client,
         semanticscholar_graph_client=semanticscholar_graph_client,
-        openalex_client=openalex_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
         discovery_client=discovery_client,
@@ -493,7 +392,6 @@ async def normalize_related_works_to_seeds(
         related_work_candidates,
         arxiv_client=arxiv_client,
         semanticscholar_graph_client=semanticscholar_graph_client,
-        openalex_client=openalex_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
         discovery_client=discovery_client,
@@ -531,59 +429,34 @@ async def export_arxiv_relations_to_csv(
     if callable(status_callback):
         status_callback(f"📄 Resolved title: {title}")
 
-    semantic_scholar_target_paper = None
-    if semanticscholar_graph_client is not None:
-        if callable(status_callback):
-            status_callback("🔎 Resolving Semantic Scholar target paper")
-        try:
-            semantic_scholar_target_paper = await _resolve_target_semantic_scholar_paper(
-                arxiv_url,
-                title,
-                semanticscholar_graph_client,
-            )
-        except (RuntimeError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
-            if callable(status_callback):
-                status_callback(f"⚠️ Semantic Scholar target lookup failed ({exc}); falling back to OpenAlex")
-        else:
-            if callable(status_callback):
-                if semantic_scholar_target_paper is not None:
-                    status_callback("📄 Resolved Semantic Scholar target paper")
-                else:
-                    status_callback("📄 Semantic Scholar target lookup missed; falling back to OpenAlex")
+    if semanticscholar_graph_client is None:
+        raise ValueError("Semantic Scholar Graph client is required for single-paper relation export")
 
-    openalex_target_work: dict | None = None
-    openalex_target_work_resolved = False
-
-    async def get_openalex_target_work() -> dict | None:
-        nonlocal openalex_target_work
-        nonlocal openalex_target_work_resolved
-        if not openalex_target_work_resolved:
-            if openalex_client is not None:
-                openalex_target_work = await _resolve_target_openalex_work(arxiv_url, title, openalex_client)
-            openalex_target_work_resolved = True
-        return openalex_target_work
-
+    if callable(status_callback):
+        status_callback("🔎 Resolving Semantic Scholar target paper")
+    try:
+        semantic_scholar_target_paper = await _resolve_target_semantic_scholar_paper(
+            arxiv_url,
+            title,
+            semanticscholar_graph_client,
+        )
+    except (RuntimeError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        raise RuntimeError(f"Semantic Scholar target lookup failed: {exc}") from exc
     if semantic_scholar_target_paper is None:
-        target_work = await get_openalex_target_work()
-        if not target_work:
-            if semanticscholar_graph_client is None:
-                raise ValueError(f"No OpenAlex work found for title: {title}")
-            raise ValueError(f"No relation target found for title: {title}")
+        raise ValueError(f"No Semantic Scholar paper found for title: {title}")
+    if callable(status_callback):
+        status_callback("📄 Resolved Semantic Scholar target paper")
 
     reference_candidates = await _fetch_primary_relation_candidates(
         relation_label="references",
         semanticscholar_graph_client=semanticscholar_graph_client,
         semantic_scholar_target_paper=semantic_scholar_target_paper,
-        openalex_client=openalex_client,
-        get_openalex_target_work=get_openalex_target_work,
         status_callback=status_callback,
     )
     citation_candidates = await _fetch_primary_relation_candidates(
         relation_label="citations",
         semanticscholar_graph_client=semanticscholar_graph_client,
         semantic_scholar_target_paper=semantic_scholar_target_paper,
-        openalex_client=openalex_client,
-        get_openalex_target_work=get_openalex_target_work,
         status_callback=status_callback,
     )
 
@@ -593,7 +466,6 @@ async def export_arxiv_relations_to_csv(
         reference_candidates,
         arxiv_client=arxiv_client,
         semanticscholar_graph_client=semanticscholar_graph_client,
-        openalex_client=openalex_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
         discovery_client=discovery_client,
@@ -612,7 +484,6 @@ async def export_arxiv_relations_to_csv(
         citation_candidates,
         arxiv_client=arxiv_client,
         semanticscholar_graph_client=semanticscholar_graph_client,
-        openalex_client=openalex_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
         discovery_client=discovery_client,
