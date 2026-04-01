@@ -518,4 +518,3 @@ def test_build_related_work_candidate_prefers_arxiv_then_doi_then_paper_url():
         landing_page_url="https://www.semanticscholar.org/paper/paper-only",
         source_url="https://www.semanticscholar.org/paper/paper-only",
     )
-    assert not hasattr(arxiv_candidate, "openalex_url")

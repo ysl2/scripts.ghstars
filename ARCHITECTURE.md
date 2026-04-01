@@ -94,7 +94,7 @@ Path:
 Purpose:
 
 - Start from one arXiv paper.
-- Fetch references and citations from OpenAlex.
+- Fetch references and citations from Semantic Scholar Graph API.
 - Resolve related works to arXiv when possible.
 - Export two CSVs under `./output`.
 
@@ -111,20 +111,20 @@ Key files:
 - `src/shared/paper_identity.py`
 - `src/shared/arxiv_url_resolution.py`
 - `src/shared/arxiv.py`
-- `src/shared/openalex.py`
+- `src/shared/semantic_scholar_graph.py`
 - `src/shared/crossref.py`
 - `src/shared/datacite.py`
 
 Responsibilities:
 
 - Normalize paper URLs and identifiers.
-- Run the shared DOI/OpenAlex/title-based arXiv resolution ladder used by CSV, Notion, URL, and relation flows.
+- Run the shared Semantic Scholar-backed arXiv resolution ladder used by CSV, Notion, URL, and relation flows.
 - Detect whether an input is already arXiv-hosted.
-- Resolve DOI / OpenAlex work URLs to arXiv when possible.
+- Resolve DOI / source URLs to arXiv when possible.
 
 Current shared non-arXiv -> arXiv resolution order:
 
-`cache -> OpenAlex exact -> arXiv HTML title search -> Crossref -> DataCite`
+`cache -> Semantic Scholar exact -> Semantic Scholar title exact -> arXiv title search -> Crossref -> DataCite -> Hugging Face`
 
 Important semantics:
 
@@ -218,7 +218,7 @@ Path:
 
 Meaning:
 
-- Key: DOI URL or OpenAlex work URL
+- Key: DOI URL or source URL
 - Value: resolved arXiv URL plus optional resolved title, or a negative normalization result
 
 ### 3. Filesystem content cache

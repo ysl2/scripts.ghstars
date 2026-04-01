@@ -280,10 +280,10 @@ def _dedupe_normalized_rows(rows: list[NormalizedRelatedRow]) -> list[Normalized
     return list(winners_by_url.values())
 
 
-async def normalize_related_works_to_rows(
-    related_works: list[dict],
+async def normalize_related_papers_to_rows(
+    related_papers: list[dict],
     *,
-    openalex_client,
+    related_work_candidate_builder,
     arxiv_client,
     semanticscholar_graph_client=None,
     crossref_client=None,
@@ -294,7 +294,10 @@ async def normalize_related_works_to_rows(
     resolve_arxiv_url_fn=None,
     progress_callback=None,
 ) -> list[NormalizedRelatedRow]:
-    candidates = [openalex_client.build_related_work_candidate(work) for work in related_works]
+    candidates = [
+        related_work_candidate_builder.build_related_work_candidate(paper)
+        for paper in related_papers
+    ]
     return await normalize_related_work_candidates_to_rows(
         candidates,
         arxiv_client=arxiv_client,
@@ -371,10 +374,10 @@ async def normalize_related_work_candidates_to_seeds(
     ]
 
 
-async def normalize_related_works_to_seeds(
-    related_works: list[dict],
+async def normalize_related_papers_to_seeds(
+    related_papers: list[dict],
     *,
-    openalex_client,
+    related_work_candidate_builder,
     arxiv_client,
     semanticscholar_graph_client=None,
     crossref_client=None,
@@ -385,8 +388,8 @@ async def normalize_related_works_to_seeds(
     progress_callback=None,
 ) -> list[PaperSeed]:
     related_work_candidates = [
-        openalex_client.build_related_work_candidate(work)
-        for work in related_works
+        related_work_candidate_builder.build_related_work_candidate(paper)
+        for paper in related_papers
     ]
     return await normalize_related_work_candidates_to_seeds(
         related_work_candidates,
@@ -405,7 +408,6 @@ async def export_arxiv_relations_to_csv(
     arxiv_input: str,
     *,
     arxiv_client,
-    openalex_client,
     semanticscholar_graph_client=None,
     crossref_client=None,
     datacite_client=None,

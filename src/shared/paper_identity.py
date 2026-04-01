@@ -4,7 +4,6 @@ from urllib.parse import urlparse, urlunparse
 
 ARXIV_HOSTS = {"arxiv.org", "www.arxiv.org"}
 DOI_HOSTS = {"doi.org", "www.doi.org", "dx.doi.org"}
-OPENALEX_HOSTS = {"openalex.org", "www.openalex.org", "api.openalex.org"}
 ARXIV_URL_PATTERN = re.compile(
     r"arxiv\.org/(?:abs|pdf)/([0-9]{4}\.[0-9]{4,5})(?:v\d+)?(?:\.pdf)?",
     re.IGNORECASE,
@@ -15,7 +14,6 @@ ARXIV_SINGLE_PAPER_PATTERN = re.compile(
 )
 SEMANTIC_SCHOLAR_HOSTS = {"semanticscholar.org", "www.semanticscholar.org"}
 DOI_TEXT_PATTERN = re.compile(r"^10\.\d{4,9}/\S+$", re.IGNORECASE)
-OPENALEX_WORK_PATH_PATTERN = re.compile(r"^/(?:works/)?(?P<id>W[\w.-]+)$", re.IGNORECASE)
 
 
 def extract_arxiv_id(url: str) -> str | None:
@@ -90,21 +88,6 @@ def normalize_doi_url(url: str) -> str | None:
     if not DOI_TEXT_PATTERN.fullmatch(doi):
         return None
     return f"https://doi.org/{doi}"
-
-
-def normalize_openalex_work_url(url: str) -> str | None:
-    if not url or not isinstance(url, str):
-        return None
-
-    parsed = urlparse(url.strip())
-    host = (parsed.hostname or parsed.netloc or "").lower()
-    if parsed.scheme not in {"http", "https"} or host not in OPENALEX_HOSTS:
-        return None
-
-    match = OPENALEX_WORK_PATH_PATTERN.fullmatch(re.sub(r"/+", "/", parsed.path or ""))
-    if not match:
-        return None
-    return f"https://openalex.org/{match.group('id')}"
 
 
 def normalize_semanticscholar_paper_url(url: str) -> str | None:

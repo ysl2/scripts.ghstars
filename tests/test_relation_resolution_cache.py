@@ -114,7 +114,7 @@ def test_relation_resolution_cache_store_migrates_existing_db_without_resolved_t
     assert updated.resolved_title == "Migrated Cached Title"
 
 
-def test_relation_resolution_cache_store_deletes_legacy_openalex_rows_on_init(tmp_path):
+def test_relation_resolution_cache_store_deletes_unsupported_legacy_rows_on_init(tmp_path):
     db_path = tmp_path / "cache.db"
     connection = sqlite3.connect(db_path)
     connection.execute(
@@ -135,8 +135,8 @@ def test_relation_resolution_cache_store_deletes_legacy_openalex_rows_on_init(tm
         VALUES (?, ?, ?, ?, ?)
         """,
         (
-            "openalex_work",
-            "https://openalex.org/W123",
+            "legacy_source",
+            "https://legacy.example/paper/123",
             "https://arxiv.org/abs/2501.12345",
             "Old",
             datetime.now(timezone.utc).isoformat(),
@@ -147,7 +147,7 @@ def test_relation_resolution_cache_store_deletes_legacy_openalex_rows_on_init(tm
 
     store = RelationResolutionCacheStore(db_path)
 
-    assert store.get("openalex_work", "https://openalex.org/W123") is None
+    assert store.get("legacy_source", "https://legacy.example/paper/123") is None
 
 
 def test_relation_resolution_cache_negative_freshness_uses_days_threshold():

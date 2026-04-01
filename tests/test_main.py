@@ -61,14 +61,14 @@ def test_load_runtime_config_falls_back_to_default_recheck_days_for_invalid_valu
     assert load_runtime_config({"REPO_DISCOVERY_NO_REPO_RECHECK_DAYS": "abc"})["repo_discovery_no_repo_recheck_days"] == 7
 
 
-def test_load_runtime_config_does_not_expose_openalex_token():
+def test_load_runtime_config_ignores_unknown_legacy_tokens():
     config = load_runtime_config(
         {
-            "OPENALEX_API_KEY": "oa_key",
+            "LEGACY_METADATA_TOKEN": "legacy_key",
         }
     )
 
-    assert "openalex_api_key" not in config
+    assert "LEGACY_METADATA_TOKEN" not in config
 
 
 def test_load_runtime_config_reads_optional_semantic_scholar_api_key():
@@ -109,6 +109,14 @@ def test_load_runtime_config_defaults_relation_resolution_recheck_days():
 
 def test_env_example_includes_aiforscholar_token():
     assert "AIFORSCHOLAR_TOKEN=" in Path(".env.example").read_text()
+
+
+def test_env_example_lists_only_semantic_scholar_relation_tokens():
+    text = Path(".env.example").read_text()
+
+    assert "SEMANTIC_SCHOLAR_API_KEY=" in text
+    assert "AIFORSCHOLAR_TOKEN=" in text
+    assert "ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS=30" in text
 
 
 class FakeSession:

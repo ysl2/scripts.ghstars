@@ -1,9 +1,10 @@
 import argparse
+import sqlite3
 import sys
 from pathlib import Path
 
 from src.shared.relation_resolution_cache import RelationResolutionCacheStore
-from src.shared.repo_cache import RepoCacheStore
+from src.shared.repo_cache import RepoCacheStats, RepoCacheStore
 from src.shared.settings import REPO_CACHE_DB_PATH
 
 
@@ -40,19 +41,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Repo cache DB not found: {db_path}", file=sys.stderr)
         return 1
 
-    repo_store = RepoCacheStore(db_path)
-    relation_store = RelationResolutionCacheStore(db_path)
-    try:
-        stats = repo_store.get_stats()
-        negative_entry_count = repo_store.count_negative_repo_discovery_entries()
-        relation_negative_entry_count = relation_store.count_negative_entries()
-        print(f"Repo cache DB: {db_path}")
-        print(f"Total entries: {stats.total_entries}")
-        print(f"Positive entries: {stats.positive_entries}")
-        print(f"Negative entries: {stats.negative_entries}")
-        print(f"Relation negative entries: {relation_negative_entry_count}")
+    if args.apply:
+        repo_store = RepoCacheStore(db_path)
+        relation_store = RelationResolutionCacheStore(db_path)
+        try:
+            stats = repo_store.get_stats()
+            relation_negative_entry_count = relation_store.count_negative_entries()
+            print(f"Repo cache DB: {db_path}")
+            print(f"Total entries: {stats.total_entries}")
+            print(f"Positive entries: {stats.positive_entries}")
+            print(f"Negative entries: {stats.negative_entries}")
+            print(f"Relation negative entries: {relation_negative_entry_count}")
 
-        if args.apply:
             deleted = repo_store.delete_negative_repo_discovery_entries()
             deleted_relation = relation_store.delete_negative_entries()
             after = repo_store.get_stats()
@@ -62,24 +62,88 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Remaining entries: {after.total_entries}")
             print(f"Remaining positive entries: {after.positive_entries}")
             print(f"Remaining negative entries: {after.negative_entries}")
-        else:
-            print(
-                "Dry run: found "
-                f"{negative_entry_count} negative repo discovery cache entries in {db_path}. "
-                "Re-run with --apply to delete them."
-            )
-            print(
-                "Dry run: found "
-                f"{relation_negative_entry_count} negative relation resolution cache entries in {db_path}. "
-                "Re-run with --apply to delete them."
-            )
-            print(f"Dry run: would delete {stats.negative_entries + relation_negative_entry_count} negative entries")
-            print("Re-run with --apply to delete them")
+            return 0
+        finally:
+            relation_store.close()
+            repo_store.close()
 
-        return 0
-    finally:
-        relation_store.close()
-        repo_store.close()
+    stats = _read_repo_cache_stats(db_path)
+    negative_entry_count = stats.negative_entries
+    relation_negative_entry_count = _count_relation_negative_entries(db_path)
+    print(f"Repo cache DB: {db_path}")
+    print(f"Total entries: {stats.total_entries}")
+    print(f"Positive entries: {stats.positive_entries}")
+    print(f"Negative entries: {stats.negative_entries}")
+    print(f"Relation negative entries: {relation_negative_entry_count}")
+    print(
+        "Dry run: found "
+        f"{negative_entry_count} negative repo discovery cache entries in {db_path}. "
+        "Re-run with --apply to delete them."
+    )
+    print(
+        "Dry run: found "
+        f"{relation_negative_entry_count} negative relation resolution cache entries in {db_path}. "
+        "Re-run with --apply to delete them."
+    )
+    print(f"Dry run: would delete {stats.negative_entries + relation_negative_entry_count} negative entries")
+    print("Re-run with --apply to delete them")
+    return 0
+
+
+def _read_repo_cache_stats(db_path: Path):
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        if not _table_exists(connection, "repo_cache"):
+            return RepoCacheStats(total_entries=0, positive_entries=0, negative_entries=0)
+
+        row = connection.execute(
+            """
+            SELECT
+                COUNT(*) AS total_entries,
+                SUM(CASE WHEN github_url IS NOT NULL AND TRIM(github_url) <> '' THEN 1 ELSE 0 END) AS positive_entries,
+                SUM(
+                    CASE
+                        WHEN (github_url IS NULL OR TRIM(github_url) = '')
+                         AND last_repo_discovery_checked_at IS NOT NULL THEN 1
+                        ELSE 0
+                    END
+                ) AS negative_entries
+            FROM repo_cache
+            """
+        ).fetchone()
+    return RepoCacheStats(
+        total_entries=int((row["total_entries"] if row is not None else 0) or 0),
+        positive_entries=int((row["positive_entries"] if row is not None else 0) or 0),
+        negative_entries=int((row["negative_entries"] if row is not None else 0) or 0),
+    )
+
+
+def _count_relation_negative_entries(db_path: Path) -> int:
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        if not _table_exists(connection, "relation_resolution_cache"):
+            return 0
+
+        row = connection.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM relation_resolution_cache
+            WHERE arxiv_url IS NULL OR TRIM(arxiv_url) = ''
+            """
+        ).fetchone()
+    return int((row["count"] if row is not None else 0) or 0)
+
+
+def _table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
+    row = connection.execute(
+        """
+        SELECT 1
+        FROM sqlite_master
+        WHERE type = 'table' AND name = ?
+        """,
+        (table_name,),
+    ).fetchone()
+    return row is not None
 
 
 if __name__ == "__main__":

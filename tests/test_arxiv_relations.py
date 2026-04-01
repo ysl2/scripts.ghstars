@@ -145,7 +145,7 @@ def test_dedup_breaks_equal_normalized_titles_by_original_title():
     ]
 
 
-def test_dedup_breaks_same_strength_title_mapped_ties_by_original_openalex_title():
+def test_dedup_breaks_same_strength_title_mapped_ties_by_original_source_title():
     from src.arxiv_relations.pipeline import (
         NormalizationStrength,
         NormalizedRelatedRow,
@@ -215,9 +215,9 @@ def test_dedup_breaks_title_mapped_ties_by_final_title_before_original_title():
 
 @pytest.mark.anyio
 async def test_normalize_related_works_maps_non_arxiv_title_hits_to_canonical_arxiv():
-    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+    from src.arxiv_relations.pipeline import normalize_related_papers_to_seeds
 
-    class FakeOpenAlexClient:
+    class FakeRelatedPaperBuilder:
         def build_related_work_candidate(self, work: dict):
             mapping = {
                 "R1": RelatedWorkCandidate(
@@ -225,21 +225,21 @@ async def test_normalize_related_works_maps_non_arxiv_title_hits_to_canonical_ar
                     direct_arxiv_url="https://arxiv.org/abs/2403.00001",
                     doi_url=None,
                     landing_page_url=None,
-                    source_url="https://openalex.org/W1",
+                    source_url="https://www.semanticscholar.org/paper/Seed/W1",
                 ),
                 "R2": RelatedWorkCandidate(
-                    title="Original OpenAlex Title",
+                    title="Original Source Title",
                     direct_arxiv_url=None,
                     doi_url=None,
                     landing_page_url="https://publisher.example/mapped",
-                    source_url="https://openalex.org/W2",
+                    source_url="https://www.semanticscholar.org/paper/Seed/W2",
                 ),
             }
             return mapping[work["id"]]
 
     class FakeArxivClient:
         async def get_arxiv_id_by_title(self, title: str):
-            if title == "Original OpenAlex Title":
+            if title == "Original Source Title":
                 return "2501.12345", "title_search_exact", None
             raise AssertionError(f"Unexpected title search: {title}")
 
@@ -257,9 +257,9 @@ async def test_normalize_related_works_maps_non_arxiv_title_hits_to_canonical_ar
             raise AssertionError(f"Unexpected arXiv title lookup: {arxiv_identifier}")
 
     related_works = [{"id": "R1"}, {"id": "R2"}]
-    seeds = await normalize_related_works_to_seeds(
+    seeds = await normalize_related_papers_to_seeds(
         related_works,
-        openalex_client=FakeOpenAlexClient(),
+        related_work_candidate_builder=FakeRelatedPaperBuilder(),
         arxiv_client=FakeArxivClient(),
     )
 
@@ -270,10 +270,10 @@ async def test_normalize_related_works_maps_non_arxiv_title_hits_to_canonical_ar
 
 
 @pytest.mark.anyio
-async def test_normalize_related_work_candidates_to_seeds_matches_openalex_wrapper_behavior():
+async def test_normalize_related_work_candidates_to_seeds_matches_legacy_metadata_wrapper_behavior():
     from src.arxiv_relations.pipeline import (
         normalize_related_work_candidates_to_seeds,
-        normalize_related_works_to_seeds,
+        normalize_related_papers_to_seeds,
     )
 
     candidates = [
@@ -282,25 +282,25 @@ async def test_normalize_related_work_candidates_to_seeds_matches_openalex_wrapp
             direct_arxiv_url="https://arxiv.org/abs/2403.00001",
             doi_url=None,
             landing_page_url=None,
-            source_url="https://openalex.org/W1",
+            source_url="https://www.semanticscholar.org/paper/Seed/W1",
         ),
         RelatedWorkCandidate(
-            title="Original OpenAlex Title",
+            title="Original Source Title",
             direct_arxiv_url=None,
             doi_url=None,
             landing_page_url="https://publisher.example/mapped",
-            source_url="https://openalex.org/W2",
+            source_url="https://www.semanticscholar.org/paper/Seed/W2",
         ),
     ]
 
-    class FakeOpenAlexClient:
+    class FakeRelatedPaperBuilder:
         def build_related_work_candidate(self, work: dict):
             mapping = {"R1": candidates[0], "R2": candidates[1]}
             return mapping[work["id"]]
 
     class FakeArxivClient:
         async def get_arxiv_id_by_title(self, title: str):
-            if title == "Original OpenAlex Title":
+            if title == "Original Source Title":
                 return "2501.12345", "title_search_exact", None
             raise AssertionError(f"Unexpected title search: {title}")
 
@@ -319,13 +319,13 @@ async def test_normalize_related_work_candidates_to_seeds_matches_openalex_wrapp
         candidates,
         arxiv_client=FakeArxivClient(),
     )
-    from_openalex_rows = await normalize_related_works_to_seeds(
+    from_legacy_metadata_rows = await normalize_related_papers_to_seeds(
         [{"id": "R1"}, {"id": "R2"}],
-        openalex_client=FakeOpenAlexClient(),
+        related_work_candidate_builder=FakeRelatedPaperBuilder(),
         arxiv_client=FakeArxivClient(),
     )
 
-    assert from_candidates == from_openalex_rows == [
+    assert from_candidates == from_legacy_metadata_rows == [
         PaperSeed(name="Direct Paper", url="https://arxiv.org/abs/2403.00001"),
         PaperSeed(name="Mapped Arxiv Title", url="https://arxiv.org/abs/2501.12345"),
     ]
@@ -333,7 +333,7 @@ async def test_normalize_related_work_candidates_to_seeds_matches_openalex_wrapp
 
 @pytest.mark.anyio
 async def test_normalize_related_works_uses_shared_resolver_instead_of_relation_local_ladder(monkeypatch):
-    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+    from src.arxiv_relations.pipeline import normalize_related_papers_to_seeds
 
     resolve_calls: list[dict] = []
 
@@ -380,14 +380,14 @@ async def test_normalize_related_works_uses_shared_resolver_instead_of_relation_
         raising=False,
     )
 
-    class FakeOpenAlexClient:
+    class FakeRelatedPaperBuilder:
         def build_related_work_candidate(self, work: dict):
             return RelatedWorkCandidate(
                 title="Published Paper",
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/paper",
-                source_url="https://openalex.org/W123",
+                source_url="https://www.semanticscholar.org/paper/Seed/W123",
             )
 
     class FakeArxivClient:
@@ -398,9 +398,9 @@ async def test_normalize_related_works_uses_shared_resolver_instead_of_relation_
     datacite_client = SimpleNamespace(name="datacite")
     discovery_client = SimpleNamespace(name="discovery")
     relation_resolution_cache = SimpleNamespace(name="cache")
-    seeds = await normalize_related_works_to_seeds(
+    seeds = await normalize_related_papers_to_seeds(
         [{"id": "R1"}],
-        openalex_client=FakeOpenAlexClient(),
+        related_work_candidate_builder=FakeRelatedPaperBuilder(),
         arxiv_client=FakeArxivClient(),
         crossref_client=crossref_client,
         datacite_client=datacite_client,
@@ -425,7 +425,7 @@ async def test_normalize_related_works_uses_shared_resolver_instead_of_relation_
             "allow_title_search": True,
             "allow_huggingface_fallback": True,
             "extra_identifiers": [
-                "https://openalex.org/W123",
+                "https://www.semanticscholar.org/paper/Seed/W123",
                 "https://doi.org/10.1007/978-3-031-72933-1_9",
             ],
         }
@@ -434,14 +434,14 @@ async def test_normalize_related_works_uses_shared_resolver_instead_of_relation_
 
 @pytest.mark.anyio
 async def test_normalize_related_works_uses_cached_resolved_title_before_get_title_fallback():
-    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+    from src.arxiv_relations.pipeline import normalize_related_papers_to_seeds
 
     recent = datetime.now(timezone.utc).isoformat()
     cache = FakeRelationResolutionCache(
         {
-            ("source_url", "https://openalex.org/W9"): SimpleNamespace(
+            ("source_url", "https://www.semanticscholar.org/paper/Seed/W9"): SimpleNamespace(
                 key_type="source_url",
-                key_value="https://openalex.org/W9",
+                key_value="https://www.semanticscholar.org/paper/Seed/W9",
                 arxiv_url="https://arxiv.org/abs/2312.00451",
                 resolved_title="Cached Arxiv Title",
                 checked_at=recent,
@@ -456,14 +456,14 @@ async def test_normalize_related_works_uses_cached_resolved_title_before_get_tit
         }
     )
 
-    class FakeOpenAlexClient:
+    class FakeRelatedPaperBuilder:
         def build_related_work_candidate(self, work: dict):
             return RelatedWorkCandidate(
                 title="Cached Candidate Title",
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/cached",
-                source_url="https://openalex.org/W9",
+                source_url="https://www.semanticscholar.org/paper/Seed/W9",
             )
 
     class FakeArxivClient:
@@ -481,9 +481,9 @@ async def test_normalize_related_works_uses_cached_resolved_title_before_get_tit
             raise AssertionError("Positive cache hits with resolved_title should not do an extra arXiv title lookup")
 
     arxiv_client = FakeArxivClient()
-    seeds = await normalize_related_works_to_seeds(
+    seeds = await normalize_related_papers_to_seeds(
         [{"id": "R9"}],
-        openalex_client=FakeOpenAlexClient(),
+        related_work_candidate_builder=FakeRelatedPaperBuilder(),
         arxiv_client=arxiv_client,
         relation_resolution_cache=cache,
         arxiv_relation_no_arxiv_recheck_days=30,
@@ -496,14 +496,14 @@ async def test_normalize_related_works_uses_cached_resolved_title_before_get_tit
 
 @pytest.mark.anyio
 async def test_normalize_related_works_falls_back_to_get_title_for_legacy_positive_cache_entries():
-    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+    from src.arxiv_relations.pipeline import normalize_related_papers_to_seeds
 
     recent = datetime.now(timezone.utc).isoformat()
     cache = FakeRelationResolutionCache(
         {
-            ("source_url", "https://openalex.org/W9"): SimpleNamespace(
+            ("source_url", "https://www.semanticscholar.org/paper/Seed/W9"): SimpleNamespace(
                 key_type="source_url",
-                key_value="https://openalex.org/W9",
+                key_value="https://www.semanticscholar.org/paper/Seed/W9",
                 arxiv_url="https://arxiv.org/abs/2312.00451",
                 checked_at=recent,
             ),
@@ -516,14 +516,14 @@ async def test_normalize_related_works_falls_back_to_get_title_for_legacy_positi
         }
     )
 
-    class FakeOpenAlexClient:
+    class FakeRelatedPaperBuilder:
         def build_related_work_candidate(self, work: dict):
             return RelatedWorkCandidate(
                 title="Cached Candidate Title",
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/cached",
-                source_url="https://openalex.org/W9",
+                source_url="https://www.semanticscholar.org/paper/Seed/W9",
             )
 
     class FakeArxivClient:
@@ -543,9 +543,9 @@ async def test_normalize_related_works_falls_back_to_get_title_for_legacy_positi
             raise AssertionError(f"Unexpected arXiv title lookup: {arxiv_identifier}")
 
     arxiv_client = FakeArxivClient()
-    seeds = await normalize_related_works_to_seeds(
+    seeds = await normalize_related_papers_to_seeds(
         [{"id": "R9"}],
-        openalex_client=FakeOpenAlexClient(),
+        related_work_candidate_builder=FakeRelatedPaperBuilder(),
         arxiv_client=arxiv_client,
         relation_resolution_cache=cache,
         arxiv_relation_no_arxiv_recheck_days=30,
@@ -558,9 +558,9 @@ async def test_normalize_related_works_falls_back_to_get_title_for_legacy_positi
 
 @pytest.mark.anyio
 async def test_normalize_related_works_retains_unresolved_non_arxiv_rows_with_url_priority():
-    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+    from src.arxiv_relations.pipeline import normalize_related_papers_to_seeds
 
-    class FakeOpenAlexClient:
+    class FakeRelatedPaperBuilder:
         def build_related_work_candidate(self, work: dict):
             mapping = {
                 "R3": RelatedWorkCandidate(
@@ -568,21 +568,21 @@ async def test_normalize_related_works_retains_unresolved_non_arxiv_rows_with_ur
                     direct_arxiv_url=None,
                     doi_url="https://doi.org/10.1145/example",
                     landing_page_url="https://publisher.example/doi",
-                    source_url="https://openalex.org/W3",
+                    source_url="https://www.semanticscholar.org/paper/Seed/W3",
                 ),
                 "R4": RelatedWorkCandidate(
                     title="With Landing",
                     direct_arxiv_url=None,
                     doi_url=None,
                     landing_page_url="https://publisher.example/paper",
-                    source_url="https://openalex.org/W4",
+                    source_url="https://www.semanticscholar.org/paper/Seed/W4",
                 ),
                 "R5": RelatedWorkCandidate(
-                    title="OpenAlex Only",
+                    title="Source URL Only",
                     direct_arxiv_url=None,
                     doi_url=None,
                     landing_page_url=None,
-                    source_url="https://openalex.org/W5",
+                    source_url="https://www.semanticscholar.org/paper/Seed/W5",
                 ),
             }
             return mapping[work["id"]]
@@ -595,29 +595,29 @@ async def test_normalize_related_works_retains_unresolved_non_arxiv_rows_with_ur
             raise AssertionError("Shared relation normalization should use the common HTML title search entrypoint")
 
     related_works = [{"id": "R3"}, {"id": "R4"}, {"id": "R5"}]
-    seeds = await normalize_related_works_to_seeds(
+    seeds = await normalize_related_papers_to_seeds(
         related_works,
-        openalex_client=FakeOpenAlexClient(),
+        related_work_candidate_builder=FakeRelatedPaperBuilder(),
         arxiv_client=FakeArxivClient(),
     )
 
     assert seeds == [
         PaperSeed(name="With DOI", url="https://doi.org/10.1145/example"),
         PaperSeed(name="With Landing", url="https://publisher.example/paper"),
-        PaperSeed(name="OpenAlex Only", url="https://openalex.org/W5"),
+        PaperSeed(name="Source URL Only", url="https://www.semanticscholar.org/paper/Seed/W5"),
     ]
 
 
 @pytest.mark.anyio
 async def test_normalize_related_works_skips_api_when_negative_cache_is_fresh():
-    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+    from src.arxiv_relations.pipeline import normalize_related_papers_to_seeds
 
     recent = datetime.now(timezone.utc).isoformat()
     cache = FakeRelationResolutionCache(
         {
-            ("source_url", "https://openalex.org/W10"): SimpleNamespace(
+            ("source_url", "https://www.semanticscholar.org/paper/Seed/W10"): SimpleNamespace(
                 key_type="source_url",
-                key_value="https://openalex.org/W10",
+                key_value="https://www.semanticscholar.org/paper/Seed/W10",
                 arxiv_url=None,
                 checked_at=recent,
             ),
@@ -630,14 +630,14 @@ async def test_normalize_related_works_skips_api_when_negative_cache_is_fresh():
         }
     )
 
-    class FakeOpenAlexClient:
+    class FakeRelatedPaperBuilder:
         def build_related_work_candidate(self, work: dict):
             return RelatedWorkCandidate(
                 title="Fallback Only",
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/fallback",
-                source_url="https://openalex.org/W10",
+                source_url="https://www.semanticscholar.org/paper/Seed/W10",
             )
 
     class FakeArxivClient:
@@ -650,9 +650,9 @@ async def test_normalize_related_works_skips_api_when_negative_cache_is_fresh():
         async def get_title(self, arxiv_identifier: str):
             raise AssertionError("arXiv title lookup should not run for a retained fallback row")
 
-    seeds = await normalize_related_works_to_seeds(
+    seeds = await normalize_related_papers_to_seeds(
         [{"id": "R10"}],
-        openalex_client=FakeOpenAlexClient(),
+        related_work_candidate_builder=FakeRelatedPaperBuilder(),
         arxiv_client=FakeArxivClient(),
         relation_resolution_cache=cache,
         arxiv_relation_no_arxiv_recheck_days=30,
@@ -664,18 +664,18 @@ async def test_normalize_related_works_skips_api_when_negative_cache_is_fresh():
 
 @pytest.mark.anyio
 async def test_normalize_related_works_does_not_negative_cache_api_request_failures():
-    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+    from src.arxiv_relations.pipeline import normalize_related_papers_to_seeds
 
     cache = FakeRelationResolutionCache()
 
-    class FakeOpenAlexClient:
+    class FakeRelatedPaperBuilder:
         def build_related_work_candidate(self, work: dict):
             return RelatedWorkCandidate(
                 title="Transient Failure Paper",
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/transient",
-                source_url="https://openalex.org/W10",
+                source_url="https://www.semanticscholar.org/paper/Seed/W10",
             )
 
     class FakeArxivClient:
@@ -688,9 +688,9 @@ async def test_normalize_related_works_does_not_negative_cache_api_request_failu
         async def get_title(self, arxiv_identifier: str):
             raise AssertionError("Title lookup should not run when API search fails")
 
-    seeds = await normalize_related_works_to_seeds(
+    seeds = await normalize_related_papers_to_seeds(
         [{"id": "R10"}],
-        openalex_client=FakeOpenAlexClient(),
+        related_work_candidate_builder=FakeRelatedPaperBuilder(),
         arxiv_client=FakeArxivClient(),
         relation_resolution_cache=cache,
         arxiv_relation_no_arxiv_recheck_days=30,
@@ -704,18 +704,18 @@ async def test_normalize_related_works_does_not_negative_cache_api_request_failu
 
 @pytest.mark.anyio
 async def test_normalize_related_works_uses_hf_fallback_after_arxiv_api_miss():
-    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+    from src.arxiv_relations.pipeline import normalize_related_papers_to_seeds
 
     events: list[tuple] = []
 
-    class FakeOpenAlexClient:
+    class FakeRelatedPaperBuilder:
         def build_related_work_candidate(self, work: dict):
             return RelatedWorkCandidate(
                 title="FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting",
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/fsgs",
-                source_url="https://openalex.org/WFSGS",
+                source_url="https://www.semanticscholar.org/paper/Seed/WFSGS",
             )
 
     class FakeArxivClient:
@@ -766,9 +766,9 @@ async def test_normalize_related_works_uses_hf_fallback_after_arxiv_api_miss():
             )
 
     cache = TrackingRelationResolutionCache()
-    seeds = await normalize_related_works_to_seeds(
+    seeds = await normalize_related_papers_to_seeds(
         [{"id": "R1"}],
-        openalex_client=FakeOpenAlexClient(),
+        related_work_candidate_builder=FakeRelatedPaperBuilder(),
         arxiv_client=FakeArxivClient(),
         discovery_client=FakeDiscoveryClient(),
         relation_resolution_cache=cache,
@@ -782,11 +782,11 @@ async def test_normalize_related_works_uses_hf_fallback_after_arxiv_api_miss():
         )
     ]
     assert cache.record_calls == [
-        ("source_url", "https://openalex.org/WFSGS", "https://arxiv.org/abs/2312.00451"),
+        ("source_url", "https://www.semanticscholar.org/paper/Seed/WFSGS", "https://arxiv.org/abs/2312.00451"),
         ("doi", "https://doi.org/10.1007/978-3-031-72933-1_9", "https://arxiv.org/abs/2312.00451"),
     ]
     assert (
-        cache.entries[("source_url", "https://openalex.org/WFSGS")].resolved_title
+        cache.entries[("source_url", "https://www.semanticscholar.org/paper/Seed/WFSGS")].resolved_title
         == "FSGS: Real-Time Few-shot View Synthesis using Gaussian Splatting"
     )
     assert (
@@ -797,25 +797,25 @@ async def test_normalize_related_works_uses_hf_fallback_after_arxiv_api_miss():
         ("arxiv_title_miss", "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting"),
         ("hf_search_json", "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting", 1),
         ("title_lookup", "2312.00451"),
-        ("cache_record", "source_url", "https://openalex.org/WFSGS", "https://arxiv.org/abs/2312.00451"),
+        ("cache_record", "source_url", "https://www.semanticscholar.org/paper/Seed/WFSGS", "https://arxiv.org/abs/2312.00451"),
         ("cache_record", "doi", "https://doi.org/10.1007/978-3-031-72933-1_9", "https://arxiv.org/abs/2312.00451"),
     ]
 
 
 @pytest.mark.anyio
 async def test_normalize_related_works_uses_hf_fallback_after_arxiv_api_transient_error():
-    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+    from src.arxiv_relations.pipeline import normalize_related_papers_to_seeds
 
     events: list[tuple] = []
 
-    class FakeOpenAlexClient:
+    class FakeRelatedPaperBuilder:
         def build_related_work_candidate(self, work: dict):
             return RelatedWorkCandidate(
                 title="FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting",
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/fsgs",
-                source_url="https://openalex.org/WFSGS",
+                source_url="https://www.semanticscholar.org/paper/Seed/WFSGS",
             )
 
     class FakeArxivClient:
@@ -866,9 +866,9 @@ async def test_normalize_related_works_uses_hf_fallback_after_arxiv_api_transien
             )
 
     cache = TrackingRelationResolutionCache()
-    seeds = await normalize_related_works_to_seeds(
+    seeds = await normalize_related_papers_to_seeds(
         [{"id": "R1"}],
-        openalex_client=FakeOpenAlexClient(),
+        related_work_candidate_builder=FakeRelatedPaperBuilder(),
         arxiv_client=FakeArxivClient(),
         discovery_client=FakeDiscoveryClient(),
         relation_resolution_cache=cache,
@@ -882,30 +882,30 @@ async def test_normalize_related_works_uses_hf_fallback_after_arxiv_api_transien
         )
     ]
     assert cache.record_calls == [
-        ("source_url", "https://openalex.org/WFSGS", "https://arxiv.org/abs/2312.00451"),
+        ("source_url", "https://www.semanticscholar.org/paper/Seed/WFSGS", "https://arxiv.org/abs/2312.00451"),
         ("doi", "https://doi.org/10.1007/978-3-031-72933-1_9", "https://arxiv.org/abs/2312.00451"),
     ]
     assert events == [
         ("arxiv_title_error", "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting"),
         ("hf_search_json", "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting", 1),
         ("title_lookup", "2312.00451"),
-        ("cache_record", "source_url", "https://openalex.org/WFSGS", "https://arxiv.org/abs/2312.00451"),
+        ("cache_record", "source_url", "https://www.semanticscholar.org/paper/Seed/WFSGS", "https://arxiv.org/abs/2312.00451"),
         ("cache_record", "doi", "https://doi.org/10.1007/978-3-031-72933-1_9", "https://arxiv.org/abs/2312.00451"),
     ]
 
 
 @pytest.mark.anyio
 async def test_normalize_related_works_negative_caches_stable_miss_when_hf_token_is_missing():
-    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+    from src.arxiv_relations.pipeline import normalize_related_papers_to_seeds
 
-    class FakeOpenAlexClient:
+    class FakeRelatedPaperBuilder:
         def build_related_work_candidate(self, work: dict):
             return RelatedWorkCandidate(
                 title="FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting",
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/fsgs",
-                source_url="https://openalex.org/WFSGS",
+                source_url="https://www.semanticscholar.org/paper/Seed/WFSGS",
             )
 
     class FakeNoMatchArxivClient:
@@ -925,9 +925,9 @@ async def test_normalize_related_works_negative_caches_stable_miss_when_hf_token
             raise AssertionError("HF fallback should be skipped when token is missing")
 
     cache = FakeRelationResolutionCache()
-    seeds = await normalize_related_works_to_seeds(
+    seeds = await normalize_related_papers_to_seeds(
         [{"id": "R1"}],
-        openalex_client=FakeOpenAlexClient(),
+        related_work_candidate_builder=FakeRelatedPaperBuilder(),
         arxiv_client=FakeNoMatchArxivClient(),
         discovery_client=FakeDiscoveryClient(),
         relation_resolution_cache=cache,
@@ -941,23 +941,23 @@ async def test_normalize_related_works_negative_caches_stable_miss_when_hf_token
         )
     ]
     assert cache.record_calls == [
-        ("source_url", "https://openalex.org/WFSGS", None),
+        ("source_url", "https://www.semanticscholar.org/paper/Seed/WFSGS", None),
         ("doi", "https://doi.org/10.1007/978-3-031-72933-1_9", None),
     ]
 
 
 @pytest.mark.anyio
 async def test_normalize_related_works_does_not_negative_cache_transient_hf_failures():
-    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+    from src.arxiv_relations.pipeline import normalize_related_papers_to_seeds
 
-    class FakeOpenAlexClient:
+    class FakeRelatedPaperBuilder:
         def build_related_work_candidate(self, work: dict):
             return RelatedWorkCandidate(
                 title="FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting",
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/fsgs",
-                source_url="https://openalex.org/WFSGS",
+                source_url="https://www.semanticscholar.org/paper/Seed/WFSGS",
             )
 
     class FakeNoMatchArxivClient:
@@ -977,9 +977,9 @@ async def test_normalize_related_works_does_not_negative_cache_transient_hf_fail
             return None, "Hugging Face Papers timeout"
 
     cache = FakeRelationResolutionCache()
-    seeds = await normalize_related_works_to_seeds(
+    seeds = await normalize_related_papers_to_seeds(
         [{"id": "R1"}],
-        openalex_client=FakeOpenAlexClient(),
+        related_work_candidate_builder=FakeRelatedPaperBuilder(),
         arxiv_client=FakeNoMatchArxivClient(),
         discovery_client=FakeDiscoveryClient(),
         relation_resolution_cache=cache,
@@ -997,16 +997,16 @@ async def test_normalize_related_works_does_not_negative_cache_transient_hf_fail
 
 @pytest.mark.anyio
 async def test_normalize_related_works_does_not_negative_cache_when_arxiv_transient_error_and_hf_misses():
-    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+    from src.arxiv_relations.pipeline import normalize_related_papers_to_seeds
 
-    class FakeOpenAlexClient:
+    class FakeRelatedPaperBuilder:
         def build_related_work_candidate(self, work: dict):
             return RelatedWorkCandidate(
                 title="FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting",
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/fsgs",
-                source_url="https://openalex.org/WFSGS",
+                source_url="https://www.semanticscholar.org/paper/Seed/WFSGS",
             )
 
     class FakeArxivClient:
@@ -1026,9 +1026,9 @@ async def test_normalize_related_works_does_not_negative_cache_when_arxiv_transi
             return [], None
 
     cache = FakeRelationResolutionCache()
-    seeds = await normalize_related_works_to_seeds(
+    seeds = await normalize_related_papers_to_seeds(
         [{"id": "R1"}],
-        openalex_client=FakeOpenAlexClient(),
+        related_work_candidate_builder=FakeRelatedPaperBuilder(),
         arxiv_client=FakeArxivClient(),
         discovery_client=FakeDiscoveryClient(),
         relation_resolution_cache=cache,
@@ -1046,16 +1046,16 @@ async def test_normalize_related_works_does_not_negative_cache_when_arxiv_transi
 
 @pytest.mark.anyio
 async def test_normalize_related_works_does_not_negative_cache_unparseable_hf_payload():
-    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+    from src.arxiv_relations.pipeline import normalize_related_papers_to_seeds
 
-    class FakeOpenAlexClient:
+    class FakeRelatedPaperBuilder:
         def build_related_work_candidate(self, work: dict):
             return RelatedWorkCandidate(
                 title="FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting",
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/fsgs",
-                source_url="https://openalex.org/WFSGS",
+                source_url="https://www.semanticscholar.org/paper/Seed/WFSGS",
             )
 
     class FakeNoMatchArxivClient:
@@ -1075,9 +1075,9 @@ async def test_normalize_related_works_does_not_negative_cache_unparseable_hf_pa
             return {"unexpected": "payload"}, None
 
     cache = FakeRelationResolutionCache()
-    seeds = await normalize_related_works_to_seeds(
+    seeds = await normalize_related_papers_to_seeds(
         [{"id": "R1"}],
-        openalex_client=FakeOpenAlexClient(),
+        related_work_candidate_builder=FakeRelatedPaperBuilder(),
         arxiv_client=FakeNoMatchArxivClient(),
         discovery_client=FakeDiscoveryClient(),
         relation_resolution_cache=cache,
@@ -1095,16 +1095,16 @@ async def test_normalize_related_works_does_not_negative_cache_unparseable_hf_pa
 
 @pytest.mark.anyio
 async def test_normalize_related_works_does_not_negative_cache_malformed_hf_search_items():
-    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+    from src.arxiv_relations.pipeline import normalize_related_papers_to_seeds
 
-    class FakeOpenAlexClient:
+    class FakeRelatedPaperBuilder:
         def build_related_work_candidate(self, work: dict):
             return RelatedWorkCandidate(
                 title="FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting",
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/fsgs",
-                source_url="https://openalex.org/WFSGS",
+                source_url="https://www.semanticscholar.org/paper/Seed/WFSGS",
             )
 
     class FakeNoMatchArxivClient:
@@ -1127,9 +1127,9 @@ async def test_normalize_related_works_does_not_negative_cache_malformed_hf_sear
             ], None
 
     cache = FakeRelationResolutionCache()
-    seeds = await normalize_related_works_to_seeds(
+    seeds = await normalize_related_papers_to_seeds(
         [{"id": "R1"}],
-        openalex_client=FakeOpenAlexClient(),
+        related_work_candidate_builder=FakeRelatedPaperBuilder(),
         arxiv_client=FakeNoMatchArxivClient(),
         discovery_client=FakeDiscoveryClient(),
         relation_resolution_cache=cache,
@@ -1147,16 +1147,16 @@ async def test_normalize_related_works_does_not_negative_cache_malformed_hf_sear
 
 @pytest.mark.anyio
 async def test_normalize_related_works_does_not_negative_cache_when_hf_title_payload_shape_is_invalid():
-    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+    from src.arxiv_relations.pipeline import normalize_related_papers_to_seeds
 
-    class FakeOpenAlexClient:
+    class FakeRelatedPaperBuilder:
         def build_related_work_candidate(self, work: dict):
             return RelatedWorkCandidate(
                 title="FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting",
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/fsgs",
-                source_url="https://openalex.org/WFSGS",
+                source_url="https://www.semanticscholar.org/paper/Seed/WFSGS",
             )
 
     class FakeNoMatchArxivClient:
@@ -1183,9 +1183,9 @@ async def test_normalize_related_works_does_not_negative_cache_when_hf_title_pay
             ], None
 
     cache = FakeRelationResolutionCache()
-    seeds = await normalize_related_works_to_seeds(
+    seeds = await normalize_related_papers_to_seeds(
         [{"id": "R1"}],
-        openalex_client=FakeOpenAlexClient(),
+        related_work_candidate_builder=FakeRelatedPaperBuilder(),
         arxiv_client=FakeNoMatchArxivClient(),
         discovery_client=FakeDiscoveryClient(),
         relation_resolution_cache=cache,
@@ -1203,18 +1203,18 @@ async def test_normalize_related_works_does_not_negative_cache_when_hf_title_pay
 
 @pytest.mark.anyio
 async def test_normalize_related_works_negative_caches_after_stable_miss_with_hf_enabled():
-    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+    from src.arxiv_relations.pipeline import normalize_related_papers_to_seeds
 
     events: list[tuple] = []
 
-    class FakeOpenAlexClient:
+    class FakeRelatedPaperBuilder:
         def build_related_work_candidate(self, work: dict):
             return RelatedWorkCandidate(
                 title="FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting",
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/fsgs",
-                source_url="https://openalex.org/WFSGS",
+                source_url="https://www.semanticscholar.org/paper/Seed/WFSGS",
             )
 
     class FakeNoMatchArxivClient:
@@ -1253,9 +1253,9 @@ async def test_normalize_related_works_negative_caches_after_stable_miss_with_hf
             )
 
     cache = TrackingRelationResolutionCache()
-    await normalize_related_works_to_seeds(
+    await normalize_related_papers_to_seeds(
         [{"id": "R1"}],
-        openalex_client=FakeOpenAlexClient(),
+        related_work_candidate_builder=FakeRelatedPaperBuilder(),
         arxiv_client=FakeNoMatchArxivClient(),
         discovery_client=FakeDiscoveryClient(),
         relation_resolution_cache=cache,
@@ -1263,41 +1263,41 @@ async def test_normalize_related_works_negative_caches_after_stable_miss_with_hf
     )
 
     assert cache.record_calls == [
-        ("source_url", "https://openalex.org/WFSGS", None),
+        ("source_url", "https://www.semanticscholar.org/paper/Seed/WFSGS", None),
         ("doi", "https://doi.org/10.1007/978-3-031-72933-1_9", None),
     ]
     assert events == [
         ("arxiv_title_miss", "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting"),
         ("hf_search_json_miss", "FSGS: Real-Time Few-Shot View Synthesis Using Gaussian Splatting", 1),
-        ("cache_record", "source_url", "https://openalex.org/WFSGS", None),
+        ("cache_record", "source_url", "https://www.semanticscholar.org/paper/Seed/WFSGS", None),
         ("cache_record", "doi", "https://doi.org/10.1007/978-3-031-72933-1_9", None),
     ]
 
 
 @pytest.mark.anyio
 async def test_normalize_related_works_rechecks_stale_negative_and_backfills_all_keys():
-    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+    from src.arxiv_relations.pipeline import normalize_related_papers_to_seeds
 
     stale = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
     cache = FakeRelationResolutionCache(
         {
-            ("source_url", "https://openalex.org/W11"): SimpleNamespace(
+            ("source_url", "https://www.semanticscholar.org/paper/Seed/W11"): SimpleNamespace(
                 key_type="source_url",
-                key_value="https://openalex.org/W11",
+                key_value="https://www.semanticscholar.org/paper/Seed/W11",
                 arxiv_url=None,
                 checked_at=stale,
             )
         }
     )
 
-    class FakeOpenAlexClient:
+    class FakeRelatedPaperBuilder:
         def build_related_work_candidate(self, work: dict):
             return RelatedWorkCandidate(
                 title="Backfilled Paper",
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/backfilled",
-                source_url="https://openalex.org/W11",
+                source_url="https://www.semanticscholar.org/paper/Seed/W11",
             )
 
     class FakeArxivClient:
@@ -1324,9 +1324,9 @@ async def test_normalize_related_works_rechecks_stale_negative_and_backfills_all
             raise AssertionError(f"Unexpected arXiv title lookup: {arxiv_identifier}")
 
     arxiv_client = FakeArxivClient()
-    seeds = await normalize_related_works_to_seeds(
+    seeds = await normalize_related_papers_to_seeds(
         [{"id": "R11"}],
-        openalex_client=FakeOpenAlexClient(),
+        related_work_candidate_builder=FakeRelatedPaperBuilder(),
         arxiv_client=arxiv_client,
         relation_resolution_cache=cache,
         arxiv_relation_no_arxiv_recheck_days=30,
@@ -1336,10 +1336,10 @@ async def test_normalize_related_works_rechecks_stale_negative_and_backfills_all
     assert arxiv_client.html_title_searches == ["Backfilled Paper"]
     assert arxiv_client.title_lookups == ["2312.00451"]
     assert cache.record_calls == [
-        ("source_url", "https://openalex.org/W11", "https://arxiv.org/abs/2312.00451"),
+        ("source_url", "https://www.semanticscholar.org/paper/Seed/W11", "https://arxiv.org/abs/2312.00451"),
         ("doi", "https://doi.org/10.1007/978-3-031-72933-1_9", "https://arxiv.org/abs/2312.00451"),
     ]
-    assert cache.entries[("source_url", "https://openalex.org/W11")].resolved_title == "Mapped Arxiv Title"
+    assert cache.entries[("source_url", "https://www.semanticscholar.org/paper/Seed/W11")].resolved_title == "Mapped Arxiv Title"
     assert (
         cache.entries[("doi", "https://doi.org/10.1007/978-3-031-72933-1_9")].resolved_title
         == "Mapped Arxiv Title"
@@ -1348,7 +1348,7 @@ async def test_normalize_related_works_rechecks_stale_negative_and_backfills_all
 
 @pytest.mark.anyio
 async def test_normalize_related_works_direct_arxiv_rows_bypass_cache_and_search_path():
-    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+    from src.arxiv_relations.pipeline import normalize_related_papers_to_seeds
 
     class ExplodingRelationResolutionCache:
         def get(self, key_type: str, key_value: str):
@@ -1368,14 +1368,14 @@ async def test_normalize_related_works_direct_arxiv_rows_bypass_cache_and_search
         def is_negative_cache_fresh(checked_at: str | None, recheck_days: int) -> bool:
             raise AssertionError("Direct arXiv rows should not check negative-cache freshness")
 
-    class FakeOpenAlexClient:
+    class FakeRelatedPaperBuilder:
         def build_related_work_candidate(self, work: dict):
             return RelatedWorkCandidate(
                 title="Direct Paper",
                 direct_arxiv_url="https://arxiv.org/abs/2501.00001",
                 doi_url="https://doi.org/10.1000/direct",
                 landing_page_url="https://publisher.example/direct",
-                source_url="https://openalex.org/W12",
+                source_url="https://www.semanticscholar.org/paper/Seed/W12",
             )
 
     class FakeArxivClient:
@@ -1388,9 +1388,9 @@ async def test_normalize_related_works_direct_arxiv_rows_bypass_cache_and_search
         async def get_title(self, arxiv_identifier: str):
             raise AssertionError("Direct arXiv rows should not need extra title lookups")
 
-    seeds = await normalize_related_works_to_seeds(
+    seeds = await normalize_related_papers_to_seeds(
         [{"id": "R12"}],
-        openalex_client=FakeOpenAlexClient(),
+        related_work_candidate_builder=FakeRelatedPaperBuilder(),
         arxiv_client=FakeArxivClient(),
         relation_resolution_cache=ExplodingRelationResolutionCache(),
         arxiv_relation_no_arxiv_recheck_days=30,
@@ -1401,9 +1401,9 @@ async def test_normalize_related_works_direct_arxiv_rows_bypass_cache_and_search
 
 @pytest.mark.anyio
 async def test_normalize_related_works_resolves_non_direct_rows_concurrently():
-    from src.arxiv_relations.pipeline import normalize_related_works_to_seeds
+    from src.arxiv_relations.pipeline import normalize_related_papers_to_seeds
 
-    class FakeOpenAlexClient:
+    class FakeRelatedPaperBuilder:
         def build_related_work_candidate(self, work: dict):
             mapping = {
                 "R6": RelatedWorkCandidate(
@@ -1411,14 +1411,14 @@ async def test_normalize_related_works_resolves_non_direct_rows_concurrently():
                     direct_arxiv_url=None,
                     doi_url=None,
                     landing_page_url="https://publisher.example/a",
-                    source_url="https://openalex.org/W6",
+                    source_url="https://www.semanticscholar.org/paper/Seed/W6",
                 ),
                 "R7": RelatedWorkCandidate(
                     title="Concurrent Paper B",
                     direct_arxiv_url=None,
                     doi_url=None,
                     landing_page_url="https://publisher.example/b",
-                    source_url="https://openalex.org/W7",
+                    source_url="https://www.semanticscholar.org/paper/Seed/W7",
                 ),
             }
             return mapping[work["id"]]
@@ -1451,9 +1451,9 @@ async def test_normalize_related_works_resolves_non_direct_rows_concurrently():
             return mapping[arxiv_identifier]
 
     seeds = await asyncio.wait_for(
-        normalize_related_works_to_seeds(
+        normalize_related_papers_to_seeds(
             [{"id": "R6"}, {"id": "R7"}],
-            openalex_client=FakeOpenAlexClient(),
+            related_work_candidate_builder=FakeRelatedPaperBuilder(),
             arxiv_client=FakeArxivClient(),
         ),
         timeout=0.2,
@@ -1588,18 +1588,18 @@ async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_ret
             }
             return mapping[work["paperId"]]
 
-    class ExplodingOpenAlexClient:
+    class ExplodingLegacyMetadataClient:
         async def fetch_work_by_identifier(self, identifier: str):
-            raise AssertionError("OpenAlex target lookup should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata target lookup should not run after the Semantic Scholar hard cut")
 
         async def search_first_work(self, title: str):
-            raise AssertionError("OpenAlex title lookup should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata title lookup should not run after the Semantic Scholar hard cut")
 
         async def fetch_referenced_works(self, work: dict):
-            raise AssertionError("OpenAlex references should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata references should not run after the Semantic Scholar hard cut")
 
         async def fetch_citations(self, work: dict):
-            raise AssertionError("OpenAlex citations should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata citations should not run after the Semantic Scholar hard cut")
 
     arxiv_client = FakeArxivClient()
     semanticscholar_graph_client = FakeSemanticScholarGraphClient()
@@ -1617,7 +1617,6 @@ async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_ret
         github_client,
         arxiv_client=None,
         semanticscholar_graph_client=None,
-        openalex_client=None,
         crossref_client=None,
         datacite_client=None,
         content_cache=None,
@@ -1644,7 +1643,6 @@ async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_ret
     result = await export_arxiv_relations_to_csv(
         "https://arxiv.org/pdf/2603.23502v4.pdf?download=1",
         arxiv_client=arxiv_client,
-        openalex_client=ExplodingOpenAlexClient(),
         semanticscholar_graph_client=semanticscholar_graph_client,
         discovery_client=discovery_client,
         github_client=github_client,
@@ -1762,18 +1760,18 @@ async def test_export_arxiv_relations_to_csv_prefers_exact_semantic_scholar_look
         def build_related_work_candidate(self, paper: dict):
             raise AssertionError("No relation candidates should be built for empty Semantic Scholar rows")
 
-    class ExplodingOpenAlexClient:
+    class ExplodingLegacyMetadataClient:
         async def fetch_work_by_identifier(self, identifier: str):
-            raise AssertionError("OpenAlex target lookup should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata target lookup should not run after the Semantic Scholar hard cut")
 
         async def search_first_work(self, title: str):
-            raise AssertionError("OpenAlex title lookup should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata title lookup should not run after the Semantic Scholar hard cut")
 
         async def fetch_referenced_works(self, work: dict):
-            raise AssertionError("OpenAlex references should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata references should not run after the Semantic Scholar hard cut")
 
         async def fetch_citations(self, work: dict):
-            raise AssertionError("OpenAlex citations should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata citations should not run after the Semantic Scholar hard cut")
 
     export_calls = []
 
@@ -1785,7 +1783,6 @@ async def test_export_arxiv_relations_to_csv_prefers_exact_semantic_scholar_look
         github_client,
         arxiv_client=None,
         semanticscholar_graph_client=None,
-        openalex_client=None,
         crossref_client=None,
         datacite_client=None,
         content_cache=None,
@@ -1803,7 +1800,6 @@ async def test_export_arxiv_relations_to_csv_prefers_exact_semantic_scholar_look
     result = await export_arxiv_relations_to_csv(
         "https://arxiv.org/abs/2510.22706",
         arxiv_client=FakeArxivClient(),
-        openalex_client=ExplodingOpenAlexClient(),
         semanticscholar_graph_client=semanticscholar_graph_client,
         discovery_client=object(),
         github_client=object(),
@@ -1817,7 +1813,7 @@ async def test_export_arxiv_relations_to_csv_prefers_exact_semantic_scholar_look
 
 
 @pytest.mark.anyio
-async def test_export_arxiv_relations_to_csv_uses_semantic_scholar_before_openalex(
+async def test_export_arxiv_relations_to_csv_uses_semantic_scholar_before_legacy_metadata(
     tmp_path: Path, monkeypatch
 ):
     from src.arxiv_relations.pipeline import export_arxiv_relations_to_csv
@@ -1871,18 +1867,18 @@ async def test_export_arxiv_relations_to_csv_uses_semantic_scholar_before_openal
             }
             return mapping[paper["paperId"]]
 
-    class FakeOpenAlexClient:
+    class FakeLegacyMetadataClient:
         async def fetch_work_by_identifier(self, identifier: str):
-            raise AssertionError("OpenAlex target lookup should not run when Semantic Scholar succeeds")
+            raise AssertionError("LegacyMetadata target lookup should not run when Semantic Scholar succeeds")
 
         async def search_first_work(self, title: str):
-            raise AssertionError("OpenAlex title lookup should not run when Semantic Scholar succeeds")
+            raise AssertionError("LegacyMetadata title lookup should not run when Semantic Scholar succeeds")
 
         async def fetch_referenced_works(self, work: dict):
-            raise AssertionError("OpenAlex references should not run when Semantic Scholar returns references")
+            raise AssertionError("LegacyMetadata references should not run when Semantic Scholar returns references")
 
         async def fetch_citations(self, work: dict):
-            raise AssertionError("OpenAlex citations should not run when Semantic Scholar returns citations")
+            raise AssertionError("LegacyMetadata citations should not run when Semantic Scholar returns citations")
 
     export_calls = []
 
@@ -1894,7 +1890,6 @@ async def test_export_arxiv_relations_to_csv_uses_semantic_scholar_before_openal
         github_client,
         arxiv_client=None,
         semanticscholar_graph_client=None,
-        openalex_client=None,
         crossref_client=None,
         datacite_client=None,
         content_cache=None,
@@ -1912,7 +1907,6 @@ async def test_export_arxiv_relations_to_csv_uses_semantic_scholar_before_openal
     result = await export_arxiv_relations_to_csv(
         "https://arxiv.org/abs/2510.22706",
         arxiv_client=FakeArxivClient(),
-        openalex_client=FakeOpenAlexClient(),
         semanticscholar_graph_client=semanticscholar_graph_client,
         discovery_client=object(),
         github_client=object(),
@@ -1958,18 +1952,18 @@ async def test_export_arxiv_relations_to_csv_raises_when_semantic_scholar_target
             self.title_queries.append(title)
             return [{"paperId": "wrong-paper", "title": "Different Paper", "externalIds": {}}]
 
-    class ExplodingOpenAlexClient:
+    class ExplodingLegacyMetadataClient:
         async def fetch_work_by_identifier(self, identifier: str):
-            raise AssertionError("OpenAlex target lookup should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata target lookup should not run after the Semantic Scholar hard cut")
 
         async def search_first_work(self, title: str):
-            raise AssertionError("OpenAlex title lookup should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata title lookup should not run after the Semantic Scholar hard cut")
 
         async def fetch_referenced_works(self, work: dict):
-            raise AssertionError("OpenAlex references should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata references should not run after the Semantic Scholar hard cut")
 
         async def fetch_citations(self, work: dict):
-            raise AssertionError("OpenAlex citations should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata citations should not run after the Semantic Scholar hard cut")
 
     export_calls = []
 
@@ -1981,7 +1975,6 @@ async def test_export_arxiv_relations_to_csv_raises_when_semantic_scholar_target
         github_client,
         arxiv_client=None,
         semanticscholar_graph_client=None,
-        openalex_client=None,
         crossref_client=None,
         datacite_client=None,
         content_cache=None,
@@ -2001,7 +1994,6 @@ async def test_export_arxiv_relations_to_csv_raises_when_semantic_scholar_target
         await export_arxiv_relations_to_csv(
             "https://arxiv.org/abs/2510.22706",
             arxiv_client=FakeArxivClient(),
-            openalex_client=ExplodingOpenAlexClient(),
             semanticscholar_graph_client=semanticscholar_graph_client,
             discovery_client=object(),
             github_client=object(),
@@ -2057,18 +2049,18 @@ async def test_export_arxiv_relations_to_csv_keeps_empty_semantic_scholar_side_w
                 source_url="https://www.semanticscholar.org/paper/ss-cite",
             )
 
-    class ExplodingOpenAlexClient:
+    class ExplodingLegacyMetadataClient:
         async def fetch_work_by_identifier(self, identifier: str):
-            raise AssertionError("OpenAlex target lookup should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata target lookup should not run after the Semantic Scholar hard cut")
 
         async def search_first_work(self, title: str):
-            raise AssertionError("OpenAlex title lookup should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata title lookup should not run after the Semantic Scholar hard cut")
 
         async def fetch_referenced_works(self, work: dict):
-            raise AssertionError("OpenAlex references should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata references should not run after the Semantic Scholar hard cut")
 
         async def fetch_citations(self, work: dict):
-            raise AssertionError("OpenAlex citations should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata citations should not run after the Semantic Scholar hard cut")
 
     export_calls = []
     statuses = []
@@ -2081,7 +2073,6 @@ async def test_export_arxiv_relations_to_csv_keeps_empty_semantic_scholar_side_w
         github_client,
         arxiv_client=None,
         semanticscholar_graph_client=None,
-        openalex_client=None,
         crossref_client=None,
         datacite_client=None,
         content_cache=None,
@@ -2099,7 +2090,6 @@ async def test_export_arxiv_relations_to_csv_keeps_empty_semantic_scholar_side_w
     result = await export_arxiv_relations_to_csv(
         "https://arxiv.org/abs/2510.22706",
         arxiv_client=FakeArxivClient(),
-        openalex_client=ExplodingOpenAlexClient(),
         semanticscholar_graph_client=semanticscholar_graph_client,
         discovery_client=object(),
         github_client=object(),
@@ -2153,18 +2143,18 @@ async def test_export_arxiv_relations_to_csv_raises_when_semantic_scholar_refere
             self.citation_queries.append(paper)
             raise AssertionError("Export should fail before attempting citation-side export")
 
-    class ExplodingOpenAlexClient:
+    class ExplodingLegacyMetadataClient:
         async def fetch_work_by_identifier(self, identifier: str):
-            raise AssertionError("OpenAlex target lookup should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata target lookup should not run after the Semantic Scholar hard cut")
 
         async def search_first_work(self, title: str):
-            raise AssertionError("OpenAlex title lookup should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata title lookup should not run after the Semantic Scholar hard cut")
 
         async def fetch_referenced_works(self, work: dict):
-            raise AssertionError("OpenAlex references should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata references should not run after the Semantic Scholar hard cut")
 
         async def fetch_citations(self, work: dict):
-            raise AssertionError("OpenAlex citations should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata citations should not run after the Semantic Scholar hard cut")
 
     export_calls = []
 
@@ -2176,7 +2166,6 @@ async def test_export_arxiv_relations_to_csv_raises_when_semantic_scholar_refere
         github_client,
         arxiv_client=None,
         semanticscholar_graph_client=None,
-        openalex_client=None,
         crossref_client=None,
         datacite_client=None,
         content_cache=None,
@@ -2196,7 +2185,6 @@ async def test_export_arxiv_relations_to_csv_raises_when_semantic_scholar_refere
         await export_arxiv_relations_to_csv(
             "https://arxiv.org/abs/2510.22706",
             arxiv_client=FakeArxivClient(),
-            openalex_client=ExplodingOpenAlexClient(),
             semanticscholar_graph_client=semanticscholar_graph_client,
             discovery_client=object(),
             github_client=object(),
@@ -2256,18 +2244,18 @@ async def test_export_arxiv_relations_to_csv_uses_title_exact_fallback_when_sema
                 source_url="https://www.semanticscholar.org/paper/ss-cite",
             )
 
-    class ExplodingOpenAlexClient:
+    class ExplodingLegacyMetadataClient:
         async def fetch_work_by_identifier(self, identifier: str):
-            raise AssertionError("OpenAlex target lookup should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata target lookup should not run after the Semantic Scholar hard cut")
 
         async def search_first_work(self, title: str):
-            raise AssertionError("OpenAlex title lookup should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata title lookup should not run after the Semantic Scholar hard cut")
 
         async def fetch_referenced_works(self, work: dict):
-            raise AssertionError("OpenAlex references should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata references should not run after the Semantic Scholar hard cut")
 
         async def fetch_citations(self, work: dict):
-            raise AssertionError("OpenAlex citations should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata citations should not run after the Semantic Scholar hard cut")
 
     export_calls = []
     statuses = []
@@ -2280,7 +2268,6 @@ async def test_export_arxiv_relations_to_csv_uses_title_exact_fallback_when_sema
         github_client,
         arxiv_client=None,
         semanticscholar_graph_client=None,
-        openalex_client=None,
         crossref_client=None,
         datacite_client=None,
         content_cache=None,
@@ -2298,7 +2285,6 @@ async def test_export_arxiv_relations_to_csv_uses_title_exact_fallback_when_sema
     result = await export_arxiv_relations_to_csv(
         "https://arxiv.org/abs/2510.22706",
         arxiv_client=FakeArxivClient(),
-        openalex_client=ExplodingOpenAlexClient(),
         semanticscholar_graph_client=semanticscholar_graph_client,
         discovery_client=object(),
         github_client=object(),
@@ -2452,18 +2438,18 @@ async def test_export_arxiv_relations_to_csv_uses_hf_fallback_for_unresolved_rel
             }
             return mapping[work["paperId"]]
 
-    class ExplodingOpenAlexClient:
+    class ExplodingLegacyMetadataClient:
         async def fetch_work_by_identifier(self, identifier: str):
-            raise AssertionError("OpenAlex target lookup should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata target lookup should not run after the Semantic Scholar hard cut")
 
         async def search_first_work(self, title: str):
-            raise AssertionError("OpenAlex title lookup should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata title lookup should not run after the Semantic Scholar hard cut")
 
         async def fetch_referenced_works(self, work: dict):
-            raise AssertionError("OpenAlex references should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata references should not run after the Semantic Scholar hard cut")
 
         async def fetch_citations(self, work: dict):
-            raise AssertionError("OpenAlex citations should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata citations should not run after the Semantic Scholar hard cut")
 
     class FakeDiscoveryClient:
         huggingface_token = "hf-token"
@@ -2501,7 +2487,6 @@ async def test_export_arxiv_relations_to_csv_uses_hf_fallback_for_unresolved_rel
         github_client,
         arxiv_client=None,
         semanticscholar_graph_client=None,
-        openalex_client=None,
         crossref_client=None,
         datacite_client=None,
         content_cache=None,
@@ -2518,7 +2503,6 @@ async def test_export_arxiv_relations_to_csv_uses_hf_fallback_for_unresolved_rel
     result = await export_arxiv_relations_to_csv(
         "https://arxiv.org/abs/2603.23502",
         arxiv_client=arxiv_client,
-        openalex_client=ExplodingOpenAlexClient(),
         semanticscholar_graph_client=FakeSemanticScholarGraphClient(),
         discovery_client=FakeDiscoveryClient(),
         github_client=object(),
@@ -2606,7 +2590,6 @@ async def test_export_arxiv_relations_to_csv_uses_shared_semantic_scholar_retry_
         github_client,
         arxiv_client=None,
         semanticscholar_graph_client=None,
-        openalex_client=None,
         crossref_client=None,
         datacite_client=None,
         content_cache=None,
@@ -2639,23 +2622,22 @@ async def test_export_arxiv_relations_to_csv_uses_shared_semantic_scholar_retry_
     )
     semanticscholar_graph_client = SemanticScholarGraphClient(session, min_interval=0, max_concurrent=1)
 
-    class ExplodingOpenAlexClient:
+    class ExplodingLegacyMetadataClient:
         async def fetch_work_by_identifier(self, identifier: str):
-            raise AssertionError("OpenAlex target lookup should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata target lookup should not run after the Semantic Scholar hard cut")
 
         async def search_first_work(self, title: str):
-            raise AssertionError("OpenAlex title lookup should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata title lookup should not run after the Semantic Scholar hard cut")
 
         async def fetch_referenced_works(self, work: dict):
-            raise AssertionError("OpenAlex references should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata references should not run after the Semantic Scholar hard cut")
 
         async def fetch_citations(self, work: dict):
-            raise AssertionError("OpenAlex citations should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata citations should not run after the Semantic Scholar hard cut")
 
     result = await export_arxiv_relations_to_csv(
         "https://arxiv.org/abs/2603.23502",
         arxiv_client=FakeArxivClient(),
-        openalex_client=ExplodingOpenAlexClient(),
         semanticscholar_graph_client=semanticscholar_graph_client,
         discovery_client=object(),
         github_client=object(),
@@ -2676,15 +2658,14 @@ async def test_export_arxiv_relations_to_csv_rejects_invalid_single_paper_input(
         async def get_title(self, arxiv_identifier: str):
             raise AssertionError("Should not request arXiv title for invalid input")
 
-    class FakeOpenAlexClient:
+    class FakeLegacyMetadataClient:
         async def search_first_work(self, title: str):
-            raise AssertionError("Should not query OpenAlex for invalid input")
+            raise AssertionError("Should not query LegacyMetadata for invalid input")
 
     with pytest.raises(ValueError, match="Invalid single-paper arXiv URL"):
         await export_arxiv_relations_to_csv(
             "https://arxiv.org/list/cs.CV/recent",
             arxiv_client=FakeArxivClient(),
-            openalex_client=FakeOpenAlexClient(),
             discovery_client=object(),
             github_client=object(),
         )
@@ -2771,18 +2752,18 @@ async def test_export_arxiv_relations_to_csv_warms_content_for_arxiv_rows_and_pr
             }
             return mapping[work["paperId"]]
 
-    class ExplodingOpenAlexClient:
+    class ExplodingLegacyMetadataClient:
         async def fetch_work_by_identifier(self, identifier: str):
-            raise AssertionError("OpenAlex target lookup should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata target lookup should not run after the Semantic Scholar hard cut")
 
         async def search_first_work(self, title: str):
-            raise AssertionError("OpenAlex title lookup should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata title lookup should not run after the Semantic Scholar hard cut")
 
         async def fetch_referenced_works(self, work: dict):
-            raise AssertionError("OpenAlex references should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata references should not run after the Semantic Scholar hard cut")
 
         async def fetch_citations(self, work: dict):
-            raise AssertionError("OpenAlex citations should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata citations should not run after the Semantic Scholar hard cut")
 
     class FakeDiscoveryClient:
         huggingface_token = ""
@@ -2807,7 +2788,6 @@ async def test_export_arxiv_relations_to_csv_warms_content_for_arxiv_rows_and_pr
     result = await export_arxiv_relations_to_csv(
         "https://arxiv.org/abs/2603.23502",
         arxiv_client=arxiv_client,
-        openalex_client=ExplodingOpenAlexClient(),
         semanticscholar_graph_client=FakeSemanticScholarGraphClient(),
         discovery_client=FakeDiscoveryClient(),
         github_client=FakeGitHubClient(),
@@ -2876,15 +2856,14 @@ async def test_export_arxiv_relations_to_csv_fails_when_arxiv_title_lookup_fails
         async def get_title(self, arxiv_identifier: str):
             return None, "metadata lookup timeout"
 
-    class FakeOpenAlexClient:
+    class FakeLegacyMetadataClient:
         async def search_first_work(self, title: str):
-            raise AssertionError("OpenAlex search should not run when title lookup fails")
+            raise AssertionError("LegacyMetadata search should not run when title lookup fails")
 
     with pytest.raises(ValueError, match="Failed to resolve arXiv title: metadata lookup timeout"):
         await export_arxiv_relations_to_csv(
             "https://arxiv.org/abs/2603.23502",
             arxiv_client=FakeArxivClient(),
-            openalex_client=FakeOpenAlexClient(),
             discovery_client=object(),
             github_client=object(),
         )
@@ -2909,7 +2888,6 @@ async def test_export_arxiv_relations_to_csv_fails_when_no_semantic_scholar_targ
         await export_arxiv_relations_to_csv(
             "https://arxiv.org/abs/2603.23502",
             arxiv_client=FakeArxivClient(),
-            openalex_client=object(),
             semanticscholar_graph_client=FakeSemanticScholarGraphClient(),
             discovery_client=object(),
             github_client=object(),
@@ -2921,7 +2899,7 @@ async def test_export_arxiv_relations_to_csv_fails_when_no_semantic_scholar_targ
     ("exc_type", "message"),
     [
         (ValueError, "Invalid single-paper arXiv URL: bad-input"),
-        (RuntimeError, "OpenAlex API error (503)"),
+        (RuntimeError, "LegacyMetadata API error (503)"),
         (aiohttp.ClientError, "connection reset by peer"),
     ],
 )
@@ -2939,8 +2917,8 @@ async def test_run_arxiv_relations_mode_prints_concise_stderr_and_returns_nonzer
         def __init__(self, session, *, max_concurrent=0, min_interval=0):
             self.session = session
 
-    class FakeOpenAlexClient:
-        def __init__(self, session, *, openalex_api_key="", max_concurrent=0, min_interval=0):
+    class FakeLegacyMetadataClient:
+        def __init__(self, session, *, legacy_metadata_api_key="", max_concurrent=0, min_interval=0):
             self.session = session
 
     class FakeDiscoveryClient:
@@ -2969,7 +2947,6 @@ async def test_run_arxiv_relations_mode_prints_concise_stderr_and_returns_nonzer
         "https://arxiv.org/abs/2603.23502",
         session_factory=lambda **kwargs: FakeSession(),
         arxiv_client_cls=FakeArxivClient,
-        openalex_client_cls=FakeOpenAlexClient,
         discovery_client_cls=FakeDiscoveryClient,
         github_client_cls=FakeGitHubClient,
     )
@@ -2996,8 +2973,8 @@ async def test_run_arxiv_relations_mode_returns_nonzero_on_unexpected_hard_failu
         def __init__(self, session, *, max_concurrent=0, min_interval=0):
             self.session = session
 
-    class FakeOpenAlexClient:
-        def __init__(self, session, *, openalex_api_key="", max_concurrent=0, min_interval=0):
+    class FakeLegacyMetadataClient:
+        def __init__(self, session, *, legacy_metadata_api_key="", max_concurrent=0, min_interval=0):
             self.session = session
 
     class FakeDiscoveryClient:
@@ -3026,7 +3003,6 @@ async def test_run_arxiv_relations_mode_returns_nonzero_on_unexpected_hard_failu
         "https://arxiv.org/abs/2603.23502",
         session_factory=lambda **kwargs: FakeSession(),
         arxiv_client_cls=FakeArxivClient,
-        openalex_client_cls=FakeOpenAlexClient,
         discovery_client_cls=FakeDiscoveryClient,
         github_client_cls=FakeGitHubClient,
     )
@@ -3076,8 +3052,8 @@ async def test_run_arxiv_relations_mode_returns_nonzero_on_pre_export_setup_fail
             def __init__(self, session, *, max_concurrent=0, min_interval=0):
                 raise RuntimeError(message)
 
-        class FakeOpenAlexClient:
-            def __init__(self, session, *, openalex_api_key="", max_concurrent=0, min_interval=0):
+        class FakeLegacyMetadataClient:
+            def __init__(self, session, *, legacy_metadata_api_key="", max_concurrent=0, min_interval=0):
                 self.session = session
 
         class FakeDiscoveryClient:
@@ -3101,7 +3077,6 @@ async def test_run_arxiv_relations_mode_returns_nonzero_on_pre_export_setup_fail
             "https://arxiv.org/abs/2603.23502",
             session_factory=lambda **kwargs: FakeSession(),
             arxiv_client_cls=FailingArxivClient,
-            openalex_client_cls=FakeOpenAlexClient,
             discovery_client_cls=FakeDiscoveryClient,
             github_client_cls=FakeGitHubClient,
         )
@@ -3139,13 +3114,12 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
             self.min_interval = min_interval
             constructed["arxiv_client"] = self
 
-    class FakeOpenAlexClient:
-        def __init__(self, session, *, openalex_api_key="", max_concurrent=0, min_interval=0):
+    class FakeLegacyMetadataClient:
+        def __init__(self, session, *, legacy_metadata_api_key="", max_concurrent=0, min_interval=0):
             self.session = session
-            self.openalex_api_key = openalex_api_key
+            self.legacy_metadata_api_key = legacy_metadata_api_key
             self.max_concurrent = max_concurrent
             self.min_interval = min_interval
-            constructed["openalex_client"] = self
 
     class FakeCrossrefClient:
         def __init__(self, session, *, max_concurrent=0, min_interval=0):
@@ -3187,7 +3161,6 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
         *,
         output_dir: Path | None = None,
         arxiv_client,
-        openalex_client,
         crossref_client,
         datacite_client,
         discovery_client,
@@ -3205,7 +3178,6 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
                 "arxiv_input": arxiv_input,
                 "output_dir": output_dir,
                 "arxiv_client": arxiv_client,
-                "openalex_client": openalex_client,
                 "crossref_client": crossref_client,
                 "datacite_client": datacite_client,
                 "discovery_client": discovery_client,
@@ -3289,7 +3261,6 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
         output_dir=tmp_path,
         session_factory=lambda **kwargs: FakeSession(),
         arxiv_client_cls=FakeArxivClient,
-        openalex_client_cls=FakeOpenAlexClient,
         crossref_client_cls=FakeCrossrefClient,
         datacite_client_cls=FakeDataCiteClient,
         discovery_client_cls=FakeDiscoveryClient,
@@ -3305,7 +3276,6 @@ async def test_run_arxiv_relations_mode_successfully_wires_clients_callbacks_and
     assert export_calls[0]["arxiv_input"] == "https://arxiv.org/abs/2603.23502"
     assert export_calls[0]["output_dir"] == tmp_path
     assert export_calls[0]["arxiv_client"] is constructed["arxiv_client"]
-    assert export_calls[0]["openalex_client"] is constructed["openalex_client"]
     assert export_calls[0]["crossref_client"] is constructed["crossref_client"]
     assert export_calls[0]["datacite_client"] is constructed["datacite_client"]
     assert export_calls[0]["discovery_client"] is constructed["discovery_client"]
@@ -3358,8 +3328,8 @@ async def test_run_arxiv_relations_mode_wires_semantic_scholar_graph_client_from
         def __init__(self, session, *, max_concurrent=0, min_interval=0):
             self.session = session
 
-    class FakeOpenAlexClient:
-        def __init__(self, session, *, openalex_api_key="", max_concurrent=0, min_interval=0):
+    class FakeLegacyMetadataClient:
+        def __init__(self, session, *, legacy_metadata_api_key="", max_concurrent=0, min_interval=0):
             self.session = session
 
     class FakeCrossrefClient:
@@ -3434,7 +3404,6 @@ async def test_run_arxiv_relations_mode_wires_semantic_scholar_graph_client_from
         output_dir=tmp_path,
         session_factory=lambda **kwargs: FakeSession(),
         arxiv_client_cls=FakeArxivClient,
-        openalex_client_cls=FakeOpenAlexClient,
         crossref_client_cls=FakeCrossrefClient,
         datacite_client_cls=FakeDataCiteClient,
         discovery_client_cls=FakeDiscoveryClient,
@@ -3490,18 +3459,18 @@ async def test_export_arxiv_relations_to_csv_threads_metadata_clients_to_shared_
         def build_related_work_candidate(self, paper: dict):
             raise AssertionError("No relation candidates should be built for empty Semantic Scholar rows")
 
-    class ExplodingOpenAlexClient:
+    class ExplodingLegacyMetadataClient:
         async def fetch_work_by_identifier(self, identifier: str):
-            raise AssertionError("OpenAlex target lookup should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata target lookup should not run after the Semantic Scholar hard cut")
 
         async def search_first_work(self, title: str):
-            raise AssertionError("OpenAlex title lookup should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata title lookup should not run after the Semantic Scholar hard cut")
 
         async def fetch_referenced_works(self, work: dict):
-            raise AssertionError("OpenAlex references should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata references should not run after the Semantic Scholar hard cut")
 
         async def fetch_citations(self, work: dict):
-            raise AssertionError("OpenAlex citations should not run after the Semantic Scholar hard cut")
+            raise AssertionError("LegacyMetadata citations should not run after the Semantic Scholar hard cut")
 
     async def fake_normalize_related_work_candidates_to_seeds(*args, **kwargs):
         normalize_calls.append(kwargs)
@@ -3515,7 +3484,6 @@ async def test_export_arxiv_relations_to_csv_threads_metadata_clients_to_shared_
         github_client,
         arxiv_client=None,
         semanticscholar_graph_client=None,
-        openalex_client=None,
         crossref_client=None,
         datacite_client=None,
         content_cache=None,
@@ -3553,7 +3521,6 @@ async def test_export_arxiv_relations_to_csv_threads_metadata_clients_to_shared_
     result = await export_arxiv_relations_to_csv(
         "https://arxiv.org/abs/2603.23502",
         arxiv_client=FakeArxivClient(),
-        openalex_client=ExplodingOpenAlexClient(),
         semanticscholar_graph_client=semanticscholar_graph_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,

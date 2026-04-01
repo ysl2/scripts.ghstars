@@ -12,7 +12,6 @@ from src.shared.crossref import CrossrefClient
 from src.shared.datacite import DataCiteClient
 from src.shared.discovery import DiscoveryClient
 from src.shared.github import GitHubClient
-from src.shared.openalex import OpenAlexClient
 from src.shared.paper_content import PaperContentCache
 from src.shared.progress import print_paper_progress, print_relation_progress, print_summary
 from src.shared.runtime import build_client, load_runtime_config, open_runtime_clients
@@ -34,7 +33,6 @@ async def run_arxiv_relations_mode(
     output_dir: Path | None = None,
     session_factory=aiohttp.ClientSession,
     arxiv_client_cls=ArxivClient,
-    openalex_client_cls=OpenAlexClient,
     crossref_client_cls=CrossrefClient,
     datacite_client_cls=DataCiteClient,
     discovery_client_cls=DiscoveryClient,
@@ -44,7 +42,6 @@ async def run_arxiv_relations_mode(
 ) -> int:
     try:
         config = load_runtime_config(dict(os.environ))
-        openalex_api_key = (os.environ.get("OPENALEX_API_KEY") or "").strip()
         async with open_runtime_clients(
             config,
             session_factory=session_factory,
@@ -57,13 +54,6 @@ async def run_arxiv_relations_mode(
             arxiv_client = build_client(
                 arxiv_client_cls,
                 runtime.session,
-                max_concurrent=CONCURRENT_LIMIT,
-                min_interval=REQUEST_DELAY,
-            )
-            openalex_client = build_client(
-                openalex_client_cls,
-                runtime.session,
-                openalex_api_key=openalex_api_key,
                 max_concurrent=CONCURRENT_LIMIT,
                 min_interval=REQUEST_DELAY,
             )
@@ -107,7 +97,6 @@ async def run_arxiv_relations_mode(
                 arxiv_input,
                 output_dir=output_dir,
                 arxiv_client=arxiv_client,
-                openalex_client=openalex_client,
                 crossref_client=crossref_client,
                 datacite_client=datacite_client,
                 discovery_client=runtime.discovery_client,

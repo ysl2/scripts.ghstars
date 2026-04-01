@@ -1,3 +1,5 @@
+import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 import cache
@@ -18,7 +20,7 @@ def _seed_repo_cache(db_path: Path) -> tuple[str, str]:
 def _seed_relation_resolution_cache(db_path: Path) -> tuple[tuple[str, str], tuple[str, str]]:
     store = RelationResolutionCacheStore(db_path)
     negative_key = ("doi", "https://doi.org/10.1000/negative")
-    positive_key = ("openalex_work", "https://openalex.org/W123")
+    positive_key = ("source_url", "https://www.semanticscholar.org/paper/Foo/abc123")
     store.record_resolution(key_type=negative_key[0], key_value=negative_key[1], arxiv_url=None)
     store.record_resolution(
         key_type=positive_key[0],
@@ -76,3 +78,46 @@ def test_cache_main_apply_deletes_only_negative_repo_discovery_cache_entries(tmp
     assert relation_store.get(*negative_relation_key) is None
     assert relation_store.get(*positive_relation_key) is not None
     relation_store.close()
+
+
+def test_cache_main_dry_run_does_not_mutate_unsupported_legacy_relation_rows(tmp_path, capsys):
+    db_path = tmp_path / "cache.db"
+    _seed_repo_cache(db_path)
+    _seed_relation_resolution_cache(db_path)
+
+    connection = sqlite3.connect(db_path)
+    connection.execute(
+        """
+        INSERT INTO relation_resolution_cache (key_type, key_value, arxiv_url, resolved_title, checked_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            "legacy_source",
+            "https://legacy.example/paper/123",
+            "https://arxiv.org/abs/2509.12345",
+            "Legacy Cached Title",
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    connection.commit()
+    connection.close()
+
+    exit_code = cache.main(["--db-path", str(db_path)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Dry run" in captured.out
+
+    connection = sqlite3.connect(db_path)
+    row = connection.execute(
+        """
+        SELECT arxiv_url
+        FROM relation_resolution_cache
+        WHERE key_type = ? AND key_value = ?
+        """,
+        ("legacy_source", "https://legacy.example/paper/123"),
+    ).fetchone()
+    connection.close()
+
+    assert row is not None
+    assert row[0] == "https://arxiv.org/abs/2509.12345"

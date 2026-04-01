@@ -46,34 +46,18 @@ REPO_DISCOVERY_NO_REPO_RECHECK_DAYS=7
 ### Optional in modes that may normalize non-arXiv paper URLs
 
 ```bash
-OPENALEX_API_KEY=
 SEMANTIC_SCHOLAR_API_KEY=
 AIFORSCHOLAR_TOKEN=
 ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS=30
 ```
 
-`OPENALEX_API_KEY` is optional but recommended anywhere the shared arXiv URL resolver may need OpenAlex metadata, including CSV update, collection URL export, Notion sync, and single-paper relation export. Even with a key, OpenAlex can still return budget-exhausted `429` responses; the client honors `Retry-After` / `retryAfter` signals and avoids long pointless retry loops when the server asks for a much later retry.
+`SEMANTIC_SCHOLAR_API_KEY` is optional for the shared Semantic Scholar Graph API resolver used by CSV update, collection URL export, Notion sync, and single-paper relation export.
 
-`SEMANTIC_SCHOLAR_API_KEY` is optional for single-paper arXiv relation export against the official Semantic Scholar Graph API.
-
-`AIFORSCHOLAR_TOKEN` is optional for single-paper arXiv relation export through the `https://ai4scholar.net/graph/v1` relay, which mirrors the official Graph API paths behind a Bearer token. If both `SEMANTIC_SCHOLAR_API_KEY` and `AIFORSCHOLAR_TOKEN` are set, the official Semantic Scholar credential is preferred and the relay token is not used for that run.
+`AIFORSCHOLAR_TOKEN` is optional for the `https://ai4scholar.net/graph/v1` relay, which mirrors the official Graph API paths behind a Bearer token. Transport priority is: `SEMANTIC_SCHOLAR_API_KEY` -> `AIFORSCHOLAR_TOKEN` -> anonymous official API.
 
 `ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS` controls how long the shared arXiv-resolution negative cache stays fresh before the resolver retries that unresolved identifier.
 
-### Optional override only for Semantic Scholar URL mode
-
-Semantic Scholar search pages are rendered with a local Chrome binary in headless mode.
-
-Normally you do not need to configure anything on macOS if Chrome is installed at:
-
-- `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`
-
-`GOOGLE_CHROME_BIN` is only an override. Set it only if you want to force a specific Chrome binary, or if Chrome is installed outside the default macOS location.
-
-When set, `GOOGLE_CHROME_BIN` may be either:
-
-- an absolute path to the Chrome binary
-- a command name resolvable via `PATH`
+Semantic Scholar collection URLs now use Graph API bulk search directly. No browser binary is required.
 
 ### Required only for Notion mode
 
@@ -146,7 +130,7 @@ uv run main.py /path/to/papers.csv
 CSV mode behavior:
 
 - if `Url` is already an arXiv URL, it is preserved exactly as-is
-- if `Url` is non-arXiv, the shared resolver uses `cache -> OpenAlex exact -> OpenAlex preprint -> arXiv title search (HTML -> API) -> Crossref -> DataCite -> Hugging Face` to normalize it to arXiv when possible
+- if `Url` is non-arXiv, the shared resolver uses `cache -> Semantic Scholar exact -> Semantic Scholar title exact -> arXiv title search (HTML -> API) -> Crossref -> DataCite -> Hugging Face` to normalize it to arXiv when possible
 - requires `Url`; `Name` is optional
 - if `Github` is already present and valid, its exact value is preserved and only `Stars` is refreshed
 - if `Github` is blank, discovery checks `cache.db` first, then does one Hugging Face exact lookup on cache miss
@@ -291,17 +275,16 @@ URL mode behavior:
 - arXiv catchup exports fail explicitly when the page reports more entries than are present on the page, rather than guessing pagination and writing a partial CSV
 - arXiv Xplorer uses the site’s paging API instead of trying to click `Show More` in a browser
 - Hugging Face Papers parses the collection page’s embedded papers payload from the frontend response
-- Semantic Scholar crawls the search result pages, then keeps only rows that can be normalized to canonical arXiv URLs
-- Semantic Scholar crawling requires a working local Chrome/Chromium binary as described above
+- Semantic Scholar search URLs are executed through Graph API bulk search, then keep only rows that can be normalized to canonical arXiv URLs
 - URL modes use canonical, versionless arXiv URLs as internal identity and dedupe keys during downstream enrichment; existing arXiv URLs are preserved as-is in the final CSV, while non-arXiv rows are rewritten only when they are resolved to arXiv
 - rows that cannot be mapped to arXiv are dropped from the final CSV
 - repo discovery reuses the shared `cache.db` mapping of canonical arXiv URL to GitHub repo
-- the shared resolver uses `cache -> OpenAlex exact -> OpenAlex preprint -> arXiv title search (HTML -> API) -> Crossref -> DataCite -> Hugging Face` for non-arXiv rows before downstream repo discovery
+- the shared resolver uses `cache -> Semantic Scholar exact -> Semantic Scholar title exact -> arXiv title search (HTML -> API) -> Crossref -> DataCite -> Hugging Face` for non-arXiv rows before downstream repo discovery
 - downstream repository discovery, star lookup, sorting, progress printing, and CSV writing reuse the same shared export logic as CSV update mode where applicable
 
 ### Single-paper arXiv relation export mode
 
-Reads one arXiv paper URL, resolves related works through OpenAlex, normalizes them to canonical arXiv rows when possible, retains unresolved non-arXiv rows otherwise, and writes two CSV files under `./output` in the current working directory by default.
+Reads one arXiv paper URL, resolves related works through the Semantic Scholar Graph API / ai4scholar relay, normalizes them to canonical arXiv rows when possible, retains unresolved non-arXiv rows otherwise, and writes two CSV files under `./output` in the current working directory by default.
 
 Command shape:
 
@@ -339,21 +322,18 @@ Output example:
 
 Single-paper mode behavior:
 
-- resolves the input paper title from arXiv metadata first, then searches OpenAlex by title
-- accepts the first OpenAlex work returned by relevance order
+- resolves the input paper title from arXiv metadata first, then resolves the Semantic Scholar target by exact arXiv DOI / arXiv id with exact-title fallback
 - keeps direct arXiv-backed related works as canonical, versionless arXiv `abs` rows
-- otherwise reuses the shared resolver `cache -> OpenAlex exact -> OpenAlex preprint -> arXiv title search (HTML -> API) -> Crossref -> DataCite -> Hugging Face`
+- otherwise reuses the shared resolver `cache -> Semantic Scholar exact -> Semantic Scholar title exact -> arXiv title search (HTML -> API) -> Crossref -> DataCite -> Hugging Face`
 - mapped rows use the matched arXiv title and canonical arXiv `abs` URL
 - when `HUGGINGFACE_TOKEN` is absent, the Hugging Face fallback is skipped silently and unresolved rows keep the current retained-row behavior
-- if still unresolved, keeps the non-arXiv row with `Url` priority `DOI > landing page > OpenAlex URL`
-- relation normalization reuses `./cache.db` to cache non-direct relation resolution by OpenAlex work URL and DOI
+- if still unresolved, keeps the non-arXiv row with `Url` priority `DOI > landing page > source URL`
+- relation normalization reuses `./cache.db` to cache non-direct relation resolution by source URL and DOI
 - cached positive matches store canonical arXiv `abs` URLs; cached negative matches are written only when all actually attempted resolver stages finish without transient/network failure and still find no accepted arXiv match, then retried after `ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS`
 - referenced and citing works are deduplicated by final normalized URL before export
 - both CSVs use the standard columns: `Name`, `Url`, `Github`, `Stars`
 - shared GitHub discovery, local overview / abs cache warming, and star enrichment are reused, so resolved and unresolved rows remain in the CSV even when no repo is found; in that case `Github` and `Stars` are left blank
-- a missing OpenAlex detail record for one referenced work currently causes that one related work to be skipped while the rest of the export continues
-- a budget-exhausted OpenAlex `429` can still fail the run even with `OPENALEX_API_KEY`; the client respects upstream retry signals instead of looping on very long waits
-- the CLI reports success only after both CSV files are written; other arXiv or OpenAlex hard failures still return a nonzero exit code
+- the CLI reports success only after both CSV files are written; other arXiv or Semantic Scholar hard failures still return a nonzero exit code
 
 ## Notion expectations
 
@@ -376,7 +356,7 @@ Optional arXiv source fields for fallback discovery:
 
 When `Github` is empty, the sync flow:
 
-1. resolves the paper to a canonical arXiv URL from URL fields first; for non-arXiv URLs, the shared resolver uses `cache -> OpenAlex exact -> OpenAlex preprint -> arXiv title search (HTML -> API) -> Crossref -> DataCite -> Hugging Face`
+1. resolves the paper to a canonical arXiv URL from URL fields first; for non-arXiv URLs, the shared resolver uses `cache -> Semantic Scholar exact -> Semantic Scholar title exact -> arXiv title search (HTML -> API) -> Crossref -> DataCite -> Hugging Face`
 2. uses that canonical arXiv URL as the paper identity for repo discovery and stars lookup
 3. checks `cache.db` for that canonical arXiv URL
 4. if needed, calls Hugging Face exact paper API for that arXiv id
