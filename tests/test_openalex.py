@@ -400,6 +400,30 @@ def test_build_related_work_candidate_provider_neutral_source_url():
     assert candidate.source_url == "https://openalex.org/W123"
 
 
+def test_related_work_candidate_direct_instantiation_exposes_source_url_and_openalex_compat_alias():
+    candidate = SharedRelatedWorkCandidate(
+        title="Direct Candidate",
+        direct_arxiv_url=None,
+        doi_url="https://doi.org/10.1145/example",
+        landing_page_url="https://publisher.example/paper",
+        source_url="https://openalex.org/W789",
+    )
+
+    assert candidate.source_url == "https://openalex.org/W789"
+    assert candidate.openalex_url == "https://openalex.org/W789"
+
+
+def test_related_work_candidate_direct_instantiation_rejects_openalex_url_constructor_input():
+    with pytest.raises(TypeError):
+        SharedRelatedWorkCandidate(
+            title="Legacy Constructor",
+            direct_arxiv_url=None,
+            doi_url=None,
+            landing_page_url=None,
+            openalex_url="https://openalex.org/W999",
+        )
+
+
 def test_build_related_work_candidate_uses_source_url_field_for_openalex_url_compatibility_alias():
     session = FakeSession([])
     client = OpenAlexClient(session, min_interval=0)

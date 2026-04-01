@@ -225,14 +225,14 @@ async def test_normalize_related_works_maps_non_arxiv_title_hits_to_canonical_ar
                     direct_arxiv_url="https://arxiv.org/abs/2403.00001",
                     doi_url=None,
                     landing_page_url=None,
-                    openalex_url="https://openalex.org/W1",
+                    source_url="https://openalex.org/W1",
                 ),
                 "R2": RelatedWorkCandidate(
                     title="Original OpenAlex Title",
                     direct_arxiv_url=None,
                     doi_url=None,
                     landing_page_url="https://publisher.example/mapped",
-                    openalex_url="https://openalex.org/W2",
+                    source_url="https://openalex.org/W2",
                 ),
             }
             return mapping[work["id"]]
@@ -389,7 +389,7 @@ async def test_normalize_related_works_uses_shared_resolver_instead_of_relation_
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/paper",
-                openalex_url="https://openalex.org/W123",
+                source_url="https://openalex.org/W123",
             )
 
     class FakeArxivClient:
@@ -466,7 +466,7 @@ async def test_normalize_related_works_uses_cached_resolved_title_before_get_tit
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/cached",
-                openalex_url="https://openalex.org/W9",
+                source_url="https://openalex.org/W9",
             )
 
     class FakeArxivClient:
@@ -526,7 +526,7 @@ async def test_normalize_related_works_falls_back_to_get_title_for_legacy_positi
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/cached",
-                openalex_url="https://openalex.org/W9",
+                source_url="https://openalex.org/W9",
             )
 
     class FakeArxivClient:
@@ -571,21 +571,21 @@ async def test_normalize_related_works_retains_unresolved_non_arxiv_rows_with_ur
                     direct_arxiv_url=None,
                     doi_url="https://doi.org/10.1145/example",
                     landing_page_url="https://publisher.example/doi",
-                    openalex_url="https://openalex.org/W3",
+                    source_url="https://openalex.org/W3",
                 ),
                 "R4": RelatedWorkCandidate(
                     title="With Landing",
                     direct_arxiv_url=None,
                     doi_url=None,
                     landing_page_url="https://publisher.example/paper",
-                    openalex_url="https://openalex.org/W4",
+                    source_url="https://openalex.org/W4",
                 ),
                 "R5": RelatedWorkCandidate(
                     title="OpenAlex Only",
                     direct_arxiv_url=None,
                     doi_url=None,
                     landing_page_url=None,
-                    openalex_url="https://openalex.org/W5",
+                    source_url="https://openalex.org/W5",
                 ),
             }
             return mapping[work["id"]]
@@ -640,7 +640,7 @@ async def test_normalize_related_works_skips_api_when_negative_cache_is_fresh():
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/fallback",
-                openalex_url="https://openalex.org/W10",
+                source_url="https://openalex.org/W10",
             )
 
     class FakeArxivClient:
@@ -678,7 +678,7 @@ async def test_normalize_related_works_does_not_negative_cache_api_request_failu
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/transient",
-                openalex_url="https://openalex.org/W10",
+                source_url="https://openalex.org/W10",
             )
 
     class FakeArxivClient:
@@ -718,7 +718,7 @@ async def test_normalize_related_works_runs_openalex_crosswalk_before_arxiv_titl
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1145/example",
                 landing_page_url="https://publisher.example/paper",
-                openalex_url="https://openalex.org/WX1",
+                source_url="https://openalex.org/WX1",
             )
 
         async def find_preprint_match_by_identifier(self, identifier: str, *, title: str | None = None):
@@ -805,7 +805,7 @@ async def test_normalize_related_works_openalex_crosswalk_miss_runs_before_arxiv
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1145/example",
                 landing_page_url="https://publisher.example/paper",
-                openalex_url="https://openalex.org/WX2",
+                source_url="https://openalex.org/WX2",
             )
 
         async def find_related_work_preprint_arxiv_url(self, work: dict, *, title: str):
@@ -890,7 +890,7 @@ async def test_normalize_related_works_does_not_negative_cache_when_openalex_cro
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1145/example",
                 landing_page_url="https://publisher.example/paper",
-                openalex_url="https://openalex.org/WX3",
+                source_url="https://openalex.org/WX3",
             )
 
         async def find_related_work_preprint_arxiv_url(self, work: dict, *, title: str):
@@ -942,7 +942,7 @@ async def test_normalize_related_works_uses_hf_fallback_after_arxiv_api_miss():
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/fsgs",
-                openalex_url="https://openalex.org/WFSGS",
+                source_url="https://openalex.org/WFSGS",
             )
 
     class FakeArxivClient:
@@ -1042,7 +1042,7 @@ async def test_normalize_related_works_uses_hf_fallback_after_arxiv_api_transien
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/fsgs",
-                openalex_url="https://openalex.org/WFSGS",
+                source_url="https://openalex.org/WFSGS",
             )
 
     class FakeArxivClient:
@@ -1132,7 +1132,7 @@ async def test_normalize_related_works_negative_caches_stable_miss_when_hf_token
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/fsgs",
-                openalex_url="https://openalex.org/WFSGS",
+                source_url="https://openalex.org/WFSGS",
             )
 
     class FakeNoMatchArxivClient:
@@ -1184,7 +1184,7 @@ async def test_normalize_related_works_does_not_negative_cache_transient_hf_fail
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/fsgs",
-                openalex_url="https://openalex.org/WFSGS",
+                source_url="https://openalex.org/WFSGS",
             )
 
     class FakeNoMatchArxivClient:
@@ -1233,7 +1233,7 @@ async def test_normalize_related_works_does_not_negative_cache_when_arxiv_transi
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/fsgs",
-                openalex_url="https://openalex.org/WFSGS",
+                source_url="https://openalex.org/WFSGS",
             )
 
     class FakeArxivClient:
@@ -1282,7 +1282,7 @@ async def test_normalize_related_works_does_not_negative_cache_unparseable_hf_pa
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/fsgs",
-                openalex_url="https://openalex.org/WFSGS",
+                source_url="https://openalex.org/WFSGS",
             )
 
     class FakeNoMatchArxivClient:
@@ -1331,7 +1331,7 @@ async def test_normalize_related_works_does_not_negative_cache_malformed_hf_sear
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/fsgs",
-                openalex_url="https://openalex.org/WFSGS",
+                source_url="https://openalex.org/WFSGS",
             )
 
     class FakeNoMatchArxivClient:
@@ -1383,7 +1383,7 @@ async def test_normalize_related_works_does_not_negative_cache_when_hf_title_pay
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/fsgs",
-                openalex_url="https://openalex.org/WFSGS",
+                source_url="https://openalex.org/WFSGS",
             )
 
     class FakeNoMatchArxivClient:
@@ -1441,7 +1441,7 @@ async def test_normalize_related_works_negative_caches_after_stable_miss_with_hf
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/fsgs",
-                openalex_url="https://openalex.org/WFSGS",
+                source_url="https://openalex.org/WFSGS",
             )
 
     class FakeNoMatchArxivClient:
@@ -1524,7 +1524,7 @@ async def test_normalize_related_works_rechecks_stale_negative_and_backfills_all
                 direct_arxiv_url=None,
                 doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                 landing_page_url="https://publisher.example/backfilled",
-                openalex_url="https://openalex.org/W11",
+                source_url="https://openalex.org/W11",
             )
 
     class FakeArxivClient:
@@ -1602,7 +1602,7 @@ async def test_normalize_related_works_direct_arxiv_rows_bypass_cache_and_search
                 direct_arxiv_url="https://arxiv.org/abs/2501.00001",
                 doi_url="https://doi.org/10.1000/direct",
                 landing_page_url="https://publisher.example/direct",
-                openalex_url="https://openalex.org/W12",
+                source_url="https://openalex.org/W12",
             )
 
     class FakeArxivClient:
@@ -1638,14 +1638,14 @@ async def test_normalize_related_works_resolves_non_direct_rows_concurrently():
                     direct_arxiv_url=None,
                     doi_url=None,
                     landing_page_url="https://publisher.example/a",
-                    openalex_url="https://openalex.org/W6",
+                    source_url="https://openalex.org/W6",
                 ),
                 "R7": RelatedWorkCandidate(
                     title="Concurrent Paper B",
                     direct_arxiv_url=None,
                     doi_url=None,
                     landing_page_url="https://publisher.example/b",
-                    openalex_url="https://openalex.org/W7",
+                    source_url="https://openalex.org/W7",
                 ),
             }
             return mapping[work["id"]]
@@ -1771,35 +1771,35 @@ async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_ret
                     direct_arxiv_url="https://arxiv.org/abs/2501.00001",
                     doi_url=None,
                     landing_page_url=None,
-                    openalex_url="https://openalex.org/WR1",
+                    source_url="https://openalex.org/WR1",
                 ),
                 "R2": RelatedWorkCandidate(
                     title="Reference Needs Mapping",
                     direct_arxiv_url=None,
                     doi_url=None,
                     landing_page_url="https://publisher.example/mapped",
-                    openalex_url="https://openalex.org/WR2",
+                    source_url="https://openalex.org/WR2",
                 ),
                 "R3": RelatedWorkCandidate(
                     title="Publisher Reference",
                     direct_arxiv_url=None,
                     doi_url="https://doi.org/10.1145/example",
                     landing_page_url="https://publisher.example/doi",
-                    openalex_url="https://openalex.org/WR3",
+                    source_url="https://openalex.org/WR3",
                 ),
                 "C1": RelatedWorkCandidate(
                     title="Citation A",
                     direct_arxiv_url="https://arxiv.org/abs/2502.00002",
                     doi_url=None,
                     landing_page_url=None,
-                    openalex_url="https://openalex.org/WC1",
+                    source_url="https://openalex.org/WC1",
                 ),
                 "C2": RelatedWorkCandidate(
                     title="Citation A Duplicate",
                     direct_arxiv_url="https://arxiv.org/abs/2502.00002",
                     doi_url=None,
                     landing_page_url=None,
-                    openalex_url="https://openalex.org/WC2",
+                    source_url="https://openalex.org/WC2",
                 ),
             }
             return mapping[work["id"]]
@@ -2064,14 +2064,14 @@ async def test_export_arxiv_relations_to_csv_uses_hf_fallback_for_unresolved_rel
                     direct_arxiv_url=None,
                     doi_url="https://doi.org/10.1007/978-3-031-72933-1_9",
                     landing_page_url="https://publisher.example/reference",
-                    openalex_url="https://openalex.org/WR1",
+                    source_url="https://openalex.org/WR1",
                 ),
                 "C1": RelatedWorkCandidate(
                     title="Citation Needs HF Mapping",
                     direct_arxiv_url=None,
                     doi_url="https://doi.org/10.1007/978-3-031-72933-1_10",
                     landing_page_url="https://publisher.example/citation",
-                    openalex_url="https://openalex.org/WC1",
+                    source_url="https://openalex.org/WC1",
                 ),
             }
             return mapping[work["id"]]
@@ -2335,21 +2335,21 @@ async def test_export_arxiv_relations_to_csv_warms_content_for_arxiv_rows_and_pr
                     direct_arxiv_url="https://arxiv.org/abs/2501.00001",
                     doi_url=None,
                     landing_page_url=None,
-                    openalex_url="https://openalex.org/WR1",
+                    source_url="https://openalex.org/WR1",
                 ),
                 "R2": RelatedWorkCandidate(
                     title="Retained DOI Reference",
                     direct_arxiv_url=None,
                     doi_url="https://doi.org/10.1145/example",
                     landing_page_url="https://publisher.example/reference",
-                    openalex_url="https://openalex.org/WR2",
+                    source_url="https://openalex.org/WR2",
                 ),
                 "C1": RelatedWorkCandidate(
                     title="Citation With Missing Stars",
                     direct_arxiv_url="https://arxiv.org/abs/2502.00002",
                     doi_url=None,
                     landing_page_url=None,
-                    openalex_url="https://openalex.org/WC1",
+                    source_url="https://openalex.org/WC1",
                 ),
             }
             return mapping[work["id"]]
