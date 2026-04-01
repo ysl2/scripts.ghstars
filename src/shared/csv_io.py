@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 
 from src.shared.csv_rows import CsvRow, sort_csv_rows
-from src.shared.papers import PaperRecord
+from src.shared.papers import PaperRecord, sort_records
 
 
 CSV_HEADERS = ["Name", "Url", "Github", "Stars", "Created", "About"]
@@ -45,7 +45,7 @@ def write_records_to_csv_path(records: list[PaperRecord], csv_path: Path) -> Pat
                 about="",
                 sort_index=record.sort_index,
             )
-            for record in records
+            for record in sort_records(records)
         ],
         csv_path,
     )
