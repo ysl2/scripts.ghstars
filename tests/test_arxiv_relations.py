@@ -1858,6 +1858,102 @@ async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_ret
 
 
 @pytest.mark.anyio
+async def test_export_arxiv_relations_to_csv_prefers_exact_openalex_work_lookup_over_title_search(
+    tmp_path: Path, monkeypatch
+):
+    from src.arxiv_relations.pipeline import export_arxiv_relations_to_csv
+
+    class FakeArxivClient:
+        async def get_title(self, arxiv_identifier: str):
+            assert arxiv_identifier == "https://arxiv.org/abs/2510.22706"
+            return "IGGT: Instance-Grounded Geometry Transformer for Semantic 3D Reconstruction", None
+
+    class FakeOpenAlexClient:
+        def __init__(self):
+            self.identifier_queries: list[str] = []
+            self.title_queries: list[str] = []
+            self.reference_work_queries: list[dict] = []
+            self.citation_work_queries: list[dict] = []
+
+        async def fetch_work_by_identifier(self, identifier: str):
+            self.identifier_queries.append(identifier)
+            if identifier == "https://doi.org/10.48550/arxiv.2510.22706":
+                return {
+                    "id": "https://openalex.org/W7101583646",
+                    "display_name": "IGGT: Instance-Grounded Geometry Transformer for Semantic 3D Reconstruction",
+                    "doi": "https://doi.org/10.48550/arxiv.2510.22706",
+                    "referenced_works": [],
+                }
+            return None
+
+        async def search_first_work(self, title: str):
+            self.title_queries.append(title)
+            return {"id": "https://openalex.org/W7139144094", "referenced_works": []}
+
+        async def fetch_referenced_works(self, work: dict):
+            self.reference_work_queries.append(work)
+            return []
+
+        async def fetch_citations(self, work: dict):
+            self.citation_work_queries.append(work)
+            return []
+
+    export_calls = []
+
+    async def fake_export(
+        seeds: list[PaperSeed],
+        csv_path: Path,
+        *,
+        discovery_client,
+        github_client,
+        arxiv_client=None,
+        openalex_client=None,
+        crossref_client=None,
+        datacite_client=None,
+        content_cache=None,
+        relation_resolution_cache=None,
+        arxiv_relation_no_arxiv_recheck_days=30,
+        status_callback=None,
+        progress_callback=None,
+    ):
+        export_calls.append((seeds, csv_path))
+        return ConversionResult(csv_path=csv_path, resolved=0, skipped=[])
+
+    monkeypatch.setattr("src.arxiv_relations.pipeline.export_paper_seeds_to_csv", fake_export)
+
+    openalex_client = FakeOpenAlexClient()
+    result = await export_arxiv_relations_to_csv(
+        "https://arxiv.org/abs/2510.22706",
+        arxiv_client=FakeArxivClient(),
+        openalex_client=openalex_client,
+        discovery_client=object(),
+        github_client=object(),
+        output_dir=tmp_path,
+    )
+
+    assert openalex_client.identifier_queries == ["https://doi.org/10.48550/arxiv.2510.22706"]
+    assert openalex_client.title_queries == []
+    assert openalex_client.reference_work_queries == [
+        {
+            "id": "https://openalex.org/W7101583646",
+            "display_name": "IGGT: Instance-Grounded Geometry Transformer for Semantic 3D Reconstruction",
+            "doi": "https://doi.org/10.48550/arxiv.2510.22706",
+            "referenced_works": [],
+        }
+    ]
+    assert openalex_client.citation_work_queries == [
+        {
+            "id": "https://openalex.org/W7101583646",
+            "display_name": "IGGT: Instance-Grounded Geometry Transformer for Semantic 3D Reconstruction",
+            "doi": "https://doi.org/10.48550/arxiv.2510.22706",
+            "referenced_works": [],
+        }
+    ]
+    assert len(export_calls) == 2
+    assert result.arxiv_url == "https://arxiv.org/abs/2510.22706"
+
+
+@pytest.mark.anyio
 async def test_export_arxiv_relations_to_csv_uses_hf_fallback_for_unresolved_relations(
     tmp_path: Path, monkeypatch
 ):
@@ -2076,7 +2172,14 @@ async def test_export_arxiv_relations_to_csv_uses_shared_openalex_retry_after_ha
                 status=429,
                 headers={"Retry-After": "3", "X-RateLimit-Remaining": "0"},
             ),
-            FakeResponse({"results": [{"id": "https://openalex.org/W0", "referenced_works": []}]}),
+            FakeResponse(
+                {
+                    "id": "https://openalex.org/W0",
+                    "display_name": "Target Paper",
+                    "doi": "https://doi.org/10.48550/arxiv.2603.23502",
+                    "referenced_works": [],
+                }
+            ),
             FakeResponse({"results": [], "meta": {"next_cursor": None}}),
         ]
     )

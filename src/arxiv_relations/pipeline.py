@@ -6,7 +6,12 @@ from pathlib import Path
 from src.shared.arxiv import normalize_title_for_matching
 from src.shared.arxiv_url_resolution import resolve_arxiv_url
 from src.shared.paper_export import export_paper_seeds_to_csv
-from src.shared.paper_identity import build_arxiv_abs_url, extract_arxiv_id, extract_arxiv_id_from_single_paper_url
+from src.shared.paper_identity import (
+    build_arxiv_abs_url,
+    extract_arxiv_id,
+    extract_arxiv_id_from_single_paper_url,
+    normalize_doi_url,
+)
 from src.shared.papers import ConversionResult, PaperSeed
 from src.url_to_csv import filenames as url_export_filenames
 
@@ -69,6 +74,67 @@ def build_relations_csv_paths(
         timestamp=timestamp,
     )
     return references_csv_path, citations_csv_path
+
+
+def _build_arxiv_doi_url(arxiv_url: str) -> str | None:
+    arxiv_id = extract_arxiv_id(arxiv_url)
+    if not arxiv_id:
+        return None
+    return f"https://doi.org/10.48550/arxiv.{arxiv_id}"
+
+
+def _extract_openalex_work_title(work: dict) -> str:
+    return " ".join(str(work.get("display_name") or work.get("title") or "").split()).strip()
+
+
+def _matches_target_openalex_work(work: dict, *, arxiv_url: str, title: str, expected_doi: str | None) -> bool:
+    candidate_doi = normalize_doi_url(str(work.get("doi") or ""))
+    if expected_doi and candidate_doi == expected_doi:
+        return True
+
+    ids = work.get("ids") or {}
+    candidate_arxiv_id = str(ids.get("arxiv") or "").strip()
+    if candidate_arxiv_id and build_arxiv_abs_url(candidate_arxiv_id) == arxiv_url:
+        return True
+
+    candidate_title = _extract_openalex_work_title(work)
+    if candidate_title and normalize_title_for_matching(candidate_title) == normalize_title_for_matching(title):
+        return True
+
+    return False
+
+
+async def _resolve_target_openalex_work(arxiv_url: str, title: str, openalex_client) -> dict | None:
+    expected_doi = _build_arxiv_doi_url(arxiv_url)
+    exact_lookup = getattr(openalex_client, "fetch_work_by_identifier", None)
+    if expected_doi and callable(exact_lookup):
+        exact_work = await exact_lookup(expected_doi)
+        if isinstance(exact_work, dict) and _matches_target_openalex_work(
+            exact_work,
+            arxiv_url=arxiv_url,
+            title=title,
+            expected_doi=expected_doi,
+        ):
+            return exact_work
+
+    search_first_work = getattr(openalex_client, "search_first_work", None)
+    if not callable(search_first_work):
+        return None
+
+    fallback_work = await search_first_work(title)
+    if not isinstance(fallback_work, dict):
+        return None
+
+    if not callable(exact_lookup):
+        return fallback_work
+
+    fallback_identifier = str(fallback_work.get("id") or "").strip()
+    hydrated_work = await exact_lookup(fallback_identifier) if fallback_identifier else None
+    candidate = hydrated_work if isinstance(hydrated_work, dict) else fallback_work
+    if _matches_target_openalex_work(candidate, arxiv_url=arxiv_url, title=title, expected_doi=expected_doi):
+        return candidate
+
+    return None
 
 
 def _fallback_related_work_url(candidate) -> str:
@@ -290,7 +356,7 @@ async def export_arxiv_relations_to_csv(
     if callable(status_callback):
         status_callback(f"📄 Resolved title: {title}")
 
-    target_work = await openalex_client.search_first_work(title)
+    target_work = await _resolve_target_openalex_work(arxiv_url, title, openalex_client)
     if not target_work:
         raise ValueError(f"No OpenAlex work found for title: {title}")
     if callable(status_callback):
