@@ -1,6 +1,7 @@
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
+from typing import get_type_hints
 from unittest.mock import AsyncMock
 
 import pytest
@@ -8,6 +9,10 @@ import pytest
 import src.shared.paper_export as paper_export
 from src.shared.csv_rows import CsvRow
 from src.shared.papers import PaperOutcome, PaperSeed
+
+
+def test_paper_outcome_record_contract_is_csv_row():
+    assert get_type_hints(PaperOutcome)["record"] is CsvRow
 
 
 @pytest.mark.anyio

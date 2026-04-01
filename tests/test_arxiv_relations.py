@@ -2806,12 +2806,16 @@ async def test_export_arxiv_relations_to_csv_warms_content_for_arxiv_rows_and_pr
             "Url": "https://arxiv.org/abs/2501.00001",
             "Github": "https://github.com/foo/reference",
             "Stars": "12",
+            "Created": "",
+            "About": "",
         },
         {
             "Name": "Retained DOI Reference",
             "Url": "https://doi.org/10.1145/example",
             "Github": "",
             "Stars": "",
+            "Created": "",
+            "About": "",
         },
     ]
     assert citation_rows == [
@@ -2820,6 +2824,8 @@ async def test_export_arxiv_relations_to_csv_warms_content_for_arxiv_rows_and_pr
             "Url": "https://arxiv.org/abs/2502.00002",
             "Github": "https://github.com/foo/citation",
             "Stars": "",
+            "Created": "",
+            "About": "",
         }
     ]
     assert sorted(content_cache.calls) == [

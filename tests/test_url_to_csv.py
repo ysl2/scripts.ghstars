@@ -337,12 +337,16 @@ async def test_export_url_to_csv_writes_sorted_csv_in_output_dir(tmp_path: Path)
             "Url": "https://arxiv.org/abs/2502.00002",
             "Github": "https://github.com/foo/new",
             "Stars": "20",
+            "Created": "",
+            "About": "",
         },
         {
             "Name": "Older",
             "Url": "https://arxiv.org/abs/2501.00001",
             "Github": "https://github.com/foo/old",
             "Stars": "10",
+            "Created": "",
+            "About": "",
         },
     ]
 
@@ -393,6 +397,8 @@ async def test_export_url_to_csv_defaults_to_output_directory_and_creates_it(tmp
             "Url": "https://arxiv.org/abs/2501.00001",
             "Github": "https://github.com/foo/bar",
             "Stars": "11",
+            "Created": "",
+            "About": "",
         }
     ]
 
@@ -566,12 +572,16 @@ async def test_export_url_to_csv_writes_huggingface_results_in_output_dir(tmp_pa
             "Url": "https://arxiv.org/abs/2502.00002",
             "Github": "https://github.com/foo/new",
             "Stars": "20",
+            "Created": "",
+            "About": "",
         },
         {
             "Name": "Older",
             "Url": "https://arxiv.org/abs/2501.00001",
             "Github": "https://github.com/foo/old",
             "Stars": "10",
+            "Created": "",
+            "About": "",
         },
     ]
 
@@ -625,12 +635,16 @@ async def test_export_url_to_csv_writes_arxiv_org_results_in_output_dir(tmp_path
             "Url": "https://arxiv.org/abs/2502.00002",
             "Github": "https://github.com/foo/new",
             "Stars": "20",
+            "Created": "",
+            "About": "",
         },
         {
             "Name": "Older",
             "Url": "https://arxiv.org/abs/2501.00001",
             "Github": "https://github.com/foo/old",
             "Stars": "10",
+            "Created": "",
+            "About": "",
         },
     ]
 
@@ -720,12 +734,16 @@ async def test_export_url_to_csv_writes_semanticscholar_results_in_output_dir(tm
             "Url": "https://arxiv.org/abs/2502.00002",
             "Github": "https://github.com/foo/new",
             "Stars": "20",
+            "Created": "",
+            "About": "",
         },
         {
             "Name": "Older",
             "Url": "https://arxiv.org/abs/2501.00001",
             "Github": "https://github.com/foo/old",
             "Stars": "10",
+            "Created": "",
+            "About": "",
         },
     ]
     assert arxiv_client.calls == ["Missing"]
@@ -805,6 +823,8 @@ async def test_export_url_to_csv_warms_content_and_reuses_cached_files(tmp_path:
             "Url": "https://arxiv.org/abs/2501.00001",
             "Github": "https://github.com/foo/bar",
             "Stars": "11",
+            "Created": "",
+            "About": "",
         }
     ]
     assert (tmp_path / "cache" / OVERVIEW_CACHE_SUBDIR / "2501.00001.md").exists()

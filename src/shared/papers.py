@@ -25,7 +25,7 @@ class PaperRecord:
 @dataclass(frozen=True)
 class PaperOutcome:
     index: int
-    record: PaperRecord | CsvRow
+    record: CsvRow
     reason: str | None
 
 
@@ -44,3 +44,13 @@ def sort_records(records: list[PaperRecord]) -> list[PaperRecord]:
         return sorted(records, key=lambda record: record.sort_index)
 
     return sorted(records, key=lambda record: arxiv_url_sort_key(record.url), reverse=True)
+
+
+def sort_paper_export_rows(rows: list[CsvRow]) -> list[CsvRow]:
+    if all(extract_arxiv_id(row.url) for row in rows):
+        return sorted(rows, key=lambda row: arxiv_url_sort_key(row.url), reverse=True)
+
+    if any(row.sort_index for row in rows):
+        return sorted(rows, key=lambda row: row.sort_index)
+
+    return sorted(rows, key=lambda row: arxiv_url_sort_key(row.url), reverse=True)

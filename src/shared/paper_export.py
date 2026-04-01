@@ -1,10 +1,11 @@
+from dataclasses import replace
 from pathlib import Path
 
 from src.shared.async_batch import iter_bounded_as_completed, resolve_worker_count
 from src.shared.csv_io import write_rows_to_csv_path
 from src.shared.csv_rows import CsvRow
 from src.shared.paper_enrichment import PaperEnrichmentRequest, process_single_paper
-from src.shared.papers import ConversionResult, PaperOutcome, PaperSeed
+from src.shared.papers import ConversionResult, PaperOutcome, PaperSeed, sort_paper_export_rows
 
 
 async def build_paper_outcome(
@@ -119,8 +120,10 @@ async def export_paper_seeds_to_csv(
         if callable(progress_callback):
             progress_callback(outcome, total)
 
+    ordered_rows = [replace(row, sort_index=0) for row in sort_paper_export_rows(rows)]
+
     return ConversionResult(
-        csv_path=write_rows_to_csv_path(rows, csv_path),
+        csv_path=write_rows_to_csv_path(ordered_rows, csv_path),
         resolved=resolved,
         skipped=skipped,
     )
