@@ -30,6 +30,27 @@ def test_property_state_helpers_support_resolved_failed_and_skipped_states():
     assert PropertyState.skipped("preserve existing value").status is PropertyStatus.SKIPPED
 
 
+def test_shared_property_state_supports_legacy_positional_source_argument():
+    state = PropertyState.resolved("https://github.com/foo/bar", "url")
+
+    assert state.status is PropertyStatus.RESOLVED
+    assert state.source == "url"
+
+
+def test_shared_property_state_supports_legacy_positional_reason_argument():
+    state = PropertyState(
+        None,
+        PropertyStatus.SKIPPED,
+        "csv",
+        "preserve existing value",
+    )
+
+    assert state.status is PropertyStatus.SKIPPED
+    assert state.source == "csv"
+    assert state.reason == "preserve existing value"
+    assert state.trusted is False
+
+
 def test_property_state_validation_enforces_consistent_states():
     with pytest.raises(ValueError):
         PropertyState.present(None, source="url")

@@ -1,3 +1,5 @@
+import pytest
+
 from src.core.record_model import (
     PropertyState,
     PropertyStatus,
@@ -24,6 +26,13 @@ def test_record_with_property_returns_new_record_without_mutating_original():
     assert record.stars.value is None
     assert updated.stars.value == 42
     assert updated.github.value == "https://github.com/foo/bar"
+
+
+def test_record_with_property_rejects_non_core_field_names():
+    record = Record.from_source(name="Paper A", source="csv")
+
+    with pytest.raises(ValueError, match="core property"):
+        record.with_property("facts", PropertyState.present("oops", source="csv"))
 
 
 def test_record_can_attach_facts_artifacts_and_context_without_promoting_them_to_core_properties():

@@ -4,6 +4,16 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any
 
+CORE_PROPERTY_NAMES = (
+    "name",
+    "url",
+    "github",
+    "stars",
+    "created",
+    "about",
+)
+CORE_PROPERTY_NAME_SET = frozenset(CORE_PROPERTY_NAMES)
+
 
 class PropertyStatus(str, Enum):
     PRESENT = "present"
@@ -182,6 +192,11 @@ class Record:
         )
 
     def with_property(self, property_name: str, state: PropertyState) -> "Record":
+        if property_name not in CORE_PROPERTY_NAME_SET:
+            allowed = ", ".join(CORE_PROPERTY_NAMES)
+            raise ValueError(
+                f"with_property only supports core property fields: {allowed}"
+            )
         return replace(self, **{property_name: state})
 
     def with_supporting_state(
