@@ -1,9 +1,14 @@
 import asyncio
 import re
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import aiohttp
 
 from src.shared.http import MAX_RETRIES, RateLimiter
+
+if TYPE_CHECKING:
+    from src.shared.repo_metadata_cache import RepoMetadataCacheStore
 
 
 GITHUB_UNAUTHENTICATED_MIN_INTERVAL = 60.0
@@ -45,49 +50,79 @@ def resolve_github_min_interval(github_token: str, requested_min_interval: float
     return max(requested_min_interval, GITHUB_UNAUTHENTICATED_MIN_INTERVAL)
 
 
-class GitHubClient:
-    """GitHub API client for stars lookup."""
+@dataclass(frozen=True)
+class RepoMetadata:
+    stars: int | None
+    created: str | None
+    about: str | None
 
-    def __init__(self, session: aiohttp.ClientSession, github_token: str = "", max_concurrent: int = 5, min_interval: float = 0.2):
+
+class GitHubClient:
+    """GitHub API client for repo metadata lookup."""
+
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        github_token: str = "",
+        repo_metadata_cache: "RepoMetadataCacheStore | None" = None,
+        max_concurrent: int = 5,
+        min_interval: float = 0.2,
+    ):
         self.session = session
         self.github_token = github_token
+        self.repo_metadata_cache = repo_metadata_cache
         self.semaphore = asyncio.Semaphore(max_concurrent)
         self.rate_limiter = RateLimiter(resolve_github_min_interval(github_token, min_interval))
-        self._star_cache: dict[tuple[str, str], tuple[int | None, str | None]] = {}
-        self._star_tasks: dict[tuple[str, str], asyncio.Task[tuple[int | None, str | None]]] = {}
-        self._star_cache_lock = asyncio.Lock()
+        self._repo_metadata_cache: dict[tuple[str, str], tuple[RepoMetadata | None, str | None]] = {}
+        self._repo_metadata_tasks: dict[
+            tuple[str, str],
+            asyncio.Task[tuple[RepoMetadata | None, str | None]],
+        ] = {}
+        self._repo_metadata_cache_lock = asyncio.Lock()
 
-    async def get_star_count(self, owner: str, repo: str) -> tuple[int | None, str | None]:
+    async def get_repo_metadata(self, owner: str, repo: str) -> tuple[RepoMetadata | None, str | None]:
         cache_key = (owner.strip().lower(), repo.strip().lower())
-        async with self._star_cache_lock:
-            cached = self._star_cache.get(cache_key)
+        async with self._repo_metadata_cache_lock:
+            cached = self._repo_metadata_cache.get(cache_key)
             if cached is not None:
                 return cached
 
-            task = self._star_tasks.get(cache_key)
+            task = self._repo_metadata_tasks.get(cache_key)
             if task is None:
-                task = asyncio.create_task(self._fetch_star_count(owner, repo))
-                self._star_tasks[cache_key] = task
+                task = asyncio.create_task(self._fetch_repo_metadata(owner, repo))
+                self._repo_metadata_tasks[cache_key] = task
 
         try:
             result = await task
         finally:
-            async with self._star_cache_lock:
-                if self._star_tasks.get(cache_key) is task:
-                    self._star_tasks.pop(cache_key, None)
+            async with self._repo_metadata_cache_lock:
+                if self._repo_metadata_tasks.get(cache_key) is task:
+                    self._repo_metadata_tasks.pop(cache_key, None)
 
-        if _should_cache_star_result(*result):
-            async with self._star_cache_lock:
-                self._star_cache[cache_key] = result
+        metadata, error = result
+
+        if metadata is not None and metadata.created:
+            self._record_created(owner, repo, metadata.created)
+
+        if _should_cache_repo_metadata_result(metadata, error):
+            async with self._repo_metadata_cache_lock:
+                self._repo_metadata_cache[cache_key] = result
 
         return result
 
-    async def _fetch_star_count(self, owner: str, repo: str) -> tuple[int | None, str | None]:
+    async def get_star_count(self, owner: str, repo: str) -> tuple[int | None, str | None]:
+        metadata, error = await self.get_repo_metadata(owner, repo)
+        if metadata is None:
+            return None, error
+        return metadata.stars, error
+
+    async def _fetch_repo_metadata(self, owner: str, repo: str) -> tuple[RepoMetadata | None, str | None]:
         headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "scripts.ghstars"}
         if self.github_token:
             headers["Authorization"] = f"Bearer {self.github_token}"
 
         url = f"https://api.github.com/repos/{owner}/{repo}"
+        cached_created = self._load_cached_created(owner, repo)
         for attempt in range(MAX_RETRIES + 1):
             async with self.semaphore:
                 await self.rate_limiter.acquire()
@@ -95,7 +130,15 @@ class GitHubClient:
                     async with self.session.get(url, headers=headers) as response:
                         if response.status == 200:
                             payload = await response.json()
-                            return payload.get("stargazers_count"), None
+                            created = payload.get("created_at") or cached_created
+                            return (
+                                RepoMetadata(
+                                    stars=payload.get("stargazers_count"),
+                                    created=created,
+                                    about=payload.get("description"),
+                                ),
+                                None,
+                            )
                         if response.status == 404:
                             return None, "Repository not found"
                         if response.status in {429, 500, 502, 503, 504} and attempt < MAX_RETRIES:
@@ -114,6 +157,33 @@ class GitHubClient:
                     return None, f"Request failed: {exc}"
         return None, "GitHub API error"
 
+    def _load_cached_created(self, owner: str, repo: str) -> str | None:
+        if self.repo_metadata_cache is None:
+            return None
 
-def _should_cache_star_result(stars: int | None, error: str | None) -> bool:
+        github_url = normalize_github_url(f"https://github.com/{owner}/{repo}")
+        if github_url is None:
+            return None
+
+        try:
+            entry = self.repo_metadata_cache.get(github_url)
+        except Exception:
+            return None
+        return None if entry is None else entry.created
+
+    def _record_created(self, owner: str, repo: str, created: str) -> None:
+        if self.repo_metadata_cache is None:
+            return
+
+        github_url = normalize_github_url(f"https://github.com/{owner}/{repo}")
+        if github_url is None:
+            return
+
+        try:
+            self.repo_metadata_cache.record_created(github_url, created)
+        except Exception:
+            return
+
+
+def _should_cache_repo_metadata_result(metadata: RepoMetadata | None, error: str | None) -> bool:
     return error is None or error == "Repository not found"

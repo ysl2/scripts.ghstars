@@ -15,6 +15,7 @@ from src.shared.discovery import (
 )
 from src.shared.http import RateLimiter
 from src.shared.github import GitHubClient, extract_owner_repo, normalize_github_url
+from src.shared.repo_metadata_cache import RepoMetadataCacheStore
 
 
 @dataclass(frozen=True)
@@ -890,6 +891,51 @@ async def test_github_client_caches_concurrent_star_lookup_for_same_repo():
     assert first == (123, None)
     assert second == (123, None)
     assert session.calls == ["https://api.github.com/repos/foo/bar"]
+
+
+@pytest.mark.anyio
+async def test_github_client_fetches_repo_metadata_with_created_and_about():
+    class FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {
+                "stargazers_count": 123,
+                "created_at": "2024-01-01T00:00:00Z",
+                "description": "repo",
+            }
+
+    class FakeSession:
+        def get(self, url, headers=None):
+            return FakeResponse()
+
+    session = FakeSession()
+    client = GitHubClient(session=session)
+
+    metadata, error = await client.get_repo_metadata("foo", "bar")
+
+    assert error is None
+    assert metadata.stars == 123
+    assert metadata.created == "2024-01-01T00:00:00Z"
+    assert metadata.about == "repo"
+
+
+def test_repo_metadata_cache_store_round_trips_created_value(tmp_path):
+    store = RepoMetadataCacheStore(tmp_path / "cache.db")
+    store.record_created("https://github.com/foo/bar", "2024-01-01T00:00:00Z")
+
+    entry = store.get("https://github.com/foo/bar")
+    store.close()
+
+    assert entry is not None
+    assert entry.github_url == "https://github.com/foo/bar"
+    assert entry.created == "2024-01-01T00:00:00Z"
 
 
 @pytest.mark.anyio

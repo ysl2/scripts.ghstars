@@ -6,6 +6,7 @@ import pytest
 import src.app as app_module
 from src.shared import runtime as runtime_module
 from src.shared.relation_resolution_cache import RelationResolutionCacheStore
+from src.shared.repo_metadata_cache import RepoMetadataCacheStore
 from src.shared.runtime import load_runtime_config, open_runtime_clients
 
 
@@ -150,9 +151,18 @@ class FakeDiscoveryClient:
 
 
 class FakeGitHubClient:
-    def __init__(self, session, *, github_token="", max_concurrent=0, min_interval=0):
+    def __init__(
+        self,
+        session,
+        *,
+        github_token="",
+        repo_metadata_cache=None,
+        max_concurrent=0,
+        min_interval=0,
+    ):
         self.session = session
         self.github_token = github_token
+        self.repo_metadata_cache = repo_metadata_cache
         self.max_concurrent = max_concurrent
         self.min_interval = min_interval
 
@@ -183,6 +193,7 @@ async def test_open_runtime_clients_builds_shared_clients_with_optional_alphaxiv
         github_min_interval=0.4,
         enable_relation_resolution_cache=True,
     ) as runtime:
+        assert isinstance(runtime.repo_metadata_cache, RepoMetadataCacheStore)
         assert isinstance(runtime.relation_resolution_cache, RelationResolutionCacheStore)
         assert runtime.discovery_client.huggingface_token == "hf_token"
         assert runtime.discovery_client.alphaxiv_token == "ax_token"
@@ -191,6 +202,7 @@ async def test_open_runtime_clients_builds_shared_clients_with_optional_alphaxiv
         assert runtime.discovery_client.max_concurrent == 7
         assert runtime.discovery_client.min_interval == 0.3
         assert runtime.github_client.github_token == "gh_token"
+        assert runtime.github_client.repo_metadata_cache is runtime.repo_metadata_cache
         assert runtime.github_client.max_concurrent == 7
         assert runtime.github_client.min_interval == 0.4
 
@@ -259,7 +271,15 @@ async def test_open_runtime_clients_degrades_to_uncached_mode_if_relation_cache_
         def __init__(self, db_path):
             raise sqlite3.OperationalError("attempt to write a readonly database")
 
+    class FakeRepoMetadataCacheStore:
+        def __init__(self, db_path):
+            self.db_path = db_path
+
+        def close(self):
+            close_calls.append("repo_metadata_cache")
+
     monkeypatch.setattr(runtime_module, "RepoCacheStore", FakeRepoCacheStore)
+    monkeypatch.setattr(runtime_module, "RepoMetadataCacheStore", FakeRepoMetadataCacheStore)
     monkeypatch.setattr(
         runtime_module,
         "RelationResolutionCacheStore",
@@ -277,10 +297,9 @@ async def test_open_runtime_clients_degrades_to_uncached_mode_if_relation_cache_
     ) as runtime:
         assert runtime.relation_resolution_cache is None
         assert runtime.repo_cache is not None
+        assert runtime.repo_metadata_cache is not None
 
-    assert close_calls == ["repo_cache"]
-
-    assert close_calls == ["repo_cache"]
+    assert close_calls == ["repo_metadata_cache", "repo_cache"]
 
 
 @pytest.mark.anyio

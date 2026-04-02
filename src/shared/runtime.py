@@ -6,6 +6,7 @@ import sqlite3
 from src.shared.http import build_timeout
 from src.shared.relation_resolution_cache import RelationResolutionCacheStore
 from src.shared.repo_cache import RepoCacheStore
+from src.shared.repo_metadata_cache import RepoMetadataCacheStore
 from src.shared.settings import (
     ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS,
     REPO_DISCOVERY_NO_REPO_RECHECK_DAYS,
@@ -17,6 +18,7 @@ from src.shared.settings import (
 class RuntimeClients:
     session: object
     repo_cache: RepoCacheStore
+    repo_metadata_cache: RepoMetadataCacheStore | None
     relation_resolution_cache: RelationResolutionCacheStore | None
     discovery_client: object
     github_client: object
@@ -96,10 +98,15 @@ async def open_runtime_clients(
     enable_relation_resolution_cache: bool = False,
 ):
     repo_cache = None
+    repo_metadata_cache = None
     relation_resolution_cache = None
 
     try:
         repo_cache = RepoCacheStore(REPO_CACHE_DB_PATH)
+        try:
+            repo_metadata_cache = RepoMetadataCacheStore(REPO_CACHE_DB_PATH)
+        except sqlite3.Error:
+            repo_metadata_cache = None
         if enable_relation_resolution_cache:
             try:
                 relation_resolution_cache = RelationResolutionCacheStore(REPO_CACHE_DB_PATH)
@@ -122,12 +129,14 @@ async def open_runtime_clients(
                 github_client_cls,
                 session,
                 github_token=config["github_token"],
+                repo_metadata_cache=repo_metadata_cache,
                 max_concurrent=concurrent_limit,
                 min_interval=github_min_interval if github_min_interval is not None else request_delay,
             )
             yield RuntimeClients(
                 session=session,
                 repo_cache=repo_cache,
+                repo_metadata_cache=repo_metadata_cache,
                 relation_resolution_cache=relation_resolution_cache,
                 discovery_client=discovery_client,
                 github_client=github_client,
@@ -135,6 +144,8 @@ async def open_runtime_clients(
     finally:
         if relation_resolution_cache is not None:
             relation_resolution_cache.close()
+        if repo_metadata_cache is not None:
+            repo_metadata_cache.close()
         if repo_cache is not None:
             repo_cache.close()
 
