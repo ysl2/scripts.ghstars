@@ -54,10 +54,16 @@ async def test_update_csv_file_updates_rows_in_place_preserving_columns_and_orde
             raise AssertionError(f"unexpected discovery lookup for {seed.url}")
 
     class FakeGitHubClient:
-        async def get_star_count(self, owner, repo):
+        async def get_repo_metadata(self, owner, repo):
             mapping = {
-                ("foo", "existing"): (99, None),
-                ("foo", "discovered"): (42, None),
+                ("foo", "existing"): (
+                    SimpleNamespace(stars=99, created="2020-01-01T00:00:00Z", about="remote existing"),
+                    None,
+                ),
+                ("foo", "discovered"): (
+                    SimpleNamespace(stars=42, created="2019-01-01T00:00:00Z", about="remote discovered"),
+                    None,
+                ),
             }
             return mapping[(owner, repo)]
 
@@ -89,7 +95,7 @@ async def test_update_csv_file_updates_rows_in_place_preserving_columns_and_orde
             "Github": "https://github.com/foo/existing",
             "Stars": "99",
             "Created": "2024-03-01T00:00:00Z",
-            "About": "keep repo",
+            "About": "remote existing",
             "Tag": "A",
         },
         {
@@ -99,7 +105,7 @@ async def test_update_csv_file_updates_rows_in_place_preserving_columns_and_orde
             "Github": "https://github.com/foo/discovered",
             "Stars": "42",
             "Created": "2024-02-01T00:00:00Z",
-            "About": "discover repo",
+            "About": "remote discovered",
             "Tag": "B",
         },
         {
@@ -164,6 +170,8 @@ async def test_update_csv_file_rewrites_doi_to_arxiv_when_semantic_scholar_exact
             "Url": "https://arxiv.org/abs/2501.12345",
             "Github": "https://github.com/foo/bar",
             "Stars": "7",
+            "Created": "",
+            "About": "",
         }
     ]
     semanticscholar_graph_client.find_arxiv_match_by_identifier.assert_awaited_once_with(
@@ -231,6 +239,8 @@ async def test_update_csv_file_uses_arxiv_html_title_search_after_semantic_schol
             "Url": "https://arxiv.org/abs/2501.54321",
             "Github": "https://github.com/foo/bar",
             "Stars": "7",
+            "Created": "",
+            "About": "",
         }
     ]
     semanticscholar_graph_client.find_arxiv_match_by_identifier.assert_awaited_once_with(
@@ -433,7 +443,9 @@ async def test_run_csv_mode_reports_rows_without_inputs_as_preserved_skips(tmp_p
 
 
 @pytest.mark.anyio
-async def test_update_csv_file_appends_missing_github_and_stars_columns_at_the_end(tmp_path: Path):
+async def test_update_csv_file_appends_missing_repo_metadata_columns_without_reordering_existing_columns(
+    tmp_path: Path,
+):
     csv_path = tmp_path / "papers.csv"
     csv_path.write_text(
         "\n".join(
@@ -453,9 +465,9 @@ async def test_update_csv_file_appends_missing_github_and_stars_columns_at_the_e
             return "https://github.com/foo/bar"
 
     class FakeGitHubClient:
-        async def get_star_count(self, owner, repo):
+        async def get_repo_metadata(self, owner, repo):
             assert (owner, repo) == ("foo", "bar")
-            return 7, None
+            return SimpleNamespace(stars=7, created="2024-01-01T00:00:00Z", about="repo"), None
 
     result = await update_csv_file(
         csv_path,
@@ -472,7 +484,7 @@ async def test_update_csv_file_appends_missing_github_and_stars_columns_at_the_e
     assert len(result.skipped) == 1
     assert result.skipped[0]["title"] == "Paper B"
     assert result.skipped[0]["reason"] == "Row has neither Github nor Url"
-    assert reader.fieldnames == ["Name", "Url", "Notes", "Github", "Stars"]
+    assert reader.fieldnames == ["Name", "Url", "Notes", "Github", "Stars", "Created", "About"]
     assert rows == [
         {
             "Name": "Paper A",
@@ -480,6 +492,8 @@ async def test_update_csv_file_appends_missing_github_and_stars_columns_at_the_e
             "Notes": "note-a",
             "Github": "https://github.com/foo/bar",
             "Stars": "7",
+            "Created": "2024-01-01T00:00:00Z",
+            "About": "repo",
         },
         {
             "Name": "Paper B",
@@ -487,6 +501,8 @@ async def test_update_csv_file_appends_missing_github_and_stars_columns_at_the_e
             "Notes": "note-b",
             "Github": "",
             "Stars": "",
+            "Created": "",
+            "About": "",
         },
     ]
 
@@ -563,9 +579,9 @@ async def test_update_csv_file_allows_missing_name_column_when_url_exists(tmp_pa
             return "https://github.com/foo/bar"
 
     class FakeGitHubClient:
-        async def get_star_count(self, owner, repo):
+        async def get_repo_metadata(self, owner, repo):
             assert (owner, repo) == ("foo", "bar")
-            return 7, None
+            return SimpleNamespace(stars=7, created="2024-01-01T00:00:00Z", about="repo"), None
 
     result = await update_csv_file(
         csv_path,
@@ -585,19 +601,21 @@ async def test_update_csv_file_allows_missing_name_column_when_url_exists(tmp_pa
             "Notes": "note-a",
             "Github": "https://github.com/foo/bar",
             "Stars": "7",
+            "Created": "2024-01-01T00:00:00Z",
+            "About": "repo",
         }
     ]
-    assert reader.fieldnames == ["Url", "Notes", "Github", "Stars"]
+    assert reader.fieldnames == ["Url", "Notes", "Github", "Stars", "Created", "About"]
 
 
 @pytest.mark.anyio
-async def test_update_csv_file_refreshes_stars_without_url_when_github_exists(tmp_path: Path):
+async def test_update_csv_file_refreshes_repo_metadata_without_url_when_github_exists(tmp_path: Path):
     csv_path = tmp_path / "papers.csv"
     csv_path.write_text(
         "\n".join(
             [
                 "Name,Github,Stars,Created,About",
-                "Paper A,https://github.com/foo/bar,,2024-01-01T00:00:00Z,repo",
+                "Paper A,https://github.com/foo/bar,,2024-01-01T00:00:00Z,old about",
             ]
         )
         + "\n",
@@ -609,9 +627,9 @@ async def test_update_csv_file_refreshes_stars_without_url_when_github_exists(tm
             raise AssertionError("discovery should not run when Github already exists")
 
     class FakeGitHubClient:
-        async def get_star_count(self, owner, repo):
+        async def get_repo_metadata(self, owner, repo):
             assert (owner, repo) == ("foo", "bar")
-            return 11, None
+            return SimpleNamespace(stars=11, created="2020-12-31T00:00:00Z", about=""), None
 
     semanticscholar_graph_client = SimpleNamespace(
         find_arxiv_match_by_identifier=AsyncMock(
@@ -651,7 +669,7 @@ async def test_update_csv_file_refreshes_stars_without_url_when_github_exists(tm
             "Github": "https://github.com/foo/bar",
             "Stars": "11",
             "Created": "2024-01-01T00:00:00Z",
-            "About": "repo",
+            "About": "",
         }
     ]
     assert reader.fieldnames == ["Name", "Github", "Stars", "Created", "About"]
@@ -664,7 +682,7 @@ async def test_update_csv_file_does_not_use_or_rewrite_url_when_github_exists(tm
         "\n".join(
             [
                 "Name,Url,Github,Stars,Created,About",
-                "Paper A,https://doi.org/10.1000/example,https://github.com/foo/bar,2,2024-01-01T00:00:00Z,repo",
+                "Paper A,https://doi.org/10.1000/example,https://github.com/foo/bar,2,,repo",
             ]
         )
         + "\n",
@@ -672,7 +690,11 @@ async def test_update_csv_file_does_not_use_or_rewrite_url_when_github_exists(tm
     )
 
     discovery_client = SimpleNamespace(resolve_github_url=AsyncMock())
-    github_client = SimpleNamespace(get_star_count=AsyncMock(return_value=(13, None)))
+    github_client = SimpleNamespace(
+        get_repo_metadata=AsyncMock(
+            return_value=(SimpleNamespace(stars=13, created="2024-02-02T00:00:00Z", about="remote repo"), None)
+        )
+    )
     semanticscholar_graph_client = SimpleNamespace(
         find_arxiv_match_by_identifier=AsyncMock(
             return_value=("https://arxiv.org/abs/2501.12345", "Mapped Arxiv Title", "semantic_scholar_exact_doi")
@@ -704,8 +726,8 @@ async def test_update_csv_file_does_not_use_or_rewrite_url_when_github_exists(tm
             "Url": "https://doi.org/10.1000/example",
             "Github": "https://github.com/foo/bar",
             "Stars": "13",
-            "Created": "2024-01-01T00:00:00Z",
-            "About": "repo",
+            "Created": "2024-02-02T00:00:00Z",
+            "About": "remote repo",
         }
     ]
     discovery_client.resolve_github_url.assert_not_awaited()
@@ -713,7 +735,7 @@ async def test_update_csv_file_does_not_use_or_rewrite_url_when_github_exists(tm
     semanticscholar_graph_client.find_arxiv_match_by_title.assert_not_awaited()
     arxiv_client.get_arxiv_id_by_title.assert_not_awaited()
     arxiv_client.get_arxiv_match_by_title_from_api.assert_not_awaited()
-    github_client.get_star_count.assert_awaited_once_with("foo", "bar")
+    github_client.get_repo_metadata.assert_awaited_once_with("foo", "bar")
 
 
 @pytest.mark.anyio
@@ -758,6 +780,8 @@ async def test_update_csv_file_skips_content_updates_when_github_discovery_misse
             "Url": "https://arxiv.org/abs/2603.20000v2",
             "Github": "",
             "Stars": "",
+            "Created": "",
+            "About": "",
         }
     ]
     assert content_cache.calls == []
@@ -885,8 +909,8 @@ async def test_update_csv_file_leaves_preexisting_overview_and_abs_columns_uncha
             return "https://github.com/foo/bar"
 
     class FakeGitHubClient:
-        async def get_star_count(self, owner, repo):
-            return 7, None
+        async def get_repo_metadata(self, owner, repo):
+            return SimpleNamespace(stars=7, created="2024-01-01T00:00:00Z", about="repo"), None
 
     result = await update_csv_file(
         csv_path,
@@ -900,7 +924,7 @@ async def test_update_csv_file_leaves_preexisting_overview_and_abs_columns_uncha
         rows = list(reader)
 
     assert result.updated == 1
-    assert reader.fieldnames == ["Name", "Url", "Overview", "Abs", "Github", "Stars"]
+    assert reader.fieldnames == ["Name", "Url", "Overview", "Abs", "Github", "Stars", "Created", "About"]
     assert rows == [
         {
             "Name": "Paper A",
@@ -909,6 +933,8 @@ async def test_update_csv_file_leaves_preexisting_overview_and_abs_columns_uncha
             "Abs": "old-abs.md",
             "Github": "https://github.com/foo/bar",
             "Stars": "7",
+            "Created": "2024-01-01T00:00:00Z",
+            "About": "repo",
         }
     ]
 
@@ -1007,8 +1033,8 @@ async def test_run_csv_mode_prints_progress_updates_file_and_writes_cached_markd
             self.session = session
             self.github_token = github_token
 
-        async def get_star_count(self, owner, repo):
-            return 11, None
+        async def get_repo_metadata(self, owner, repo):
+            return SimpleNamespace(stars=11, created="2024-01-01T00:00:00Z", about="repo"), None
 
     class FakeAlphaXivContentClient:
         def __init__(self, session, *, alphaxiv_token="", max_concurrent=0, min_interval=0):
@@ -1054,6 +1080,8 @@ async def test_run_csv_mode_prints_progress_updates_file_and_writes_cached_markd
             "Url": "https://arxiv.org/abs/2603.20000v2",
             "Github": "https://github.com/foo/bar",
             "Stars": "11",
+            "Created": "2024-01-01T00:00:00Z",
+            "About": "repo",
         }
     ]
     assert received["content_client"].alphaxiv_token == "ax_token"

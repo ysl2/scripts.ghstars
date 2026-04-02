@@ -4,15 +4,20 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from src.shared.async_batch import iter_bounded_as_completed, resolve_worker_count
+from src.shared.csv_schema import (
+    ABOUT_COLUMN,
+    CREATED_COLUMN,
+    GITHUB_COLUMN,
+    NAME_COLUMN,
+    STARS_COLUMN,
+    URL_COLUMN,
+    append_missing_property_columns,
+)
 from src.shared.paper_enrichment import PaperEnrichmentRequest, process_single_paper
 from src.shared.papers import PaperRecord
 
 
-NAME_COLUMN = "Name"
-URL_COLUMN = "Url"
-GITHUB_COLUMN = "Github"
-STARS_COLUMN = "Stars"
-MANAGED_COLUMNS = (GITHUB_COLUMN, STARS_COLUMN)
+MANAGED_COLUMNS = (GITHUB_COLUMN, STARS_COLUMN, CREATED_COLUMN, ABOUT_COLUMN)
 
 
 @dataclass(frozen=True)
@@ -164,6 +169,10 @@ async def build_csv_row_outcome(
 
     if enrichment.reason is None and enrichment.stars is not None:
         updated_row[STARS_COLUMN] = str(enrichment.stars)
+    if enrichment.reason is None and enrichment.about is not None:
+        updated_row[ABOUT_COLUMN] = enrichment.about
+    if enrichment.reason is None and not (updated_row.get(CREATED_COLUMN, "") or "").strip() and enrichment.created:
+        updated_row[CREATED_COLUMN] = enrichment.created
 
     github_url_set = None
     source_label = None
@@ -226,8 +235,4 @@ def _write_csv_rows(csv_path: Path, fieldnames: list[str], rows: list[dict[str, 
 
 
 def _normalize_fieldnames(fieldnames: list[str]) -> list[str]:
-    normalized = list(fieldnames)
-    for column in MANAGED_COLUMNS:
-        if column not in normalized:
-            normalized.append(column)
-    return normalized
+    return append_missing_property_columns(list(fieldnames), list(MANAGED_COLUMNS))

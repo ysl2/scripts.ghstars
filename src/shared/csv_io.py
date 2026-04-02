@@ -2,12 +2,9 @@ import csv
 import tempfile
 from pathlib import Path
 
+from src.shared.csv_schema import CSV_HEADERS, LEGACY_RECORD_HEADERS
 from src.shared.csv_rows import CsvRow, sort_csv_rows
 from src.shared.papers import PaperRecord, sort_records
-
-
-CSV_HEADERS = ["Name", "Url", "Github", "Stars", "Created", "About"]
-LEGACY_RECORD_HEADERS = ["Name", "Url", "Github", "Stars"]
 
 
 def write_rows_to_csv_path(rows: list[CsvRow], csv_path: Path) -> Path:
