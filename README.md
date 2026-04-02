@@ -8,6 +8,15 @@ One CLI, five input shapes:
 - One supported GitHub repository-search URL: fetch the full repository result set and write a CSV under `./output` in the current working directory
 - One supported single-paper arXiv URL: export related references and citations into two CSV files under `./output` in the current working directory
 
+Fresh CSV exports from collection URL mode, GitHub repository-search mode, and single-paper arXiv relation mode all use the same fixed column order:
+
+- `Name`, `Url`, `Github`, `Stars`, `Created`, `About`
+
+Mode-specific export notes:
+
+- GitHub-search exports leave `Name` and `Url` empty by design
+- paper-family exports currently leave `Created` and `About` empty
+
 Repository discovery for arXiv-backed papers now uses:
 
 - shared `./cache.db` in the current working directory first
@@ -132,12 +141,13 @@ CSV mode behavior:
 
 - if `Url` is already an arXiv URL, it is preserved exactly as-is
 - if `Url` is non-arXiv, the shared resolver uses `cache -> Semantic Scholar exact -> Semantic Scholar title exact -> arXiv title search (HTML -> API) -> Crossref -> DataCite -> Hugging Face` to normalize it to arXiv when possible
-- requires `Url`; `Name` is optional
-- if `Github` is already present and valid, its exact value is preserved and only `Stars` is refreshed
+- requires at least one of `Github` or `Url`; `Name` is optional
+- if `Github` is already present and valid, its exact value is preserved and only `Stars` is refreshed; `Url` is not required in that case
 - if `Github` is blank, discovery checks `cache.db` first, then does one Hugging Face exact lookup on cache miss
 - if Hugging Face exact returns no repo, discovery does one AlphaXiv paper-page HTML lookup before leaving `Github` blank
 - missing `Github` or `Stars` columns are added automatically at the end of the CSV
 - existing custom columns are left untouched, including any preexisting `Overview` / `Abs` columns
+- existing `Created` / `About` values are preserved as-is and are not refreshed by CSV update
 - current CSV mode does not write content-cache paths back into the CSV
 - writes use a temp file and atomic replace
 
@@ -268,7 +278,8 @@ URL mode behavior:
 - source-specific fetching is kept in separate adapters under `url_to_csv/`
 - every URL export appends a run timestamp in `YYYYMMDDHHMMSS` form before `.csv`
 - CLI URL exports default to `./output` in the current working directory and create that directory automatically if needed
-- URL exports always write the standard columns: `Name`, `Url`, `Github`, `Stars`
+- URL exports always write the standard columns: `Name`, `Url`, `Github`, `Stars`, `Created`, `About`
+- collection URL exports currently leave `Created` and `About` empty
 - standard arXiv `list/...` and `search/...` collection pages, including `/search/advanced`, are crawled across all pages, not just the first page
 - archive-style arXiv `list/<category>/YYYY-MM` pages reuse the same multi-page `list/...` crawling path
 - arXiv `new` pages include all visible sections, including new submissions, cross-lists, and replacements
@@ -362,7 +373,8 @@ Single-paper mode behavior:
 - relation normalization reuses `./cache.db` to cache non-direct relation resolution by source URL and DOI
 - cached positive matches store canonical arXiv `abs` URLs; cached negative matches are written only when all actually attempted resolver stages finish without transient/network failure and still find no accepted arXiv match, then retried after `ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS`
 - referenced and citing works are deduplicated by final normalized URL before export
-- both CSVs use the standard columns: `Name`, `Url`, `Github`, `Stars`
+- both CSVs use the standard columns: `Name`, `Url`, `Github`, `Stars`, `Created`, `About`
+- single-paper relation exports currently leave `Created` and `About` empty
 - shared GitHub discovery, local overview / abs cache warming, and star enrichment are reused, so resolved and unresolved rows remain in the CSV even when no repo is found; in that case `Github` and `Stars` are left blank
 - the CLI reports success only after both CSV files are written; other arXiv or Semantic Scholar hard failures still return a nonzero exit code
 

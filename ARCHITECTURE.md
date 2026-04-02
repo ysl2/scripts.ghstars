@@ -62,6 +62,8 @@ Purpose:
 Special rule:
 
 - Existing valid `Github` values are source-of-truth and are preserved exactly.
+- CSV update can refresh `Stars` from an existing `Github` without requiring `Url`.
+- `Created` and `About` are treated as preserved export metadata and are not refreshed by CSV update.
 
 ### 3. Collection URL -> CSV
 
@@ -194,6 +196,12 @@ Responsibilities:
 - Apply shared paper processing once a row is in the common enrichment path.
 - Normalize URLs, discover GitHub, warm local content cache, fetch stars, and write CSV records.
 - Define the shared six-column CSV row contract reused by paper exports and GitHub-search exports.
+
+CSV contract:
+
+- Fresh CSV exports use the fixed header order `Name`, `Url`, `Github`, `Stars`, `Created`, `About`.
+- Paper-family exports currently leave `Created` and `About` empty.
+- GitHub-search exports leave `Name` and `Url` empty.
 
 Design intent:
 
