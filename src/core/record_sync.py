@@ -94,9 +94,22 @@ class RecordSyncService:
         record = record.with_supporting_state(
             facts=replace(
                 record.facts,
-                canonical_arxiv_url=acquisition.canonical_arxiv_url,
-                normalized_url=acquisition.normalized_url,
-                github_source=acquisition.github_source,
+                canonical_arxiv_url=(
+                    acquisition.canonical_arxiv_url
+                    if acquisition.canonical_arxiv_url is not None
+                    else record.facts.canonical_arxiv_url
+                ),
+                normalized_url=(
+                    acquisition.normalized_url
+                    if acquisition.normalized_url is not None
+                    else record.facts.normalized_url
+                ),
+                github_source=(
+                    acquisition.github_source
+                    if acquisition.github_source is not None
+                    else record.facts.github_source
+                ),
+                repo_metadata_error=None,
             )
         )
 
@@ -122,6 +135,9 @@ class RecordSyncService:
 
         metadata = await self.resolve_repo_metadata(github_url)
         if metadata.reason is not None:
+            record = record.with_supporting_state(
+                facts=replace(record.facts, repo_metadata_error=metadata.reason)
+            )
             return self._with_reason(record, metadata.reason, source="github_api")
 
         if metadata.stars is not None:

@@ -145,6 +145,7 @@ class RecordFacts:
     canonical_arxiv_url: str | None = None
     normalized_url: str | None = None
     github_source: str | None = None
+    repo_metadata_error: str | None = None
 
 
 @dataclass(frozen=True)
