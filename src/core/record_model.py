@@ -31,6 +31,22 @@ class PropertyState:
     trusted: bool = False
     reason: str | None = None
 
+    def __init__(
+        self,
+        value: Any | None,
+        status: PropertyStatus,
+        source: str | None = None,
+        reason: str | None = None,
+        *,
+        trusted: bool = False,
+    ) -> None:
+        object.__setattr__(self, "value", value)
+        object.__setattr__(self, "status", status)
+        object.__setattr__(self, "source", source)
+        object.__setattr__(self, "trusted", trusted)
+        object.__setattr__(self, "reason", reason)
+        self.__post_init__()
+
     def __post_init__(self) -> None:
         if self.status in (PropertyStatus.PRESENT, PropertyStatus.RESOLVED):
             if self.value is None:
@@ -49,8 +65,8 @@ class PropertyState:
     def present(
         cls,
         value: Any,
-        *,
         source: str | None = None,
+        *,
         trusted: bool = False,
     ) -> "PropertyState":
         return cls(
@@ -64,8 +80,8 @@ class PropertyState:
     def resolved(
         cls,
         value: Any,
-        *,
         source: str | None = None,
+        *,
         trusted: bool = False,
     ) -> "PropertyState":
         return cls(
@@ -79,8 +95,8 @@ class PropertyState:
     def skipped(
         cls,
         reason: str,
-        *,
         source: str | None = None,
+        *,
         trusted: bool = False,
     ) -> "PropertyState":
         return cls(
@@ -95,8 +111,8 @@ class PropertyState:
     def blocked(
         cls,
         reason: str | None = None,
-        *,
         source: str | None = None,
+        *,
         trusted: bool = False,
     ) -> "PropertyState":
         return cls(
@@ -111,8 +127,8 @@ class PropertyState:
     def failed(
         cls,
         reason: str,
-        *,
         source: str | None = None,
+        *,
         trusted: bool = False,
     ) -> "PropertyState":
         return cls(

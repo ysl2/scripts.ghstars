@@ -1,5 +1,6 @@
 import pytest
 
+from src.core.record_model import PropertyState as CorePropertyState
 from src.shared.property_model import PropertyState, PropertyStatus, RecordState
 
 
@@ -49,6 +50,14 @@ def test_shared_property_state_supports_legacy_positional_reason_argument():
     assert state.source == "csv"
     assert state.reason == "preserve existing value"
     assert state.trusted is False
+
+
+def test_shared_and_core_property_state_values_compare_equal():
+    shared_state = PropertyState.resolved("x", "url")
+    core_state = CorePropertyState.resolved("x", source="url")
+
+    assert shared_state == core_state
+    assert core_state == shared_state
 
 
 def test_property_state_validation_enforces_consistent_states():
