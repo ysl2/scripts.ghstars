@@ -81,6 +81,8 @@ async def test_build_paper_outcome_threads_metadata_clients_to_process_single_pa
             github_url="https://github.com/foo/bar",
             github_source="discovered",
             stars=12,
+            created="2024-01-01T00:00:00Z",
+            about="repo",
             reason=None,
         )
 
@@ -106,8 +108,8 @@ async def test_build_paper_outcome_threads_metadata_clients_to_process_single_pa
 
     assert outcome.record.url == "https://arxiv.org/abs/2501.00001"
     assert isinstance(outcome.record, CsvRow)
-    assert outcome.record.created == ""
-    assert outcome.record.about == ""
+    assert outcome.record.created == "2024-01-01T00:00:00Z"
+    assert outcome.record.about == "repo"
     assert received["arxiv_client"] is arxiv_client
     assert received["semanticscholar_graph_client"] is semanticscholar_graph_client
     assert received["crossref_client"] is crossref_client
@@ -138,9 +140,13 @@ async def test_build_paper_outcome_uses_arxiv_html_title_search_after_semantic_s
             return "https://github.com/foo/bar"
 
     class FakeGitHubClient:
-        async def get_star_count(self, owner, repo):
+        async def get_repo_metadata(self, owner, repo):
             assert (owner, repo) == ("foo", "bar")
-            return 12, None
+            return SimpleNamespace(
+                stars=12,
+                created="2024-02-02T00:00:00Z",
+                about="title-search repo",
+            ), None
 
     outcome = await paper_export.build_paper_outcome(
         1,
@@ -158,8 +164,8 @@ async def test_build_paper_outcome_uses_arxiv_html_title_search_after_semantic_s
     assert outcome.record.url == "https://arxiv.org/abs/2501.54321"
     assert outcome.record.github == "https://github.com/foo/bar"
     assert outcome.record.stars == 12
-    assert outcome.record.created == ""
-    assert outcome.record.about == ""
+    assert outcome.record.created == "2024-02-02T00:00:00Z"
+    assert outcome.record.about == "title-search repo"
     semanticscholar_graph_client.find_arxiv_match_by_identifier.assert_awaited_once_with(
         "https://doi.org/10.1145/example",
         title="Paper A",
