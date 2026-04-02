@@ -61,3 +61,33 @@ def test_record_state_blocks_missing_fields_with_reason():
 def test_record_state_rejects_unknown_fields():
     with pytest.raises(TypeError):
         RecordState.from_source(name="Paper A", invalid="value")
+
+
+def test_record_state_tracks_provenance_via_source_field():
+    state = RecordState.from_source(
+        name="Paper A",
+        url=None,
+        github="https://github.com/foo/bar",
+        stars="7",
+        created="2020-01-01",
+        about="desc",
+    )
+
+    assert state.name.source == "source"
+    assert state.url.source == "source"
+    assert state.github.source == "source"
+
+
+def test_record_state_whitespace_only_strings_are_blocked():
+    state = RecordState.from_source(
+        name="Paper A",
+        url="   ",
+        github="https://github.com/foo/bar",
+        stars="7",
+        created="2020-01-01",
+        about="desc",
+    )
+
+    assert state.url.status is PropertyStatus.BLOCKED
+    assert state.url.reason == "url missing from source"
+    assert state.url.value is None

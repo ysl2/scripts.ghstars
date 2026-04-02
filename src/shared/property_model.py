@@ -75,14 +75,15 @@ class RecordState:
         stars: Optional[Any] = None,
         created: Optional[Any] = None,
         about: Optional[Any] = None,
+        provenance: str = "source",
     ) -> "RecordState":
         def seed(field_name: str, value: Optional[Any]) -> PropertyState:
-            if value is None or (isinstance(value, str) and value == ""):
+            if value is None or (isinstance(value, str) and not value.strip()):
                 return PropertyState.blocked(
                     reason=f"{field_name} missing from source",
-                    source=field_name,
+                    source=provenance,
                 )
-            return PropertyState.present(value, source=field_name)
+            return PropertyState.present(value, source=provenance)
 
         return cls(
             name=seed("name", name),
