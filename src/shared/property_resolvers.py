@@ -178,7 +178,7 @@ async def resolve_repo_metadata_properties(
         stars, error = await star_getter(*owner_repo)
         return RepoMetadataResolutionResult(
             github_url=github_url,
-            stars=None if error else stars,
+            stars=None if error is not None else stars,
             created=None,
             about=None,
             reason=error,

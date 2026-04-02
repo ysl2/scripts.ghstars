@@ -1,6 +1,7 @@
 from dataclasses import dataclass
+from typing import cast
 
-from src.shared.paper_identity import normalize_arxiv_url, normalize_semanticscholar_paper_url
+from src.shared.paper_identity import normalize_arxiv_url
 from src.shared.property_resolvers import acquire_github_property, resolve_repo_metadata_properties
 
 
@@ -78,20 +79,7 @@ async def process_single_paper(
             reason=acquisition.reason,
         )
 
-    github_url = acquisition.github_url
-    if github_url is None:
-        return PaperEnrichmentResult(
-            title=title,
-            raw_url=raw_url,
-            normalized_url=acquisition.normalized_url,
-            canonical_arxiv_url=acquisition.canonical_arxiv_url,
-            github_url=None,
-            github_source=acquisition.github_source,
-            stars=None,
-            created=None,
-            about=None,
-            reason="No Github URL found from discovery",
-        )
+    github_url = cast(str, acquisition.github_url)
 
     await _warm_content_cache(acquisition.canonical_arxiv_url, content_cache)
 

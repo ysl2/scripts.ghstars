@@ -90,6 +90,8 @@ async def test_process_single_paper_discovers_github_when_allowed():
     assert result.github_url == "https://github.com/foo/discovered"
     assert result.github_source == "discovered"
     assert result.stars == 42
+    assert result.created is None
+    assert result.about is None
     assert result.reason is None
     discovery_client.resolve_github_url.assert_awaited_once()
 
@@ -295,6 +297,8 @@ async def test_process_single_paper_keeps_repo_and_stars_when_no_canonical_arxiv
     assert result.github_url == "https://github.com/foo/bar"
     assert result.github_source == "existing"
     assert result.stars == 9
+    assert result.created is None
+    assert result.about is None
     assert result.reason is None
     assert content_cache.calls == []
     github_client.get_star_count.assert_awaited_once_with("foo", "bar")
@@ -336,6 +340,8 @@ async def test_process_single_paper_can_treat_existing_github_as_authoritative_e
     assert result.github_url == "https://github.com/foo/bar"
     assert result.github_source == "existing"
     assert result.stars == 9
+    assert result.created is None
+    assert result.about is None
     assert result.reason is None
     assert content_cache.calls == []
     discovery_client.resolve_github_url.assert_not_awaited()
