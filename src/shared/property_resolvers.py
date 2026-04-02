@@ -155,9 +155,17 @@ async def resolve_repo_metadata_properties(
                 about=None,
                 reason=error,
             )
-        stars = None if metadata is None else getattr(metadata, "stars", None)
-        created = None if metadata is None else getattr(metadata, "created", None)
-        about = None if metadata is None else getattr(metadata, "about", None)
+        if metadata is None:
+            return RepoMetadataResolutionResult(
+                github_url=github_url,
+                stars=None,
+                created=None,
+                about=None,
+                reason="GitHub client returned no repo metadata",
+            )
+        stars = getattr(metadata, "stars", None)
+        created = getattr(metadata, "created", None)
+        about = getattr(metadata, "about", None)
         if created is None and repo_metadata_cache is not None:
             try:
                 entry = repo_metadata_cache.get(github_url)

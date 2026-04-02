@@ -68,6 +68,23 @@ async def test_resolve_repo_metadata_properties_returns_metadata_from_get_repo_m
 
 
 @pytest.mark.anyio
+async def test_resolve_repo_metadata_properties_treats_missing_metadata_without_error_as_failure():
+    github_client = SimpleNamespace(get_repo_metadata=AsyncMock(return_value=(None, None)))
+
+    result = await resolve_repo_metadata_properties(
+        github_url="https://github.com/foo/bar",
+        github_client=github_client,
+        repo_metadata_cache=None,
+    )
+
+    assert result.github_url == "https://github.com/foo/bar"
+    assert result.stars is None
+    assert result.created is None
+    assert result.about is None
+    assert result.reason == "GitHub client returned no repo metadata"
+
+
+@pytest.mark.anyio
 async def test_resolve_repo_metadata_properties_falls_back_to_cached_created_when_metadata_lacks_it():
     github_client = SimpleNamespace(
         get_repo_metadata=AsyncMock(
