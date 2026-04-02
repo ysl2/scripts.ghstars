@@ -1,95 +1,58 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum, auto
-from typing import Any, Optional
+from typing import Any
+
+from src.core.record_model import (
+    PropertyState,
+    PropertyStatus,
+    Record,
+    RecordArtifacts,
+    RecordContext,
+    RecordFacts,
+)
 
 
-class PropertyStatus(Enum):
-    PRESENT = auto()
-    RESOLVED = auto()
-    SKIPPED = auto()
-    BLOCKED = auto()
-    FAILED = auto()
-
-
-@dataclass(frozen=True)
-class PropertyState:
-    value: Optional[Any]
-    status: PropertyStatus
-    source: Optional[str] = None
-    reason: Optional[str] = None
-
-    def __post_init__(self) -> None:
-        if self.status in (PropertyStatus.PRESENT, PropertyStatus.RESOLVED):
-            if self.value is None:
-                raise ValueError(f"{self.status.name} state requires a value")
-            if self.reason is not None:
-                raise ValueError(f"{self.status.name} state cannot carry a reason")
-        if self.status in (PropertyStatus.SKIPPED, PropertyStatus.FAILED):
-            if not self.reason:
-                raise ValueError(f"{self.status.name} state requires a reason")
-            if self.value is not None:
-                raise ValueError(f"{self.status.name} state cannot carry a value")
-        if self.status == PropertyStatus.BLOCKED:
-            if self.value is not None:
-                raise ValueError("BLOCKED state cannot carry a value")
-
-    @classmethod
-    def present(cls, value: Any, source: Optional[str] = None) -> "PropertyState":
-        return cls(value=value, status=PropertyStatus.PRESENT, source=source)
-
-    @classmethod
-    def resolved(cls, value: Any, source: Optional[str] = None) -> "PropertyState":
-        return cls(value=value, status=PropertyStatus.RESOLVED, source=source)
-
-    @classmethod
-    def skipped(cls, reason: str, source: Optional[str] = None) -> "PropertyState":
-        return cls(value=None, status=PropertyStatus.SKIPPED, source=source, reason=reason)
-
-    @classmethod
-    def blocked(cls, reason: Optional[str] = None, source: Optional[str] = None) -> "PropertyState":
-        return cls(value=None, status=PropertyStatus.BLOCKED, source=source, reason=reason)
-
-    @classmethod
-    def failed(cls, reason: str, source: Optional[str] = None) -> "PropertyState":
-        return cls(value=None, status=PropertyStatus.FAILED, source=source, reason=reason)
-
-
-@dataclass(frozen=True)
-class RecordState:
-    name: PropertyState
-    url: PropertyState
-    github: PropertyState
-    stars: PropertyState
-    created: PropertyState
-    about: PropertyState
-
+class RecordState(Record):
     @classmethod
     def from_source(
         cls,
         *,
-        name: Optional[Any] = None,
-        url: Optional[Any] = None,
-        github: Optional[Any] = None,
-        stars: Optional[Any] = None,
-        created: Optional[Any] = None,
-        about: Optional[Any] = None,
+        name: Any | None = None,
+        url: Any | None = None,
+        github: Any | None = None,
+        stars: Any | None = None,
+        created: Any | None = None,
+        about: Any | None = None,
         provenance: str = "source",
     ) -> "RecordState":
-        def seed(field_name: str, value: Optional[Any]) -> PropertyState:
-            if value is None or (isinstance(value, str) and not value.strip()):
-                return PropertyState.blocked(
-                    reason=f"{field_name} missing from source",
-                    source=provenance,
-                )
-            return PropertyState.present(value, source=provenance)
-
-        return cls(
-            name=seed("name", name),
-            url=seed("url", url),
-            github=seed("github", github),
-            stars=seed("stars", stars),
-            created=seed("created", created),
-            about=seed("about", about),
+        record = Record.from_source(
+            name=name,
+            url=url,
+            github=github,
+            stars=stars,
+            created=created,
+            about=about,
+            source=provenance,
         )
+        return cls(
+            name=record.name,
+            url=record.url,
+            github=record.github,
+            stars=record.stars,
+            created=record.created,
+            about=record.about,
+            facts=record.facts,
+            artifacts=record.artifacts,
+            context=record.context,
+        )
+
+
+__all__ = [
+    "PropertyState",
+    "PropertyStatus",
+    "Record",
+    "RecordState",
+    "RecordFacts",
+    "RecordArtifacts",
+    "RecordContext",
+]
