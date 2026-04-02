@@ -36,6 +36,18 @@ class ConversionResult:
     skipped: list[dict]
 
 
+def paper_record_to_csv_row(record: PaperRecord) -> CsvRow:
+    return CsvRow(
+        name=record.name,
+        url=record.url,
+        github=record.github,
+        stars=record.stars,
+        created="",
+        about="",
+        sort_index=record.sort_index,
+    )
+
+
 def sort_records(records: list[PaperRecord]) -> list[PaperRecord]:
     if all(extract_arxiv_id(record.url) for record in records):
         return sorted(records, key=lambda record: arxiv_url_sort_key(record.url), reverse=True)

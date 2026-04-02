@@ -2,7 +2,7 @@
 
 One CLI, five input shapes:
 
-- No positional argument: sync GitHub links and star counts into Notion
+- No positional argument: sync GitHub links and repo metadata into Notion
 - One existing `.csv` file path: update that CSV in place
 - One supported papers collection URL: fetch the full result set and write a CSV under `./output` in the current working directory
 - One supported GitHub repository-search URL: fetch the full repository result set and write a CSV under `./output` in the current working directory
@@ -15,7 +15,7 @@ Fresh CSV exports from collection URL mode, GitHub repository-search mode, and s
 Mode-specific export notes:
 
 - GitHub-search exports leave `Name` and `Url` empty by design
-- paper-family exports currently leave `Created` and `About` empty
+- paper-family fresh exports populate `Created` and `About` through the shared GitHub repo-metadata path when a GitHub repository is available
 
 Repository discovery for arXiv-backed papers now uses:
 
@@ -24,7 +24,7 @@ Repository discovery for arXiv-backed papers now uses:
 - AlphaXiv paper page HTML on Hugging Face exact misses
 - no additional search fallback for GitHub repo discovery
 
-GitHub and star lookup use normalized, versionless arXiv URLs as the paper identity.
+GitHub discovery and repo-metadata lookup use normalized, versionless arXiv URLs as the paper identity.
 
 ## Install
 
@@ -84,6 +84,7 @@ CSV update, collection URL export, Notion sync, and single-paper relation export
 
 - GitHub discovery checks `cache.db` first, then does one Hugging Face exact lookup on cache miss when discovery is allowed
 - when Hugging Face exact returns no repo, discovery does one AlphaXiv paper-page HTML lookup before giving up
+- once a valid GitHub repository URL is available, shared repo-metadata resolution fills `Stars` and, when available, `Created` / `About`
 - when a row ends with both a canonical arXiv URL and a valid GitHub repo URL, local `overview` / `abs` markdown is ensured under `./cache/overview/<arxiv_id>.md` and `./cache/abs/<arxiv_id>.md`
 - existing local content files are reused; only missing files are fetched
 - overview uses AlphaXiv's overview API; abs uses AlphaXiv's paper API
@@ -131,7 +132,7 @@ uv run main.py
 
 ### CSV update mode
 
-Reads one CSV file, keeps unrelated columns untouched, and updates `Github` / `Stars` in place.
+Reads one CSV file, keeps unrelated columns untouched, and applies the shared property write policy in place.
 
 ```bash
 uv run main.py /path/to/papers.csv
@@ -142,12 +143,13 @@ CSV mode behavior:
 - if `Url` is already an arXiv URL, it is preserved exactly as-is
 - if `Url` is non-arXiv, the shared resolver uses `cache -> Semantic Scholar exact -> Semantic Scholar title exact -> arXiv title search (HTML -> API) -> Crossref -> DataCite -> Hugging Face` to normalize it to arXiv when possible
 - requires at least one of `Github` or `Url`; `Name` is optional
-- if `Github` is already present and valid, its exact value is preserved and only `Stars` is refreshed; `Url` is not required in that case
+- if `Github` is already present and valid, its exact value is preserved as the source-of-truth; `Url` is not required in that case
 - if `Github` is blank, discovery checks `cache.db` first, then does one Hugging Face exact lookup on cache miss
 - if Hugging Face exact returns no repo, discovery does one AlphaXiv paper-page HTML lookup before leaving `Github` blank
-- missing `Github` or `Stars` columns are added automatically at the end of the CSV
+- missing `Github`, `Stars`, `Created`, or `About` columns are added automatically at the end of the CSV
 - existing custom columns are left untouched, including any preexisting `Overview` / `Abs` columns
-- existing `Created` / `About` values are preserved as-is and are not refreshed by CSV update
+- `Stars` and `About` are refreshed from shared repo metadata whenever metadata resolution succeeds
+- `Created` is backfilled only when the current CSV cell is blank
 - current CSV mode does not write content-cache paths back into the CSV
 - writes use a temp file and atomic replace
 
@@ -279,7 +281,7 @@ URL mode behavior:
 - every URL export appends a run timestamp in `YYYYMMDDHHMMSS` form before `.csv`
 - CLI URL exports default to `./output` in the current working directory and create that directory automatically if needed
 - URL exports always write the standard columns: `Name`, `Url`, `Github`, `Stars`, `Created`, `About`
-- collection URL exports currently leave `Created` and `About` empty
+- when shared enrichment reaches a valid GitHub repository, collection URL exports populate `Created` and `About` through shared repo-metadata resolution
 - standard arXiv `list/...` and `search/...` collection pages, including `/search/advanced`, are crawled across all pages, not just the first page
 - archive-style arXiv `list/<category>/YYYY-MM` pages reuse the same multi-page `list/...` crawling path
 - arXiv `new` pages include all visible sections, including new submissions, cross-lists, and replacements
@@ -374,8 +376,8 @@ Single-paper mode behavior:
 - cached positive matches store canonical arXiv `abs` URLs; cached negative matches are written only when all actually attempted resolver stages finish without transient/network failure and still find no accepted arXiv match, then retried after `ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS`
 - referenced and citing works are deduplicated by final normalized URL before export
 - both CSVs use the standard columns: `Name`, `Url`, `Github`, `Stars`, `Created`, `About`
-- single-paper relation exports currently leave `Created` and `About` empty
-- shared GitHub discovery, local overview / abs cache warming, and star enrichment are reused, so resolved and unresolved rows remain in the CSV even when no repo is found; in that case `Github` and `Stars` are left blank
+- when shared enrichment reaches a valid GitHub repository, single-paper relation exports populate `Created` and `About` through shared repo-metadata resolution
+- shared GitHub discovery, repo-metadata enrichment, and local overview / abs cache warming are reused, so resolved and unresolved rows remain in the CSV even when no repo is found; in that case `Github` and `Stars` are left blank
 - the CLI reports success only after both CSV files are written; other arXiv or Semantic Scholar hard failures still return a nonzero exit code
 
 ## Notion expectations
@@ -383,11 +385,14 @@ Single-paper mode behavior:
 Your Notion database should have:
 
 - `Name` or `Title` as title property
-- `Github` as URL or rich text
-- `Stars` as number
+- `Github` as URL when present
+- `Stars` as number when present
+- `Created` as date when present
+- `About` as rich text when present
 
-If `Github` or `Stars` is missing from the data source schema, Notion mode creates them automatically before querying pages.
-Newly created `Github` is a URL property; newly created `Stars` is a number property.
+If `Github`, `Stars`, `Created`, or `About` is missing from the data source schema, Notion mode creates it automatically before querying pages.
+Newly created properties use these types: `Github` = URL, `Stars` = number, `Created` = date, `About` = rich text.
+If one of those property names already exists with the wrong type, Notion mode fails fast instead of attempting to repurpose it.
 
 Optional arXiv source fields for fallback discovery:
 

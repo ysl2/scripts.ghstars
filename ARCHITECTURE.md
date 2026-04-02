@@ -27,6 +27,31 @@ Responsibilities by layer:
 
 This split is the core architectural rule of the repository: keep input-shape dispatch and mode wiring thin; keep reusable paper-processing logic in `src/shared/`.
 
+## Property-Centric Core
+
+The shared property model is now the center of the architecture.
+
+Key files:
+
+- `src/shared/property_model.py`
+- `src/shared/property_resolvers.py`
+- `src/shared/paper_enrichment.py`
+- `src/shared/paper_export.py`
+
+Responsibilities:
+
+- Treat `Github`, `Stars`, `Created`, and `About` as explicit shared properties instead of mode-local fields.
+- Reuse one `Github URL -> repo metadata` path across fresh export, CSV update, and Notion sync.
+- Let mode pipelines stay responsible for source-specific ingestion and target-specific writes, while shared code owns acquisition and metadata semantics.
+
+Important semantics:
+
+- Existing non-empty `Github` values are source-of-truth input.
+- Fresh paper-family exports use the shared six-column CSV shape `Name`, `Url`, `Github`, `Stars`, `Created`, `About`.
+- When shared enrichment reaches a valid GitHub repo, fresh exports populate `Stars` and, when available, `Created` / `About`.
+- CSV update always refreshes `Stars` and `About`, and only backfills `Created`.
+- Notion auto-provisions missing `Github`, `Stars`, `Created`, and `About` properties, but same-name wrong-type properties are hard failures.
+
 ## The Five Modes
 
 ### 1. Notion sync
@@ -39,12 +64,14 @@ Path:
 Purpose:
 
 - Read papers from Notion.
-- Resolve GitHub repositories and star counts.
+- Resolve GitHub repositories and shared repo metadata properties.
 - Update Notion properties in place.
 
 Special rule:
 
 - Notion may use non-arXiv -> arXiv normalization internally, but it must not rewrite the stored literature URL field.
+- Missing `Github`, `Stars`, `Created`, and `About` properties are auto-created with the expected Notion types.
+- Existing same-name properties with the wrong type are fatal schema errors.
 
 ### 2. CSV update
 
@@ -57,13 +84,13 @@ Purpose:
 
 - Read one existing CSV.
 - Keep unrelated columns untouched.
-- Refresh `Github` and `Stars`.
+- Apply the shared property write policy to `Github`, `Stars`, `Created`, and `About`.
 
 Special rule:
 
 - Existing valid `Github` values are source-of-truth and are preserved exactly.
 - CSV update can refresh `Stars` from an existing `Github` without requiring `Url`.
-- `Created` and `About` are treated as preserved export metadata and are not refreshed by CSV update.
+- CSV update always refreshes `Stars` and `About`, and only backfills `Created`.
 
 ### 3. Collection URL -> CSV
 
@@ -84,6 +111,7 @@ Special rule:
 
 - Existing arXiv URLs are preserved as-is in the output row.
 - Canonical arXiv URLs are still used internally for identity, dedupe, and downstream cache lookups.
+- Once shared enrichment has a valid GitHub repo, fresh exports populate `Stars` and, when available, `Created` / `About`.
 
 ### 4. GitHub repository search -> CSV
 
@@ -125,6 +153,7 @@ Purpose:
 Special rule:
 
 - Relation mode retains unresolved non-arXiv works instead of dropping them outright.
+- Resolved rows reuse the same shared repo-metadata path as other fresh export families.
 
 ## Shared Subsystems
 
@@ -157,7 +186,7 @@ Important semantics:
 - Existing arXiv URLs are treated as source-of-truth input and are not canonical-rewritten in user-facing outputs.
 - Negative cache entries are written only after the active ladder fully fails without transient metadata errors.
 
-### Repository discovery and stars
+### Repository discovery and repo metadata
 
 Key files:
 
@@ -167,7 +196,7 @@ Key files:
 Responsibilities:
 
 - Resolve GitHub repositories for arXiv-backed papers.
-- Fetch GitHub star counts.
+- Fetch shared repo metadata (`Stars`, `Created`, `About`).
 
 Current repo-discovery order:
 
@@ -194,18 +223,18 @@ Key files:
 Responsibilities:
 
 - Apply shared paper processing once a row is in the common enrichment path.
-- Normalize URLs, discover GitHub, warm local content cache, fetch stars, and write CSV records.
+- Normalize URLs, acquire `Github`, resolve shared repo metadata, warm local content cache, and write CSV records.
 - Define the shared six-column CSV row contract reused by paper exports and GitHub-search exports.
 
 CSV contract:
 
 - Fresh CSV exports use the fixed header order `Name`, `Url`, `Github`, `Stars`, `Created`, `About`.
-- Paper-family exports currently leave `Created` and `About` empty.
+- Paper-family exports populate `Created` and `About` when shared repo metadata resolution has those values.
 - GitHub-search exports leave `Name` and `Url` empty.
 
 Design intent:
 
-- `process_single_paper()` is the main reusable enrichment unit.
+- `process_single_paper()` is the compatibility wrapper over the shared property-centric acquisition and metadata flow.
 - Mode pipelines should prefer threading data into shared enrichment instead of re-implementing URL normalization or GitHub discovery locally.
 
 ### Runtime and infrastructure
@@ -278,6 +307,8 @@ These rules are cross-cutting. Preserve them when modifying any mode.
 - Caches store only script-derived positive or negative results.
 - Non-Notion flows may rewrite a non-arXiv literature URL to a resolved arXiv URL.
 - Notion must not rewrite the stored literature URL field.
+- CSV update always refreshes `Stars` and `About`, and only backfills `Created`.
+- Notion auto-provisions missing repo-metadata properties, but wrong-type collisions are hard failures.
 - If a shared rule changes, thread it through all modes, not only the mode you are editing.
 
 ## Document Map

@@ -64,7 +64,7 @@ def test_write_rows_to_csv_path_uses_sort_index_even_for_arxiv_like_urls(tmp_pat
     ]
 
 
-def test_write_records_to_csv_path_keeps_legacy_four_column_shape(tmp_path: Path):
+def test_write_records_to_csv_path_uses_unified_header_order(tmp_path: Path):
     csv_path = tmp_path / "records.csv"
 
     write_records_to_csv_path(
@@ -80,6 +80,6 @@ def test_write_records_to_csv_path_keeps_legacy_four_column_shape(tmp_path: Path
     )
 
     assert csv_path.read_text(encoding="utf-8").splitlines() == [
-        "Name,Url,Github,Stars",
-        "Newer,https://arxiv.org/abs/2603.20000,https://github.com/foo/new,20",
+        "Name,Url,Github,Stars,Created,About",
+        "Newer,https://arxiv.org/abs/2603.20000,https://github.com/foo/new,20,,",
     ]
