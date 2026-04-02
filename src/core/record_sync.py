@@ -162,8 +162,11 @@ class RecordSyncService:
         title = self._string_value(record.name)
         raw_url_value = self._string_value(record.url)
         existing_value = self._string_value(record.github)
+        trusted_existing_github = trust_existing_github or record.github.trusted
 
-        skip_url_resolution = bool(existing_value) and (trust_existing_github or not raw_url_value)
+        skip_url_resolution = bool(existing_value) and (
+            trusted_existing_github or not raw_url_value
+        )
         if url_resolution_authoritative:
             normalized_url = precomputed_normalized_url or raw_url_value or None
             canonical_arxiv_url = precomputed_canonical_arxiv_url

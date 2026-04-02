@@ -92,6 +92,48 @@ async def test_record_sync_preserves_existing_facts_when_trusted_existing_github
 
 
 @pytest.mark.anyio
+async def test_record_sync_honors_trusted_existing_github_without_explicit_flag(monkeypatch):
+    async def fail_resolve_arxiv_url(*args, **kwargs):
+        raise AssertionError(
+            "URL resolution should not run for a trusted existing Github value"
+        )
+
+    monkeypatch.setattr(
+        "src.core.record_sync.resolve_arxiv_url",
+        fail_resolve_arxiv_url,
+    )
+
+    discovery_client = SimpleNamespace(resolve_github_url=AsyncMock())
+    service = RecordSyncService(
+        discovery_client=discovery_client,
+        github_client=SimpleNamespace(get_star_count=AsyncMock(return_value=(42, None))),
+    )
+    record = Record.from_source(
+        name="Paper A",
+        url="https://doi.org/10.1000/example",
+        github="https://github.com/foo/bar",
+        source="csv",
+        trusted_fields={"github"},
+    ).with_supporting_state(
+        facts=RecordFacts(
+            canonical_arxiv_url="https://arxiv.org/abs/2501.12345",
+            normalized_url="https://arxiv.org/abs/2501.12345v2",
+        )
+    )
+
+    updated = await service.sync(
+        record,
+        allow_title_search=True,
+        allow_github_discovery=True,
+    )
+
+    assert updated.facts.canonical_arxiv_url == "https://arxiv.org/abs/2501.12345"
+    assert updated.facts.normalized_url == "https://arxiv.org/abs/2501.12345v2"
+    assert updated.facts.github_source == "existing"
+    discovery_client.resolve_github_url.assert_not_awaited()
+
+
+@pytest.mark.anyio
 async def test_record_sync_surfaces_repo_metadata_failure_for_fully_populated_record():
     service = RecordSyncService(
         discovery_client=SimpleNamespace(resolve_github_url=AsyncMock()),

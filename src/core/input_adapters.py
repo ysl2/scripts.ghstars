@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from src.core.record_model import Record, RecordContext
+from src.core.record_model import PropertyState, Record, RecordContext
 from src.shared.csv_schema import (
     ABOUT_COLUMN,
     CREATED_COLUMN,
@@ -29,18 +29,36 @@ class PaperSeedInputAdapter:
 
 class GithubSearchInputAdapter:
     def to_record(self, row) -> Record:
-        return Record.from_source(
-            github=row.github,
-            stars=row.stars,
-            created=row.created,
-            about=row.about,
-            source="github_search",
-            trusted_fields={"github", "stars", "created", "about"},
+        return Record(
+            name=_intentionally_absent_state("name", source="github_search"),
+            url=_intentionally_absent_state("url", source="github_search"),
+            github=PropertyState.present(
+                row.github,
+                source="github_search",
+                trusted=True,
+            ),
+            stars=PropertyState.present(
+                row.stars,
+                source="github_search",
+                trusted=True,
+            ),
+            created=PropertyState.present(
+                row.created,
+                source="github_search",
+                trusted=True,
+            ),
+            about=PropertyState.present(
+                "" if getattr(row, "about", None) is None else row.about,
+                source="github_search",
+                trusted=True,
+            ),
         )
 
 
 class CsvRowInputAdapter:
     def to_record(self, index: int, row: dict[str, str]) -> Record:
+        github_value = row.get(GITHUB_COLUMN)
+        trusted_fields = {"github"} if _has_text(github_value) else set()
         return Record.from_source(
             name=row.get(NAME_COLUMN),
             url=row.get(URL_COLUMN),
@@ -49,6 +67,7 @@ class CsvRowInputAdapter:
             created=row.get(CREATED_COLUMN),
             about=row.get(ABOUT_COLUMN),
             source="csv",
+            trusted_fields=trusted_fields,
         ).with_supporting_state(context=RecordContext(csv_row_index=index))
 
 
@@ -137,3 +156,14 @@ __all__ = [
     "NotionPageInputAdapter",
     "PaperSeedInputAdapter",
 ]
+
+
+def _has_text(value) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _intentionally_absent_state(field_name: str, *, source: str) -> PropertyState:
+    return PropertyState.skipped(
+        f"{field_name} not provided by github search input",
+        source=source,
+    )
