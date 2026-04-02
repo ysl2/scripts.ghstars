@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from src.core.record_model import Record, RecordFacts
 from src.shared.paper_enrichment import PaperEnrichmentRequest, process_single_paper
 
 
@@ -19,6 +20,63 @@ class RecordingContentCache:
 
     async def ensure_local_content_cache(self, canonical_arxiv_url: str) -> None:
         self.calls.append(canonical_arxiv_url)
+
+
+@pytest.mark.anyio
+async def test_process_single_paper_routes_through_record_sync_service(monkeypatch):
+    import src.shared.paper_enrichment as paper_enrichment
+
+    calls: dict[str, object] = {}
+    updated = (
+        Record.from_source(
+            name="Paper A",
+            url="https://arxiv.org/pdf/2603.20000v2.pdf",
+            github="https://github.com/foo/bar",
+            stars=17,
+            created="2024-01-01T00:00:00Z",
+            about="repo",
+            source="record_sync",
+            trusted_fields={"github"},
+        ).with_supporting_state(
+            facts=RecordFacts(
+                normalized_url="https://arxiv.org/pdf/2603.20000v2.pdf",
+                canonical_arxiv_url="https://arxiv.org/abs/2603.20000",
+                github_source="existing",
+            )
+        )
+    )
+
+    async def fake_sync(self, record, **kwargs):
+        calls["record"] = record
+        calls.update(kwargs)
+        return updated
+
+    monkeypatch.setattr(paper_enrichment.RecordSyncService, "sync", fake_sync)
+
+    result = await process_single_paper(
+        PaperEnrichmentRequest(
+            title="Paper A",
+            raw_url="https://arxiv.org/pdf/2603.20000v2.pdf",
+            existing_github_url="https://github.com/foo/bar",
+            allow_title_search=False,
+            allow_github_discovery=True,
+            trust_existing_github=True,
+        ),
+        discovery_client=types.SimpleNamespace(resolve_github_url=AsyncMock()),
+        github_client=types.SimpleNamespace(get_repo_metadata=AsyncMock()),
+        content_cache=RecordingContentCache(),
+    )
+
+    assert result.github_url == "https://github.com/foo/bar"
+    assert result.github_source == "existing"
+    assert result.stars == 17
+    assert result.created == "2024-01-01T00:00:00Z"
+    assert result.about == "repo"
+    assert calls["record"].github.value == "https://github.com/foo/bar"
+    assert calls["record"].github.trusted is True
+    assert calls["allow_title_search"] is False
+    assert calls["allow_github_discovery"] is True
+    assert calls["trust_existing_github"] is True
 
 
 @pytest.mark.anyio

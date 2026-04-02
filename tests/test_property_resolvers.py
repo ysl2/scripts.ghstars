@@ -7,6 +7,88 @@ from src.shared.property_resolvers import acquire_github_property, resolve_repo_
 
 
 @pytest.mark.anyio
+async def test_acquire_github_property_routes_through_record_sync_service(monkeypatch):
+    import src.shared.property_resolvers as property_resolvers
+
+    service_calls: dict[str, object] = {}
+
+    async def fake_acquire_github(self, record, **kwargs):
+        service_calls["record"] = record
+        service_calls.update(kwargs)
+        return SimpleNamespace(
+            github_url="https://github.com/foo/bar",
+            github_source="discovered",
+            normalized_url="https://arxiv.org/abs/2501.12345v2",
+            canonical_arxiv_url="https://arxiv.org/abs/2501.12345",
+            reason=None,
+        )
+
+    monkeypatch.setattr(
+        property_resolvers.RecordSyncService,
+        "acquire_github",
+        fake_acquire_github,
+    )
+
+    result = await acquire_github_property(
+        existing_github_url="",
+        raw_url="https://arxiv.org/abs/2501.12345v2",
+        name="Paper A",
+        discovery_client=SimpleNamespace(resolve_github_url=AsyncMock()),
+        arxiv_client=None,
+        semanticscholar_graph_client=None,
+        crossref_client=None,
+        datacite_client=None,
+        relation_resolution_cache=None,
+        allow_title_search=True,
+        allow_github_discovery=True,
+    )
+
+    assert result.github_url == "https://github.com/foo/bar"
+    assert result.github_source == "discovered"
+    assert result.normalized_url == "https://arxiv.org/abs/2501.12345v2"
+    assert result.canonical_arxiv_url == "https://arxiv.org/abs/2501.12345"
+    assert service_calls["record"].name.value == "Paper A"
+    assert service_calls["record"].url.value == "https://arxiv.org/abs/2501.12345v2"
+    assert service_calls["allow_title_search"] is True
+    assert service_calls["allow_github_discovery"] is True
+
+
+@pytest.mark.anyio
+async def test_resolve_repo_metadata_properties_routes_through_record_sync_service(monkeypatch):
+    import src.shared.property_resolvers as property_resolvers
+
+    seen: dict[str, object] = {}
+
+    async def fake_resolve_repo_metadata(self, github_url: str):
+        seen["github_url"] = github_url
+        return SimpleNamespace(
+            github_url=github_url,
+            stars=21,
+            created="2021-02-03T00:00:00Z",
+            about="repo",
+            reason=None,
+        )
+
+    monkeypatch.setattr(
+        property_resolvers.RecordSyncService,
+        "resolve_repo_metadata",
+        fake_resolve_repo_metadata,
+    )
+
+    result = await resolve_repo_metadata_properties(
+        github_url="https://github.com/foo/bar",
+        github_client=SimpleNamespace(),
+        repo_metadata_cache=None,
+    )
+
+    assert result.github_url == "https://github.com/foo/bar"
+    assert result.stars == 21
+    assert result.created == "2021-02-03T00:00:00Z"
+    assert result.about == "repo"
+    assert seen["github_url"] == "https://github.com/foo/bar"
+
+
+@pytest.mark.anyio
 async def test_acquire_github_property_uses_existing_then_url_then_name():
     result = await acquire_github_property(
         existing_github_url="https://github.com/foo/bar",
