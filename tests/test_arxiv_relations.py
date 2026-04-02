@@ -2776,9 +2776,16 @@ async def test_export_arxiv_relations_to_csv_warms_content_for_arxiv_rows_and_pr
             return mapping.get(seed.url)
 
     class FakeGitHubClient:
-        async def get_star_count(self, owner, repo):
+        async def get_repo_metadata(self, owner, repo):
             mapping = {
-                ("foo", "reference"): (12, None),
+                ("foo", "reference"): (
+                    SimpleNamespace(
+                        stars=12,
+                        created="2024-03-03T00:00:00Z",
+                        about="reference repo",
+                    ),
+                    None,
+                ),
                 ("foo", "citation"): (None, "GitHub API error (503)"),
             }
             return mapping[(owner, repo)]
@@ -2806,8 +2813,8 @@ async def test_export_arxiv_relations_to_csv_warms_content_for_arxiv_rows_and_pr
             "Url": "https://arxiv.org/abs/2501.00001",
             "Github": "https://github.com/foo/reference",
             "Stars": "12",
-            "Created": "",
-            "About": "",
+            "Created": "2024-03-03T00:00:00Z",
+            "About": "reference repo",
         },
         {
             "Name": "Retained DOI Reference",

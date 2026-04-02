@@ -1,4 +1,5 @@
 import asyncio
+import csv
 from pathlib import Path
 from types import SimpleNamespace
 from typing import get_type_hints
@@ -117,6 +118,49 @@ async def test_build_paper_outcome_threads_metadata_clients_to_process_single_pa
     assert received["relation_resolution_cache"] is relation_resolution_cache
     assert received["arxiv_relation_no_arxiv_recheck_days"] == 17
     assert received["allow_title_search"] is True
+
+
+@pytest.mark.anyio
+async def test_export_paper_seeds_to_csv_writes_created_and_about_from_shared_metadata(
+    tmp_path: Path,
+    monkeypatch,
+):
+    async def fake_process_single_paper(request, **kwargs):
+        return SimpleNamespace(
+            title=request.title,
+            raw_url=request.raw_url,
+            normalized_url="https://arxiv.org/abs/2501.00001",
+            canonical_arxiv_url="https://arxiv.org/abs/2501.00001",
+            github_url="https://github.com/foo/bar",
+            github_source="discovered",
+            stars=12,
+            created="2024-01-01T00:00:00Z",
+            about="repo",
+            reason=None,
+        )
+
+    monkeypatch.setattr(paper_export, "process_single_paper", fake_process_single_paper)
+
+    result = await paper_export.export_paper_seeds_to_csv(
+        [PaperSeed(name="Paper A", url="https://arxiv.org/abs/2501.00001")],
+        tmp_path / "papers.csv",
+        discovery_client=SimpleNamespace(semaphore=asyncio.Semaphore(1)),
+        github_client=SimpleNamespace(semaphore=asyncio.Semaphore(1)),
+    )
+
+    with result.csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert rows == [
+        {
+            "Name": "Paper A",
+            "Url": "https://arxiv.org/abs/2501.00001",
+            "Github": "https://github.com/foo/bar",
+            "Stars": "12",
+            "Created": "2024-01-01T00:00:00Z",
+            "About": "repo",
+        }
+    ]
 
 
 @pytest.mark.anyio

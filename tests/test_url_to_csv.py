@@ -310,10 +310,24 @@ async def test_export_url_to_csv_writes_sorted_csv_in_output_dir(tmp_path: Path)
             return mapping[seed.url]
 
     class FakeGitHubClient:
-        async def get_star_count(self, owner, repo):
+        async def get_repo_metadata(self, owner, repo):
             mapping = {
-                ("foo", "old"): (10, None),
-                ("foo", "new"): (20, None),
+                ("foo", "old"): (
+                    SimpleNamespace(
+                        stars=10,
+                        created="2024-01-01T00:00:00Z",
+                        about="old repo",
+                    ),
+                    None,
+                ),
+                ("foo", "new"): (
+                    SimpleNamespace(
+                        stars=20,
+                        created="2025-02-02T00:00:00Z",
+                        about="new repo",
+                    ),
+                    None,
+                ),
             }
             return mapping[(owner, repo)]
 
@@ -337,16 +351,16 @@ async def test_export_url_to_csv_writes_sorted_csv_in_output_dir(tmp_path: Path)
             "Url": "https://arxiv.org/abs/2502.00002",
             "Github": "https://github.com/foo/new",
             "Stars": "20",
-            "Created": "",
-            "About": "",
+            "Created": "2025-02-02T00:00:00Z",
+            "About": "new repo",
         },
         {
             "Name": "Older",
             "Url": "https://arxiv.org/abs/2501.00001",
             "Github": "https://github.com/foo/old",
             "Stars": "10",
-            "Created": "",
-            "About": "",
+            "Created": "2024-01-01T00:00:00Z",
+            "About": "old repo",
         },
     ]
 
