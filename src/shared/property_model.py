@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Any, Optional
 
@@ -15,10 +15,25 @@ class PropertyStatus(Enum):
 
 @dataclass(frozen=True)
 class PropertyState:
-    value: Optional[Any] = None
-    status: PropertyStatus = field(default=PropertyStatus.PRESENT)
+    value: Optional[Any]
+    status: PropertyStatus
     source: Optional[str] = None
     reason: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if self.status in (PropertyStatus.PRESENT, PropertyStatus.RESOLVED):
+            if self.value is None:
+                raise ValueError(f"{self.status.name} state requires a value")
+            if self.reason is not None:
+                raise ValueError(f"{self.status.name} state cannot carry a reason")
+        if self.status in (PropertyStatus.SKIPPED, PropertyStatus.FAILED):
+            if not self.reason:
+                raise ValueError(f"{self.status.name} state requires a reason")
+            if self.value is not None:
+                raise ValueError(f"{self.status.name} state cannot carry a value")
+        if self.status == PropertyStatus.BLOCKED:
+            if self.value is not None:
+                raise ValueError("BLOCKED state cannot carry a value")
 
     @classmethod
     def present(cls, value: Any, source: Optional[str] = None) -> "PropertyState":
@@ -30,15 +45,15 @@ class PropertyState:
 
     @classmethod
     def skipped(cls, reason: str, source: Optional[str] = None) -> "PropertyState":
-        return cls(status=PropertyStatus.SKIPPED, source=source, reason=reason)
+        return cls(value=None, status=PropertyStatus.SKIPPED, source=source, reason=reason)
 
     @classmethod
-    def blocked(cls, source: Optional[str] = None) -> "PropertyState":
-        return cls(status=PropertyStatus.BLOCKED, source=source)
+    def blocked(cls, reason: Optional[str] = None, source: Optional[str] = None) -> "PropertyState":
+        return cls(value=None, status=PropertyStatus.BLOCKED, source=source, reason=reason)
 
     @classmethod
     def failed(cls, reason: str, source: Optional[str] = None) -> "PropertyState":
-        return cls(status=PropertyStatus.FAILED, source=source, reason=reason)
+        return cls(value=None, status=PropertyStatus.FAILED, source=source, reason=reason)
 
 
 @dataclass(frozen=True)
@@ -51,18 +66,29 @@ class RecordState:
     about: PropertyState
 
     @classmethod
-    def from_source(cls, **kwargs: Any) -> "RecordState":
-        def seed(field_name: str) -> PropertyState:
-            value = kwargs.get(field_name)
+    def from_source(
+        cls,
+        *,
+        name: Optional[Any] = None,
+        url: Optional[Any] = None,
+        github: Optional[Any] = None,
+        stars: Optional[Any] = None,
+        created: Optional[Any] = None,
+        about: Optional[Any] = None,
+    ) -> "RecordState":
+        def seed(field_name: str, value: Optional[Any]) -> PropertyState:
             if value is None or (isinstance(value, str) and value == ""):
-                return PropertyState.blocked(source=field_name)
+                return PropertyState.blocked(
+                    reason=f"{field_name} missing from source",
+                    source=field_name,
+                )
             return PropertyState.present(value, source=field_name)
 
         return cls(
-            name=seed("name"),
-            url=seed("url"),
-            github=seed("github"),
-            stars=seed("stars"),
-            created=seed("created"),
-            about=seed("about"),
+            name=seed("name", name),
+            url=seed("url", url),
+            github=seed("github", github),
+            stars=seed("stars", stars),
+            created=seed("created", created),
+            about=seed("about", about),
         )
