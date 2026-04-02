@@ -118,6 +118,7 @@ async def build_csv_row_outcome(
     name = (updated_row.get(NAME_COLUMN) or "").strip() or f"Row {index}"
     url = (updated_row.get(URL_COLUMN, "") or "").strip()
     existing_github = (updated_row.get(GITHUB_COLUMN, "") or "").strip()
+    url_for_resolution = "" if existing_github else url
     current_stars = parse_current_stars(updated_row.get(STARS_COLUMN))
 
     if not existing_github and not url:
@@ -139,9 +140,9 @@ async def build_csv_row_outcome(
     enrichment = await process_single_paper(
         PaperEnrichmentRequest(
             title=name,
-            raw_url=url,
+            raw_url=url_for_resolution,
             existing_github_url=existing_github,
-            allow_title_search=bool(url),
+            allow_title_search=bool(url_for_resolution),
             allow_github_discovery=not bool(existing_github),
         ),
         discovery_client=discovery_client,

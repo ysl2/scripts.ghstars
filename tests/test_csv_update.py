@@ -113,10 +113,7 @@ async def test_update_csv_file_updates_rows_in_place_preserving_columns_and_orde
             "Tag": "C",
         },
     ]
-    assert content_cache.calls == [
-        "https://arxiv.org/abs/2603.20000",
-        "https://arxiv.org/abs/2603.10000",
-    ]
+    assert content_cache.calls == ["https://arxiv.org/abs/2603.10000"]
 
 
 @pytest.mark.anyio
@@ -574,6 +571,65 @@ async def test_update_csv_file_refreshes_stars_without_url_when_github_exists(tm
         }
     ]
     assert reader.fieldnames == ["Name", "Github", "Stars", "Created", "About"]
+
+
+@pytest.mark.anyio
+async def test_update_csv_file_does_not_use_or_rewrite_url_when_github_exists(tmp_path: Path):
+    csv_path = tmp_path / "papers.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "Name,Url,Github,Stars,Created,About",
+                "Paper A,https://doi.org/10.1000/example,https://github.com/foo/bar,2,2024-01-01T00:00:00Z,repo",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    discovery_client = SimpleNamespace(resolve_github_url=AsyncMock())
+    github_client = SimpleNamespace(get_star_count=AsyncMock(return_value=(13, None)))
+    semanticscholar_graph_client = SimpleNamespace(
+        find_arxiv_match_by_identifier=AsyncMock(
+            return_value=("https://arxiv.org/abs/2501.12345", "Mapped Arxiv Title", "semantic_scholar_exact_doi")
+        ),
+        find_arxiv_match_by_title=AsyncMock(return_value=(None, None, None)),
+    )
+    arxiv_client = SimpleNamespace(
+        get_arxiv_id_by_title=AsyncMock(return_value=("2501.54321", "title_search_exact", None)),
+        get_arxiv_match_by_title_from_api=AsyncMock(return_value=("2999.99999", "Wrong API Match", "title_search_exact", None)),
+    )
+
+    result = await update_csv_file(
+        csv_path,
+        discovery_client=discovery_client,
+        github_client=github_client,
+        arxiv_client=arxiv_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
+        content_cache=FakeContentCache(),
+    )
+
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert result.updated == 1
+    assert result.skipped == []
+    assert rows == [
+        {
+            "Name": "Paper A",
+            "Url": "https://doi.org/10.1000/example",
+            "Github": "https://github.com/foo/bar",
+            "Stars": "13",
+            "Created": "2024-01-01T00:00:00Z",
+            "About": "repo",
+        }
+    ]
+    discovery_client.resolve_github_url.assert_not_awaited()
+    semanticscholar_graph_client.find_arxiv_match_by_identifier.assert_not_awaited()
+    semanticscholar_graph_client.find_arxiv_match_by_title.assert_not_awaited()
+    arxiv_client.get_arxiv_id_by_title.assert_not_awaited()
+    arxiv_client.get_arxiv_match_by_title_from_api.assert_not_awaited()
+    github_client.get_star_count.assert_awaited_once_with("foo", "bar")
 
 
 @pytest.mark.anyio
