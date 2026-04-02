@@ -164,6 +164,66 @@ async def test_export_paper_seeds_to_csv_writes_created_and_about_from_shared_me
 
 
 @pytest.mark.anyio
+async def test_build_paper_outcome_routes_row_conversion_through_fresh_csv_export_adapter(
+    monkeypatch,
+):
+    adapter_calls = []
+
+    async def fake_process_single_paper(request, **kwargs):
+        return SimpleNamespace(
+            title=request.title,
+            raw_url=request.raw_url,
+            normalized_url="https://arxiv.org/abs/2501.00001",
+            canonical_arxiv_url="https://arxiv.org/abs/2501.00001",
+            github_url="https://github.com/foo/bar",
+            github_source="discovered",
+            stars=12,
+            created="2024-01-01T00:00:00Z",
+            about="repo",
+            reason=None,
+        )
+
+    class FakeAdapter:
+        def to_csv_row(self, record, *, sort_index=0):
+            adapter_calls.append((record.name.value, record.url.value, sort_index))
+            return CsvRow(
+                name="Adapter Name",
+                url="https://adapter.example/paper",
+                github="https://github.com/adapter/paper",
+                stars=99,
+                created="2025-01-01T00:00:00Z",
+                about="adapter",
+                sort_index=sort_index,
+            )
+
+    monkeypatch.setattr(paper_export, "process_single_paper", fake_process_single_paper)
+    monkeypatch.setattr(
+        paper_export,
+        "FreshCsvExportAdapter",
+        FakeAdapter,
+        raising=False,
+    )
+
+    outcome = await paper_export.build_paper_outcome(
+        4,
+        PaperSeed(name="Paper A", url="https://doi.org/10.1145/example"),
+        discovery_client=SimpleNamespace(),
+        github_client=SimpleNamespace(),
+    )
+
+    assert adapter_calls == [("Paper A", "https://arxiv.org/abs/2501.00001", 4)]
+    assert outcome.record == CsvRow(
+        name="Adapter Name",
+        url="https://adapter.example/paper",
+        github="https://github.com/adapter/paper",
+        stars=99,
+        created="2025-01-01T00:00:00Z",
+        about="adapter",
+        sort_index=4,
+    )
+
+
+@pytest.mark.anyio
 async def test_build_paper_outcome_uses_arxiv_html_title_search_after_semantic_scholar_misses():
     arxiv_client = SimpleNamespace(
         get_arxiv_id_by_title=AsyncMock(return_value=("2501.54321", "title_search_exact", None)),

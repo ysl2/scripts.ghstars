@@ -326,3 +326,63 @@ async def test_export_github_search_to_csv_builds_records_with_input_adapter(
             "About": "repo",
         }
     ]
+
+
+@pytest.mark.anyio
+async def test_export_github_search_to_csv_routes_records_through_fresh_csv_export_adapter(
+    monkeypatch,
+    tmp_path: Path,
+):
+    adapter_calls = []
+
+    class FakeSearchClient:
+        async def collect_repositories(self, request):
+            return [
+                RepositorySearchRow(
+                    github="https://github.com/foo/newer",
+                    stars=5,
+                    about="newer",
+                    created="2024-01-01T00:00:00Z",
+                )
+            ]
+
+    class FakeCsvAdapter:
+        def to_csv_row(self, record, *, sort_index=0):
+            adapter_calls.append((record.github.value, sort_index))
+            return type("Row", (), {
+                "name": f"Repository {sort_index}",
+                "url": f"https://adapter.example/{sort_index}",
+                "github": record.github.value,
+                "stars": record.stars.value,
+                "created": record.created.value,
+                "about": record.about.value,
+                "sort_index": sort_index,
+            })()
+
+    monkeypatch.setattr(
+        "src.github_search_to_csv.pipeline.FreshCsvExportAdapter",
+        FakeCsvAdapter,
+        raising=False,
+    )
+
+    result = await export_github_search_to_csv(
+        "https://github.com/search?q=cvpr+2026&type=repositories&s=stars&o=desc",
+        search_client=FakeSearchClient(),
+        output_dir=tmp_path,
+        timestamp="20260326113045",
+    )
+
+    assert adapter_calls == [("https://github.com/foo/newer", 1)]
+    with result.csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert rows == [
+        {
+            "Name": "Repository 1",
+            "Url": "https://adapter.example/1",
+            "Github": "https://github.com/foo/newer",
+            "Stars": "5",
+            "Created": "2024-01-01T00:00:00Z",
+            "About": "newer",
+        }
+    ]

@@ -1,9 +1,10 @@
 from dataclasses import replace
 from pathlib import Path
 
+from src.core.output_adapters import FreshCsvExportAdapter
+from src.core.record_model import Record
 from src.shared.async_batch import iter_bounded_as_completed, resolve_worker_count
 from src.shared.csv_io import write_rows_to_csv_path
-from src.shared.csv_rows import CsvRow
 from src.shared.paper_enrichment import PaperEnrichmentRequest, process_single_paper
 from src.shared.papers import ConversionResult, PaperOutcome, PaperSeed, sort_paper_export_rows
 
@@ -44,15 +45,19 @@ async def build_paper_outcome(
         arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
     )
 
+    adapter = FreshCsvExportAdapter()
     return PaperOutcome(
         index=index,
-        record=CsvRow(
-            name=enrichment.title,
-            url=enrichment.normalized_url or enrichment.raw_url or "",
-            github=enrichment.github_url or "",
-            stars=enrichment.stars if enrichment.reason is None else "",
-            created=enrichment.created or "",
-            about=enrichment.about or "",
+        record=adapter.to_csv_row(
+            Record.from_source(
+                name=enrichment.title,
+                url=enrichment.normalized_url or enrichment.raw_url or "",
+                github=enrichment.github_url,
+                stars=enrichment.stars if enrichment.reason is None else None,
+                created=enrichment.created,
+                about=enrichment.about,
+                source="paper_export",
+            ),
             sort_index=index,
         ),
         reason=enrichment.reason,
