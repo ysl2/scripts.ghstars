@@ -7,6 +7,8 @@ import pytest
 import src.notion_sync.runner as notion_runner
 from src.notion_sync.config import load_config_from_env
 from src.notion_sync.notion_client import NotionClient
+import src.notion_sync.pipeline as notion_pipeline
+from src.core.record_model import Record, RecordContext
 from src.notion_sync.pipeline import (
     build_page_enrichment_request,
     classify_github_value,
@@ -107,6 +109,39 @@ def test_build_page_enrichment_request_preserves_non_arxiv_raw_url_for_shared_no
     assert request is not None
     assert request.raw_url == "https://doi.org/10.1007/978-3-031-72933-1_9"
     assert request.allow_title_search is True
+
+
+def test_build_page_enrichment_request_uses_notion_input_adapter(monkeypatch):
+    adapter_calls = []
+
+    class FakeAdapter:
+        def to_record(self, page):
+            adapter_calls.append(page["id"])
+            return Record.from_source(
+                name="Adapter Title",
+                url="https://doi.org/10.1145/example",
+                github="https://github.com/foo/bar",
+                source="notion",
+                trusted_fields={"github"},
+            ).with_supporting_state(context=RecordContext(notion_page_id=page["id"]))
+
+    monkeypatch.setattr(notion_pipeline, "NotionPageInputAdapter", FakeAdapter)
+
+    request, needs_github_update, reason = build_page_enrichment_request(
+        {
+            "id": "page-1",
+            "url": "https://notion.so/page-1",
+            "properties": {},
+        }
+    )
+
+    assert adapter_calls == ["page-1"]
+    assert reason is None
+    assert needs_github_update is False
+    assert request is not None
+    assert request.title == "Adapter Title"
+    assert request.raw_url == "https://doi.org/10.1145/example"
+    assert request.existing_github_url == "https://github.com/foo/bar"
 
 
 @pytest.mark.anyio

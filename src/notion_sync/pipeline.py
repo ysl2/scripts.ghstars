@@ -1,5 +1,6 @@
 import asyncio
 
+from src.core.input_adapters import NotionPageInputAdapter
 from src.shared.github import extract_owner_repo, is_valid_github_repo_url
 from src.shared.paper_enrichment import PaperEnrichmentRequest, process_single_paper
 from src.shared.paper_identity import build_arxiv_abs_url, extract_arxiv_id
@@ -137,10 +138,11 @@ def get_arxiv_id_from_page(page: dict) -> str | None:
     return None
 
 def build_page_enrichment_request(page: dict) -> tuple[PaperEnrichmentRequest | None, bool, str | None]:
-    github_value = get_github_url_from_page(page)
+    record = NotionPageInputAdapter().to_record(page)
+    github_value = _string_value(record.github.value) or None
     github_state = classify_github_value(github_value)
-    title = get_page_title(page)
-    raw_url = get_paper_url_from_page(page)
+    title = _string_value(record.name.value)
+    raw_url = _string_value(record.url.value)
 
     if github_state != "empty":
         return (
@@ -175,6 +177,12 @@ def format_resolution_source_label(source: str | None) -> str | None:
     if source == "discovered":
         return "Discovered Github"
     return None
+
+
+def _string_value(value) -> str:
+    if value is None:
+        return ""
+    return str(value)
 
 
 async def process_page(

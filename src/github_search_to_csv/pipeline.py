@@ -3,6 +3,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from src.core.input_adapters import GithubSearchInputAdapter
 from src.github_search_to_csv.search import parse_github_search_url
 from src.shared.csv_io import write_rows_to_csv_path
 from src.shared.csv_rows import CsvRow
@@ -63,15 +64,9 @@ async def export_github_search_to_csv(
         status_callback(f"🔎 Collecting repositories for query: {request.query}")
 
     repositories = await search_client.collect_repositories(request)
+    adapter = GithubSearchInputAdapter()
     rows = [
-        CsvRow(
-            name="",
-            url="",
-            github=row.github,
-            stars=row.stars,
-            created=row.created,
-            about=row.about,
-        )
+        _csv_row_from_record(adapter.to_record(row))
         for row in sorted(repositories, key=lambda row: row.created, reverse=True)
     ]
     csv_path = build_github_search_csv_path(
@@ -90,3 +85,20 @@ async def export_github_search_to_csv(
 def _slugify_filename_part(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return slug or ""
+
+
+def _csv_row_from_record(record) -> CsvRow:
+    return CsvRow(
+        name=_string_value(record.name.value),
+        url=_string_value(record.url.value),
+        github=_string_value(record.github.value),
+        stars="" if record.stars.value is None else record.stars.value,
+        created=_string_value(record.created.value),
+        about=_string_value(record.about.value),
+    )
+
+
+def _string_value(value) -> str:
+    if value is None:
+        return ""
+    return str(value)

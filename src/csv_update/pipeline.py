@@ -3,6 +3,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.core.input_adapters import CsvRowInputAdapter
 from src.shared.async_batch import iter_bounded_as_completed, resolve_worker_count
 from src.shared.csv_schema import (
     ABOUT_COLUMN,
@@ -120,10 +121,12 @@ async def build_csv_row_outcome(
     csv_dir: Path,
 ) -> tuple[int, dict[str, str], CsvRowOutcome]:
     updated_row = dict(row)
-    name = (updated_row.get(NAME_COLUMN) or "").strip() or f"Row {index}"
-    url = (updated_row.get(URL_COLUMN, "") or "").strip()
-    existing_github = (updated_row.get(GITHUB_COLUMN, "") or "").strip()
-    current_stars = parse_current_stars(updated_row.get(STARS_COLUMN))
+    row_url = (updated_row.get(URL_COLUMN, "") or "").strip()
+    record = CsvRowInputAdapter().to_record(index, updated_row)
+    name = _string_value(record.name.value).strip() or f"Row {index}"
+    url = _string_value(record.url.value).strip()
+    existing_github = _string_value(record.github.value).strip()
+    current_stars = parse_current_stars(record.stars.value)
 
     if not existing_github and not url:
         outcome = CsvRowOutcome(
@@ -161,7 +164,11 @@ async def build_csv_row_outcome(
         arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
     )
 
-    if not existing_github and enrichment.normalized_url and enrichment.normalized_url != url:
+    if (
+        not existing_github
+        and enrichment.normalized_url
+        and enrichment.normalized_url != row_url
+    ):
         updated_row[URL_COLUMN] = enrichment.normalized_url
 
     if not existing_github and enrichment.github_url:
@@ -211,6 +218,12 @@ def parse_current_stars(value) -> int | None:
         return int(text)
     except ValueError:
         return None
+
+
+def _string_value(value) -> str:
+    if value is None:
+        return ""
+    return str(value)
 
 
 def _read_csv_rows(csv_path: Path) -> tuple[list[dict[str, str]], list[str]]:

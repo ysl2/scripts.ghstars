@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from src.core.record_model import Record
 from src.github_search_to_csv.models import RepositorySearchRow, SearchPartition, SearchRequest
 from src.github_search_to_csv.pipeline import (
     build_github_search_csv_path,
@@ -269,4 +270,59 @@ async def test_export_github_search_to_csv_writes_unified_rows_sorted_by_created
             "Created": "2023-01-01T00:00:00Z",
             "About": "older",
         },
+    ]
+
+
+@pytest.mark.anyio
+async def test_export_github_search_to_csv_builds_records_with_input_adapter(
+    monkeypatch,
+    tmp_path: Path,
+):
+    adapter_calls = []
+
+    class FakeAdapter:
+        def to_record(self, row):
+            adapter_calls.append(row.github)
+            return Record.from_source(
+                github=row.github,
+                stars=row.stars,
+                created=row.created,
+                about=row.about,
+                source="github_search",
+                trusted_fields={"github", "stars", "created", "about"},
+            )
+
+    class FakeSearchClient:
+        async def collect_repositories(self, request):
+            return [
+                RepositorySearchRow(
+                    github="https://github.com/foo/bar",
+                    stars=42,
+                    about="repo",
+                    created="2024-01-01T00:00:00Z",
+                )
+            ]
+
+    monkeypatch.setattr("src.github_search_to_csv.pipeline.GithubSearchInputAdapter", FakeAdapter)
+
+    result = await export_github_search_to_csv(
+        "https://github.com/search?q=cvpr+2026&type=repositories&s=stars&o=desc",
+        search_client=FakeSearchClient(),
+        output_dir=tmp_path,
+        timestamp="20260326113045",
+    )
+
+    assert adapter_calls == ["https://github.com/foo/bar"]
+    with result.csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert rows == [
+        {
+            "Name": "",
+            "Url": "",
+            "Github": "https://github.com/foo/bar",
+            "Stars": "42",
+            "Created": "2024-01-01T00:00:00Z",
+            "About": "repo",
+        }
     ]

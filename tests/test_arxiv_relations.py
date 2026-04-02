@@ -10,6 +10,7 @@ import aiohttp
 import pytest
 
 from src.arxiv_relations.pipeline import ArxivRelationsExportResult, export_arxiv_relations_to_csv
+from src.core.record_model import Record
 from src.shared.relation_candidates import RelatedWorkCandidate
 from src.shared.papers import ConversionResult, PaperSeed
 from src.shared.papers import PaperRecord
@@ -3563,3 +3564,78 @@ async def test_export_arxiv_relations_to_csv_threads_metadata_clients_to_shared_
     assert export_calls[1]["datacite_client"] is datacite_client
     assert export_calls[1]["relation_resolution_cache"] is relation_resolution_cache
     assert export_calls[1]["arxiv_relation_no_arxiv_recheck_days"] == 17
+
+
+@pytest.mark.anyio
+async def test_export_arxiv_relations_to_csv_adapts_normalized_paper_seeds_before_export(
+    monkeypatch,
+    tmp_path: Path,
+):
+    adapter_calls = []
+    export_calls = []
+
+    class FakeAdapter:
+        def to_record(self, seed):
+            adapter_calls.append((seed.name, seed.url))
+            return Record.from_source(
+                name=f"{seed.name} adapted",
+                url=f"{seed.url}?adapted",
+                source="paper_seed",
+            )
+
+    class FakeArxivClient:
+        async def get_title(self, arxiv_url: str):
+            return "Target Paper", None
+
+    class FakeSemanticScholarGraphClient:
+        async def fetch_paper_by_identifier(self, identifier: str):
+            if identifier == "DOI:10.48550/arXiv.2603.23502":
+                return {"paperId": "ss-target", "title": "Target Paper"}
+            return None
+
+        async def search_papers_by_title(self, title: str, *, limit: int = 5):
+            raise AssertionError("Semantic Scholar title fallback should not run when identifier lookup succeeds")
+
+        async def fetch_references(self, paper: dict):
+            return []
+
+        async def fetch_citations(self, paper: dict):
+            return []
+
+        def build_related_work_candidate(self, paper: dict):
+            raise AssertionError("No relation candidates should be built for empty Semantic Scholar rows")
+
+    async def fake_normalize_related_work_candidates_to_seeds(*args, **kwargs):
+        return [PaperSeed(name="Mapped Related", url="https://doi.org/10.1145/example")]
+
+    async def fake_export_paper_seeds_to_csv(seeds, csv_path, **kwargs):
+        export_calls.append(seeds)
+        return ConversionResult(csv_path=csv_path, resolved=0, skipped=[])
+
+    monkeypatch.setattr("src.arxiv_relations.pipeline.PaperSeedInputAdapter", FakeAdapter)
+    monkeypatch.setattr(
+        "src.arxiv_relations.pipeline.normalize_related_work_candidates_to_seeds",
+        fake_normalize_related_work_candidates_to_seeds,
+    )
+    monkeypatch.setattr(
+        "src.arxiv_relations.pipeline.export_paper_seeds_to_csv",
+        fake_export_paper_seeds_to_csv,
+    )
+
+    await export_arxiv_relations_to_csv(
+        "https://arxiv.org/abs/2603.23502",
+        arxiv_client=FakeArxivClient(),
+        semanticscholar_graph_client=FakeSemanticScholarGraphClient(),
+        discovery_client=SimpleNamespace(),
+        github_client=SimpleNamespace(),
+        output_dir=tmp_path,
+    )
+
+    assert adapter_calls == [
+        ("Mapped Related", "https://doi.org/10.1145/example"),
+        ("Mapped Related", "https://doi.org/10.1145/example"),
+    ]
+    assert export_calls == [
+        [PaperSeed(name="Mapped Related adapted", url="https://doi.org/10.1145/example?adapted")],
+        [PaperSeed(name="Mapped Related adapted", url="https://doi.org/10.1145/example?adapted")],
+    ]

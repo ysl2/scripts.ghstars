@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import src.csv_update.pipeline as csv_update_pipeline
+from src.core.record_model import Record, RecordContext
 from src.csv_update.pipeline import CsvRowOutcome, build_csv_row_outcome, update_csv_file
 from src.csv_update.runner import run_csv_mode
 from src.shared.paper_content import PaperContentCache
@@ -888,6 +889,65 @@ async def test_build_csv_row_outcome_resolves_repo_then_warms_content_then_fetch
     assert events == ["discovery", "content", "stars"]
     assert "Overview" not in updated_row
     assert "Abs" not in updated_row
+
+
+@pytest.mark.anyio
+async def test_build_csv_row_outcome_uses_csv_row_input_adapter(monkeypatch, tmp_path: Path):
+    adapter_calls = []
+
+    class FakeAdapter:
+        def to_record(self, index, row):
+            adapter_calls.append((index, dict(row)))
+            return Record.from_source(
+                name="Adapted Title",
+                url="https://arxiv.org/abs/2603.12345",
+                source="csv",
+            ).with_supporting_state(context=RecordContext(csv_row_index=index))
+
+    async def fake_process_single_paper(request, **kwargs):
+        assert request.title == "Adapted Title"
+        assert request.raw_url == "https://arxiv.org/abs/2603.12345"
+        return SimpleNamespace(
+            normalized_url="https://arxiv.org/abs/2603.12345",
+            github_url="https://github.com/foo/bar",
+            stars=7,
+            created="2024-01-01T00:00:00Z",
+            about="repo",
+            reason=None,
+            github_source="discovered",
+        )
+
+    monkeypatch.setattr(csv_update_pipeline, "CsvRowInputAdapter", FakeAdapter)
+    monkeypatch.setattr(csv_update_pipeline, "process_single_paper", fake_process_single_paper)
+
+    _, updated_row, outcome = await build_csv_row_outcome(
+        3,
+        {
+            "Name": "Original Title",
+            "Url": "https://example.com/ignored",
+            "Github": "",
+            "Stars": "",
+        },
+        discovery_client=SimpleNamespace(),
+        github_client=SimpleNamespace(),
+        content_cache=FakeContentCache(),
+        csv_dir=tmp_path,
+    )
+
+    assert adapter_calls == [
+        (
+            3,
+            {
+                "Name": "Original Title",
+                "Url": "https://example.com/ignored",
+                "Github": "",
+                "Stars": "",
+            },
+        )
+    ]
+    assert updated_row["Url"] == "https://arxiv.org/abs/2603.12345"
+    assert updated_row["Github"] == "https://github.com/foo/bar"
+    assert outcome.record.name == "Adapted Title"
 
 
 @pytest.mark.anyio

@@ -8,12 +8,14 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from src.core.record_model import Record
 from src.shared.paper_content import PaperContentCache
 from src.shared.settings import ABS_CACHE_SUBDIR, OVERVIEW_CACHE_SUBDIR
-from src.shared.papers import PaperSeed
+from src.shared.papers import ConversionResult, PaperSeed
 from src.url_to_csv.arxivxplorer import TooManyPagesError, output_csv_path_for_arxivxplorer_url, parse_arxivxplorer_url
 import src.url_to_csv.pipeline as url_pipeline
 from src.url_to_csv.pipeline import fetch_paper_seeds_from_url, export_url_to_csv, normalize_paper_seeds_to_arxiv
+from src.url_to_csv.models import FetchedSeedsResult
 from src.url_to_csv.runner import run_url_mode
 
 
@@ -414,6 +416,47 @@ async def test_export_url_to_csv_defaults_to_output_directory_and_creates_it(tmp
             "Created": "",
             "About": "",
         }
+    ]
+
+
+@pytest.mark.anyio
+async def test_export_url_to_csv_adapts_paper_seeds_before_shared_export(monkeypatch, tmp_path: Path):
+    adapter_calls = []
+    exported = {}
+
+    class FakeAdapter:
+        def to_record(self, seed):
+            adapter_calls.append((seed.name, seed.url))
+            return Record.from_source(
+                name=f"{seed.name} adapted",
+                url=f"{seed.url}?adapted",
+                source="paper_seed",
+            )
+
+    async def fake_fetch_paper_seeds_from_url(*args, **kwargs):
+        return FetchedSeedsResult(
+            seeds=[PaperSeed(name="Paper A", url="https://arxiv.org/abs/2501.00001")],
+            csv_path=tmp_path / "papers.csv",
+        )
+
+    async def fake_export_paper_seeds_to_csv(seeds, csv_path, **kwargs):
+        exported["seeds"] = seeds
+        return ConversionResult(csv_path=csv_path, resolved=1, skipped=[])
+
+    monkeypatch.setattr(url_pipeline, "PaperSeedInputAdapter", FakeAdapter)
+    monkeypatch.setattr(url_pipeline, "fetch_paper_seeds_from_url", fake_fetch_paper_seeds_from_url)
+    monkeypatch.setattr(url_pipeline, "export_paper_seeds_to_csv", fake_export_paper_seeds_to_csv)
+
+    await export_url_to_csv(
+        "https://arxivxplorer.com/?q=test&cats=cs.CV&year=2026",
+        search_client=SimpleNamespace(),
+        discovery_client=SimpleNamespace(),
+        github_client=SimpleNamespace(),
+    )
+
+    assert adapter_calls == [("Paper A", "https://arxiv.org/abs/2501.00001")]
+    assert exported["seeds"] == [
+        PaperSeed(name="Paper A adapted", url="https://arxiv.org/abs/2501.00001?adapted")
     ]
 
 
