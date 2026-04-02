@@ -13,6 +13,8 @@ def test_record_state_seeds_peer_level_properties_from_source_values():
     assert state.name.status is PropertyStatus.PRESENT
     assert state.url.status is PropertyStatus.PRESENT
     assert state.github.status is PropertyStatus.PRESENT
+    assert state.stars.value == "7"
+    assert state.stars.status is PropertyStatus.PRESENT
     assert state.created.status is PropertyStatus.BLOCKED
     assert state.about.status is PropertyStatus.BLOCKED
 

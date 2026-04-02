@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Optional
 
@@ -15,22 +15,22 @@ class PropertyStatus(Enum):
 
 @dataclass(frozen=True)
 class PropertyState:
-    status: PropertyStatus
     value: Optional[Any] = None
+    status: PropertyStatus = field(default=PropertyStatus.PRESENT)
     source: Optional[str] = None
     reason: Optional[str] = None
 
     @classmethod
     def present(cls, value: Any, source: Optional[str] = None) -> "PropertyState":
-        return cls(status=PropertyStatus.PRESENT, value=value, source=source)
+        return cls(value=value, status=PropertyStatus.PRESENT, source=source)
 
     @classmethod
     def resolved(cls, value: Any, source: Optional[str] = None) -> "PropertyState":
-        return cls(status=PropertyStatus.RESOLVED, value=value, source=source)
+        return cls(value=value, status=PropertyStatus.RESOLVED, source=source)
 
     @classmethod
     def skipped(cls, reason: str, source: Optional[str] = None) -> "PropertyState":
-        return cls(status=PropertyStatus.SKIPPED, reason=reason, source=source)
+        return cls(status=PropertyStatus.SKIPPED, source=source, reason=reason)
 
     @classmethod
     def blocked(cls, source: Optional[str] = None) -> "PropertyState":
@@ -38,7 +38,7 @@ class PropertyState:
 
     @classmethod
     def failed(cls, reason: str, source: Optional[str] = None) -> "PropertyState":
-        return cls(status=PropertyStatus.FAILED, reason=reason, source=source)
+        return cls(status=PropertyStatus.FAILED, source=source, reason=reason)
 
 
 @dataclass(frozen=True)
@@ -53,9 +53,10 @@ class RecordState:
     @classmethod
     def from_source(cls, **kwargs: Any) -> "RecordState":
         def seed(field_name: str) -> PropertyState:
-            if kwargs.get(field_name) is not None:
-                return PropertyState.present(kwargs[field_name], source=field_name)
-            return PropertyState.blocked(source=field_name)
+            value = kwargs.get(field_name)
+            if value is None or (isinstance(value, str) and value == ""):
+                return PropertyState.blocked(source=field_name)
+            return PropertyState.present(value, source=field_name)
 
         return cls(
             name=seed("name"),
