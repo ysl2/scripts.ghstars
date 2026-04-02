@@ -5,7 +5,27 @@ from notion_client import AsyncClient
 
 GITHUB_PROPERTY_NAME = "Github"
 GITHUB_STARS_PROPERTY_NAME = "Stars"
+CREATED_PROPERTY_NAME = "Created"
+ABOUT_PROPERTY_NAME = "About"
 NOTION_MAX_RETRIES = 2
+MANAGED_NOTION_PROPERTIES = {
+    GITHUB_PROPERTY_NAME: {
+        "type": "url",
+        "url": {},
+    },
+    GITHUB_STARS_PROPERTY_NAME: {
+        "type": "number",
+        "number": {"format": "number"},
+    },
+    CREATED_PROPERTY_NAME: {
+        "type": "date",
+        "date": {},
+    },
+    ABOUT_PROPERTY_NAME: {
+        "type": "rich_text",
+        "rich_text": {},
+    },
+}
 
 
 def clean_database_id(database_id: str) -> str:
@@ -25,23 +45,31 @@ class NotionClient:
         *,
         github_url: str | None = None,
         stars_count: int | None = None,
+        created_value: str | None = None,
+        about_text: str | None = None,
         github_property_type: str = "url",
     ) -> None:
         properties = {}
         if github_url is not None:
-            if github_property_type == "rich_text":
-                properties[GITHUB_PROPERTY_NAME] = {
+            if github_property_type != "url":
+                raise ValueError(f"Notion property {GITHUB_PROPERTY_NAME} must have type url")
+            properties[GITHUB_PROPERTY_NAME] = {"url": github_url}
+        if stars_count is not None:
+            properties[GITHUB_STARS_PROPERTY_NAME] = {"number": stars_count}
+        if created_value is not None:
+            properties[CREATED_PROPERTY_NAME] = {"date": {"start": created_value}}
+        if about_text is not None:
+            if about_text:
+                properties[ABOUT_PROPERTY_NAME] = {
                     "rich_text": [
                         {
                             "type": "text",
-                            "text": {"content": github_url},
+                            "text": {"content": about_text},
                         }
                     ]
                 }
             else:
-                properties[GITHUB_PROPERTY_NAME] = {"url": github_url}
-        if stars_count is not None:
-            properties[GITHUB_STARS_PROPERTY_NAME] = {"number": stars_count}
+                properties[ABOUT_PROPERTY_NAME] = {"rich_text": []}
         if not properties:
             return
 
@@ -66,16 +94,16 @@ class NotionClient:
 
         properties = data_source.get("properties", {})
         missing_properties = {}
-        if GITHUB_PROPERTY_NAME not in properties:
-            missing_properties[GITHUB_PROPERTY_NAME] = {
-                "type": "url",
-                "url": {},
-            }
-        if GITHUB_STARS_PROPERTY_NAME not in properties:
-            missing_properties[GITHUB_STARS_PROPERTY_NAME] = {
-                "type": "number",
-                "number": {"format": "number"},
-            }
+        for property_name, property_schema in MANAGED_NOTION_PROPERTIES.items():
+            property_value = properties.get(property_name)
+            if property_value is None:
+                missing_properties[property_name] = property_schema
+                continue
+
+            property_type = property_value.get("type")
+            expected_type = property_schema["type"]
+            if property_type != expected_type:
+                raise ValueError(f"Notion property {property_name} must have type {expected_type}")
 
         if not missing_properties:
             return

@@ -66,7 +66,7 @@ def test_page_helpers_read_title_github_and_stars():
     assert get_github_property_type(page) == "url"
 
 
-def test_page_helpers_read_rich_text_github_type():
+def test_page_helpers_do_not_read_legacy_rich_text_github_type():
     page = {
         "properties": {
             "Name": {"type": "title", "title": [{"plain_text": "Test Paper"}]},
@@ -77,8 +77,8 @@ def test_page_helpers_read_rich_text_github_type():
         }
     }
 
-    assert get_github_url_from_page(page) == "https://github.com/foo/bar"
-    assert get_github_property_type(page) == "rich_text"
+    assert get_github_url_from_page(page) is None
+    assert get_github_property_type(page) is None
 
 
 def test_classify_github_value_covers_expected_states():
@@ -125,6 +125,57 @@ async def test_update_page_properties_writes_stars_property():
 
 
 @pytest.mark.anyio
+async def test_update_page_properties_writes_created_and_empty_about_properties():
+    client = NotionClient("token", max_concurrent=1)
+    client.client = types.SimpleNamespace(
+        pages=types.SimpleNamespace(update=AsyncMock(return_value={"ok": True}))
+    )
+
+    await client.update_page_properties(
+        "page-1",
+        stars_count=42,
+        created_value="2024-01-01T00:00:00Z",
+        about_text="",
+    )
+
+    client.client.pages.update.assert_awaited_once_with(
+        page_id="page-1",
+        properties={
+            "Stars": {"number": 42},
+            "Created": {"date": {"start": "2024-01-01T00:00:00Z"}},
+            "About": {"rich_text": []},
+        },
+    )
+
+
+@pytest.mark.anyio
+async def test_update_page_properties_writes_non_empty_about_property():
+    client = NotionClient("token", max_concurrent=1)
+    client.client = types.SimpleNamespace(
+        pages=types.SimpleNamespace(update=AsyncMock(return_value={"ok": True}))
+    )
+
+    await client.update_page_properties(
+        "page-1",
+        about_text="repo summary",
+    )
+
+    client.client.pages.update.assert_awaited_once_with(
+        page_id="page-1",
+        properties={
+            "About": {
+                "rich_text": [
+                    {
+                        "type": "text",
+                        "text": {"content": "repo summary"},
+                    }
+                ]
+            }
+        },
+    )
+
+
+@pytest.mark.anyio
 async def test_update_page_properties_retries_after_error():
     client = NotionClient("token", max_concurrent=1)
     client.client = types.SimpleNamespace(
@@ -137,7 +188,7 @@ async def test_update_page_properties_retries_after_error():
 
 
 @pytest.mark.anyio
-async def test_update_page_properties_writes_rich_text_github_property():
+async def test_update_page_properties_writes_github_url_property():
     client = NotionClient("token", max_concurrent=1)
     client.client = types.SimpleNamespace(
         pages=types.SimpleNamespace(update=AsyncMock(return_value={"ok": True}))
@@ -146,26 +197,35 @@ async def test_update_page_properties_writes_rich_text_github_property():
     await client.update_page_properties(
         "page-1",
         github_url="https://github.com/foo/bar",
-        github_property_type="rich_text",
     )
 
     client.client.pages.update.assert_awaited_once_with(
         page_id="page-1",
         properties={
-            "Github": {
-                "rich_text": [
-                    {
-                        "type": "text",
-                        "text": {"content": "https://github.com/foo/bar"},
-                    }
-                ]
-            }
+            "Github": {"url": "https://github.com/foo/bar"}
         },
     )
 
 
 @pytest.mark.anyio
-async def test_ensure_sync_properties_adds_missing_github_and_stars_columns():
+async def test_update_page_properties_rejects_non_url_github_property_type():
+    client = NotionClient("token", max_concurrent=1)
+    client.client = types.SimpleNamespace(
+        pages=types.SimpleNamespace(update=AsyncMock(return_value={"ok": True}))
+    )
+
+    with pytest.raises(ValueError, match="Notion property Github must have type url"):
+        await client.update_page_properties(
+            "page-1",
+            github_url="https://github.com/foo/bar",
+            github_property_type="rich_text",
+        )
+
+    client.client.pages.update.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_ensure_sync_properties_adds_created_and_about_with_expected_types():
     client = NotionClient("token", max_concurrent=1)
     client.client = types.SimpleNamespace(
         data_sources=types.SimpleNamespace(
@@ -193,8 +253,52 @@ async def test_ensure_sync_properties_adds_missing_github_and_stars_columns():
                 "type": "number",
                 "number": {"format": "number"},
             },
+            "Created": {
+                "type": "date",
+                "date": {},
+            },
+            "About": {
+                "type": "rich_text",
+                "rich_text": {},
+            },
         },
     )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("property_name", "property_value", "expected_reason"),
+    [
+        ("Github", {"type": "rich_text", "rich_text": []}, "Notion property Github must have type url"),
+        ("Stars", {"type": "rich_text", "rich_text": []}, "Notion property Stars must have type number"),
+        ("Created", {"type": "rich_text", "rich_text": []}, "Notion property Created must have type date"),
+        ("About", {"type": "url", "url": "https://example.com"}, "Notion property About must have type rich_text"),
+    ],
+)
+async def test_ensure_sync_properties_hard_fails_for_wrong_existing_types(
+    property_name,
+    property_value,
+    expected_reason,
+):
+    client = NotionClient("token", max_concurrent=1)
+    client.client = types.SimpleNamespace(
+        data_sources=types.SimpleNamespace(
+            retrieve=AsyncMock(
+                return_value={
+                    "properties": {
+                        "Name": {"type": "title", "title": {}},
+                        property_name: property_value,
+                    }
+                }
+            ),
+            update=AsyncMock(return_value={"ok": True}),
+        )
+    )
+
+    with pytest.raises(ValueError, match=expected_reason):
+        await client.ensure_sync_properties("data-source-1")
+
+    client.client.data_sources.update.assert_not_awaited()
 
 
 @pytest.mark.anyio
@@ -272,18 +376,34 @@ async def test_process_page_prints_progress_for_successful_update(capsys):
 
 
 @pytest.mark.anyio
-async def test_process_page_updates_rich_text_github_property_type():
+@pytest.mark.parametrize(
+    ("property_name", "property_value", "expected_reason"),
+    [
+        ("Github", {"type": "rich_text", "rich_text": []}, "Notion property Github must have type url"),
+        ("Stars", {"type": "rich_text", "rich_text": []}, "Notion property Stars must have type number"),
+        ("Created", {"type": "rich_text", "rich_text": []}, "Notion property Created must have type date"),
+        ("About", {"type": "url", "url": "https://example.com"}, "Notion property About must have type rich_text"),
+    ],
+)
+async def test_process_page_hard_fails_for_wrong_managed_property_types(
+    property_name,
+    property_value,
+    expected_reason,
+):
     page = {
         "id": "page-1",
         "url": "https://notion.so/page-1",
         "properties": {
             "Name": {"type": "title", "title": [{"plain_text": "Test Paper"}]},
-            "Github": {"type": "rich_text", "rich_text": []},
+            "Github": {"type": "url", "url": "https://github.com/foo/bar"},
             "Stars": {"type": "number", "number": 10},
+            "Created": {"type": "date", "date": {"start": None}},
+            "About": {"type": "rich_text", "rich_text": []},
             "URL": {"type": "url", "url": "https://arxiv.org/abs/2603.05078"},
+            property_name: property_value,
         },
     }
-    discovery_client = types.SimpleNamespace(resolve_github_url=AsyncMock(return_value="https://github.com/foo/bar"))
+    discovery_client = types.SimpleNamespace(resolve_github_url=AsyncMock())
     github_client = types.SimpleNamespace(get_star_count=AsyncMock(return_value=(12, None)))
     notion_client = types.SimpleNamespace(update_page_properties=AsyncMock(return_value=None))
     content_cache = types.SimpleNamespace(ensure_local_content_cache=AsyncMock())
@@ -302,12 +422,19 @@ async def test_process_page_updates_rich_text_github_property_type():
         content_cache=content_cache,
     )
 
-    notion_client.update_page_properties.assert_awaited_once_with(
-        "page-1",
-        github_url="https://github.com/foo/bar",
-        stars_count=12,
-        github_property_type="rich_text",
-    )
+    assert results["updated"] == 0
+    assert results["skipped"] == [
+        {
+            "title": "Test Paper",
+            "github_url": None,
+            "detail_url": "https://notion.so/page-1",
+            "reason": expected_reason,
+        }
+    ]
+    discovery_client.resolve_github_url.assert_not_awaited()
+    github_client.get_star_count.assert_not_awaited()
+    notion_client.update_page_properties.assert_not_awaited()
+    content_cache.ensure_local_content_cache.assert_not_awaited()
 
 
 @pytest.mark.anyio
@@ -317,7 +444,7 @@ async def test_process_page_skips_unsupported_github_field_before_engine_runs():
         "url": "https://notion.so/page-1",
         "properties": {
             "Name": {"type": "title", "title": [{"plain_text": "Test Paper"}]},
-            "Github": {"type": "rich_text", "rich_text": [{"plain_text": "WIP", "text": {"content": "WIP"}}]},
+            "Github": {"type": "url", "url": "WIP"},
             "Stars": {"type": "number", "number": 10},
         },
     }
@@ -344,9 +471,9 @@ async def test_process_page_skips_unsupported_github_field_before_engine_runs():
     assert results["skipped"] == [
         {
             "title": "Test Paper",
-            "github_url": None,
+            "github_url": "WIP",
             "detail_url": "https://notion.so/page-1",
-            "reason": "Unsupported Github field content",
+            "reason": "Existing Github URL is not a valid GitHub repository",
         }
     ]
     discovery_client.resolve_github_url.assert_not_awaited()
@@ -391,8 +518,110 @@ async def test_process_page_prefers_existing_github_without_discovery():
         "page-1",
         github_url=None,
         stars_count=12,
+        created_value=None,
+        about_text=None,
         github_property_type="url",
     )
+
+
+@pytest.mark.anyio
+async def test_process_page_writes_stars_about_and_created_backfill_when_created_is_empty():
+    page = {
+        "id": "page-1",
+        "url": "https://notion.so/page-1",
+        "properties": {
+            "Name": {"type": "title", "title": [{"plain_text": "Paper A"}]},
+            "Github": {"type": "url", "url": "https://github.com/foo/bar"},
+            "Stars": {"type": "number", "number": 10},
+            "Created": {"type": "date", "date": None},
+            "About": {
+                "type": "rich_text",
+                "rich_text": [{"plain_text": "old about", "text": {"content": "old about"}}],
+            },
+        },
+    }
+    discovery_client = types.SimpleNamespace(resolve_github_url=AsyncMock())
+    github_client = types.SimpleNamespace(
+        get_repo_metadata=AsyncMock(
+            return_value=(types.SimpleNamespace(stars=12, created="2024-02-02T00:00:00Z", about=""), None)
+        )
+    )
+    notion_client = types.SimpleNamespace(update_page_properties=AsyncMock(return_value=None))
+    content_cache = types.SimpleNamespace(ensure_local_content_cache=AsyncMock())
+    results = {"updated": 0, "skipped": []}
+    lock = asyncio.Lock()
+
+    await process_page(
+        page,
+        index=1,
+        total=1,
+        discovery_client=discovery_client,
+        github_client=github_client,
+        notion_client=notion_client,
+        results=results,
+        lock=lock,
+        content_cache=content_cache,
+    )
+
+    notion_client.update_page_properties.assert_awaited_once_with(
+        "page-1",
+        github_url=None,
+        stars_count=12,
+        created_value="2024-02-02T00:00:00Z",
+        about_text="",
+        github_property_type="url",
+    )
+    discovery_client.resolve_github_url.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_process_page_does_not_overwrite_existing_created_value():
+    page = {
+        "id": "page-1",
+        "url": "https://notion.so/page-1",
+        "properties": {
+            "Name": {"type": "title", "title": [{"plain_text": "Paper A"}]},
+            "Github": {"type": "url", "url": "https://github.com/foo/bar"},
+            "Stars": {"type": "number", "number": 10},
+            "Created": {"type": "date", "date": {"start": "2020-01-01T00:00:00Z"}},
+            "About": {
+                "type": "rich_text",
+                "rich_text": [{"plain_text": "old about", "text": {"content": "old about"}}],
+            },
+        },
+    }
+    discovery_client = types.SimpleNamespace(resolve_github_url=AsyncMock())
+    github_client = types.SimpleNamespace(
+        get_repo_metadata=AsyncMock(
+            return_value=(types.SimpleNamespace(stars=12, created="2024-02-02T00:00:00Z", about="remote about"), None)
+        )
+    )
+    notion_client = types.SimpleNamespace(update_page_properties=AsyncMock(return_value=None))
+    content_cache = types.SimpleNamespace(ensure_local_content_cache=AsyncMock())
+    results = {"updated": 0, "skipped": []}
+    lock = asyncio.Lock()
+
+    await process_page(
+        page,
+        index=1,
+        total=1,
+        discovery_client=discovery_client,
+        github_client=github_client,
+        notion_client=notion_client,
+        results=results,
+        lock=lock,
+        content_cache=content_cache,
+    )
+
+    notion_client.update_page_properties.assert_awaited_once_with(
+        "page-1",
+        github_url=None,
+        stars_count=12,
+        created_value=None,
+        about_text="remote about",
+        github_property_type="url",
+    )
+    discovery_client.resolve_github_url.assert_not_awaited()
 
 
 @pytest.mark.anyio
@@ -438,6 +667,8 @@ async def test_process_page_uses_title_search_when_github_field_is_empty():
         "page-1",
         github_url="https://github.com/foo/bar",
         stars_count=12,
+        created_value=None,
+        about_text=None,
         github_property_type="url",
     )
     content_cache.ensure_local_content_cache.assert_awaited_once_with("https://arxiv.org/abs/2603.05078")
@@ -507,6 +738,62 @@ async def test_run_notion_mode_ensures_sync_properties_before_querying_pages(mon
         ("ensure_sync_properties", "data-source-1"),
         ("query_pages", "data-source-1"),
     ]
+
+
+@pytest.mark.anyio
+async def test_run_notion_mode_returns_error_when_schema_validation_fails(monkeypatch):
+    monkeypatch.setenv("NOTION_TOKEN", "notion_xxx")
+    monkeypatch.setenv("DATABASE_ID", "db_123")
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_xxx")
+    monkeypatch.setenv("HUGGINGFACE_TOKEN", "hf_xxx")
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeArxivClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeDiscoveryClient:
+        def __init__(self, session, *, huggingface_token="", repo_cache=None, hf_exact_no_repo_recheck_days=0, max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeGitHubClient:
+        def __init__(self, session, *, github_token="", max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeNotionClient:
+        def __init__(self, token, max_concurrent):
+            self.token = token
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get_data_source_id(self, database_id):
+            return "data-source-1"
+
+        async def ensure_sync_properties(self, data_source_id):
+            raise ValueError("Notion property Github must have type url")
+
+        async def query_pages(self, data_source_id):
+            raise AssertionError("query_pages should not run when schema validation fails")
+
+    exit_code = await run_notion_mode(
+        session_factory=lambda **kwargs: FakeSession(),
+        arxiv_client_cls=FakeArxivClient,
+        discovery_client_cls=FakeDiscoveryClient,
+        github_client_cls=FakeGitHubClient,
+        notion_client_cls=FakeNotionClient,
+    )
+
+    assert exit_code == 1
 
 
 @pytest.mark.anyio

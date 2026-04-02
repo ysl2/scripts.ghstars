@@ -116,7 +116,11 @@ async def run_notion_mode(
                 return 1
 
             print(f"📚 Data source ID: {data_source_id}")
-            await notion_client.ensure_sync_properties(data_source_id)
+            try:
+                await notion_client.ensure_sync_properties(data_source_id)
+            except ValueError as exc:
+                print(colored(f"❌ {exc}", Colors.RED))
+                return 1
 
             pages = await notion_client.query_pages(data_source_id)
             print(f"📝 Found {len(pages)} pages with Github field\n")

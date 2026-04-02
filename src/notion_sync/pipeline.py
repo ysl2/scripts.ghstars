@@ -9,18 +9,22 @@ from src.shared.skip_reasons import is_minor_skip_reason
 
 GITHUB_PROPERTY_NAME = "Github"
 GITHUB_STARS_PROPERTY_NAME = "Stars"
+CREATED_PROPERTY_NAME = "Created"
+ABOUT_PROPERTY_NAME = "About"
 ABSTRACT_PROPERTY_CANDIDATES = ("Abstract", "Summary", "TL;DR", "Notes")
 ARXIV_PROPERTY_CANDIDATES = ("URL", "Arxiv", "arXiv", "Paper URL", "Link")
+MANAGED_PROPERTY_TYPES = {
+    GITHUB_PROPERTY_NAME: "url",
+    GITHUB_STARS_PROPERTY_NAME: "number",
+    CREATED_PROPERTY_NAME: "date",
+    ABOUT_PROPERTY_NAME: "rich_text",
+}
 
 def get_github_url_from_page(page: dict) -> str | None:
     github_property = page.get("properties", {}).get(GITHUB_PROPERTY_NAME, {})
 
     if github_property.get("type") == "url":
         return github_property.get("url")
-    if github_property.get("type") == "rich_text":
-        rich_text = github_property.get("rich_text", [])
-        if rich_text:
-            return rich_text[0].get("text", {}).get("content", "")
     return None
 
 
@@ -31,12 +35,35 @@ def get_current_stars_from_page(page: dict) -> int | None:
     return None
 
 
+def get_current_created_from_page(page: dict) -> str | None:
+    created_property = page.get("properties", {}).get(CREATED_PROPERTY_NAME, {})
+    if created_property.get("type") != "date":
+        return None
+
+    date_value = created_property.get("date")
+    if not isinstance(date_value, dict):
+        return None
+    return date_value.get("start")
+
+
 def get_github_property_type(page: dict) -> str | None:
     github_property = page.get("properties", {}).get(GITHUB_PROPERTY_NAME, {})
     property_type = github_property.get("type")
-    if property_type in {"url", "rich_text"}:
+    if property_type == "url":
         return property_type
     return None
+
+
+def validate_managed_property_types(page: dict) -> None:
+    properties = page.get("properties", {})
+    for property_name, expected_type in MANAGED_PROPERTY_TYPES.items():
+        property_value = properties.get(property_name)
+        if property_value is None:
+            continue
+
+        actual_type = property_value.get("type")
+        if actual_type != expected_type:
+            raise ValueError(f"Notion property {property_name} must have type {expected_type}")
 
 
 def classify_github_value(value) -> str:
@@ -115,7 +142,7 @@ def build_page_enrichment_request(page: dict) -> tuple[PaperEnrichmentRequest | 
     title = get_page_title(page)
     raw_url = get_paper_url_from_page(page)
 
-    if github_state == "valid_github":
+    if github_state != "empty":
         return (
             PaperEnrichmentRequest(
                 title=title,
@@ -123,13 +150,11 @@ def build_page_enrichment_request(page: dict) -> tuple[PaperEnrichmentRequest | 
                 existing_github_url=github_value,
                 allow_title_search=False,
                 allow_github_discovery=False,
+                trust_existing_github=True,
             ),
             False,
             None,
         )
-
-    if github_state == "other":
-        return None, False, "Unsupported Github field content"
 
     return (
         PaperEnrichmentRequest(
@@ -172,9 +197,27 @@ async def process_page(
 ) -> None:
     page_id = page["id"]
     current_stars = get_current_stars_from_page(page)
+    current_created = get_current_created_from_page(page)
     github_property_type = get_github_property_type(page) or "url"
     title = get_page_title(page) or page_id
     notion_url = get_page_url(page)
+
+    try:
+        validate_managed_property_types(page)
+    except ValueError as exc:
+        reason = str(exc)
+        async with lock:
+            print_item_skip(
+                index,
+                total,
+                title,
+                reason,
+                minor=is_minor_skip_reason(reason),
+            )
+            results["skipped"].append(
+                {"title": title, "github_url": None, "detail_url": notion_url, "reason": reason}
+            )
+        return
 
     request, needs_github_update, local_reason = build_page_enrichment_request(page)
     if request is None:
@@ -229,6 +272,8 @@ async def process_page(
             page_id,
             github_url=github_url if needs_github_update and result.github_source == "discovered" else None,
             stars_count=new_stars,
+            created_value=result.created if not current_created and result.created else None,
+            about_text=result.about,
             github_property_type=github_property_type,
         )
     except Exception as exc:
