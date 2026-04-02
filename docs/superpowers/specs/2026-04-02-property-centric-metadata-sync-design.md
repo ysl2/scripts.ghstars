@@ -680,6 +680,127 @@ That ordering may still be correct, but it should no longer live as an implicit
 side effect of a monolithic enrichment contract. It should instead be tied to the
 relevant internal fact and property resolution path explicitly.
 
+**Supporting Contracts**
+
+The property-centric core is the main architectural change, but several
+non-core contracts must still be designed explicitly so implementation does not
+drift back into mode-local special cases.
+
+These contracts are not first-class user-facing properties, but they are still
+part of the design surface.
+
+**URL Normalization Contract**
+
+`Url` remains a peer-level core property, but URL normalization should be
+implemented as a supporting contract rather than as ad hoc logic inside each
+mode or inside each property write path.
+
+This contract should continue to expose the distinction between:
+
+- preserved/write-back URL
+- canonical internal arXiv identity
+- whether the written URL was script-derived
+
+That split already exists in current shared normalization work and should remain
+the one canonical place where those semantics live.
+
+The core property layer consumes the normalization result; it does not redefine
+normalization rules itself.
+
+**Derived Artifact Contract**
+
+`overview` / `abs` should not be promoted into the six-property core model.
+
+They are better modeled as derived artifacts driven by internal record facts,
+not as first-class CSV/Notion-facing properties.
+
+Recommended rule:
+
+- artifact generation may depend on canonical arXiv identity and the final
+  property-resolution outcome
+- artifact sync should remain separate from the `Stars` / `Created` / `About`
+  property resolver contract
+- artifact failures should not silently mutate property states
+
+This keeps the core property model small while still making artifact behavior an
+explicit design concern.
+
+**Resolver Persistence Contract**
+
+`cache.db` should continue to persist durable resolver facts, not sink-local row
+state and not generic record snapshots.
+
+This is an important boundary:
+
+- the core property model is not a database schema
+- caches should store stable derived facts that help future resolution
+- target adapters should own row/page identity and writeback mechanics
+
+Recommended cache-schema principle:
+
+- one table per stable resolver boundary
+- keys should reflect the resolver's natural identity, not the target sink
+- do not collapse unrelated caches into one "universal record state" table
+
+That means the repository should continue to think in terms such as:
+
+- source/identifier -> canonical arXiv identity
+- canonical arXiv identity -> discovered GitHub repo
+- GitHub repo identity -> durable repo metadata facts
+
+rather than:
+
+- CSV row -> all derived values
+- Notion page -> all derived values
+
+The latter would entangle sink identity with the shared business layer and would
+fight the property-centric architecture.
+
+**Database Schema Guidance**
+
+Concrete database schema is implementation detail and may be chosen pragmatically
+during implementation, but it must follow the property-centric direction.
+
+The guiding rules are:
+
+1. persist only durable facts
+2. key each table by the resolver boundary that produced that fact
+3. keep sink identity out of shared cache tables
+4. do not persist values whose product policy says they should always be fetched
+   fresh
+
+Applied to the current design direction:
+
+- discovered `Github URL` is durable enough for cache persistence
+- `Created` is durable enough for cache persistence
+- `Stars` should not be persisted in `cache.db` because product policy says it
+  is always refreshed/overwritten
+- `About` should not be persisted in `cache.db` because product policy says it
+  is always refreshed/overwritten, including overwrite-to-empty
+
+This implies that the eventual database refactor should likely separate:
+
+- discovery-oriented cache data
+- durable repo metadata cache data
+
+rather than extending one existing cache table into a general-purpose metadata
+store without regard to key semantics.
+
+**Implications For Current Cache Families**
+
+The current cache families already point in a workable direction:
+
+- relation/url-resolution cache stores durable arXiv identity resolution facts
+- repo discovery cache stores durable `arXiv -> Github` discovery facts
+
+The property-centric refactor should evolve these in the same style instead of
+flattening them into one mixed table.
+
+If a durable repo-metadata cache is added, it should be modeled as a
+resolver-specific cache keyed by normalized GitHub repository identity and store
+only durable repo facts such as `Created`, not current-state fields such as
+`Stars` or `About`.
+
 **Compatibility With Existing Product Families**
 
 The property-centric design does not remove the need for family-specific source
