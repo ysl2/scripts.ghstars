@@ -3,6 +3,7 @@ MINOR_SKIP_REASONS = {
     "No Github URL found",
     "Cannot extract owner/repo",
     "Unsupported Github field content",
+    "Row has neither Github nor Url",
     "No fallback discovery token configured",
     "No arXiv ID found for discovery lookup",
     "No arXiv ID found from title search",

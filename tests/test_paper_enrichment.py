@@ -288,6 +288,52 @@ async def test_process_single_paper_keeps_repo_and_stars_when_no_canonical_arxiv
 
 
 @pytest.mark.anyio
+async def test_process_single_paper_can_treat_existing_github_as_authoritative_even_with_raw_url():
+    content_cache = RecordingContentCache()
+    discovery_client = types.SimpleNamespace(resolve_github_url=AsyncMock())
+    github_client = types.SimpleNamespace(get_star_count=AsyncMock(return_value=(9, None)))
+    semanticscholar_graph_client = types.SimpleNamespace(
+        find_arxiv_match_by_identifier=AsyncMock(return_value=("https://arxiv.org/abs/2501.12345", "Mapped Title", None)),
+        find_arxiv_match_by_title=AsyncMock(return_value=(None, None, None)),
+    )
+    arxiv_client = types.SimpleNamespace(
+        get_arxiv_id_by_title=AsyncMock(return_value=("2501.54321", "title_search_exact", None)),
+        get_arxiv_match_by_title_from_api=AsyncMock(return_value=("2999.99999", "Wrong API Match", "title_search_exact", None)),
+    )
+
+    result = await process_single_paper(
+        PaperEnrichmentRequest(
+            title="Paper I",
+            raw_url="https://doi.org/10.1000/example",
+            existing_github_url="https://github.com/foo/bar",
+            allow_title_search=True,
+            allow_github_discovery=True,
+            trust_existing_github=True,
+        ),
+        discovery_client=discovery_client,
+        github_client=github_client,
+        arxiv_client=arxiv_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
+        content_cache=content_cache,
+    )
+
+    assert result.raw_url == "https://doi.org/10.1000/example"
+    assert result.normalized_url is None
+    assert result.canonical_arxiv_url is None
+    assert result.github_url == "https://github.com/foo/bar"
+    assert result.github_source == "existing"
+    assert result.stars == 9
+    assert result.reason is None
+    assert content_cache.calls == []
+    discovery_client.resolve_github_url.assert_not_awaited()
+    semanticscholar_graph_client.find_arxiv_match_by_identifier.assert_not_awaited()
+    semanticscholar_graph_client.find_arxiv_match_by_title.assert_not_awaited()
+    arxiv_client.get_arxiv_id_by_title.assert_not_awaited()
+    arxiv_client.get_arxiv_match_by_title_from_api.assert_not_awaited()
+    github_client.get_star_count.assert_awaited_once_with("foo", "bar")
+
+
+@pytest.mark.anyio
 async def test_process_single_paper_resolves_doi_via_semantic_scholar_before_github_discovery():
     github_client = types.SimpleNamespace(get_star_count=AsyncMock(return_value=(5, None)))
     content_cache = RecordingContentCache()

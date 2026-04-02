@@ -14,6 +14,7 @@ class PaperEnrichmentRequest:
     existing_github_url: str | None
     allow_title_search: bool
     allow_github_discovery: bool
+    trust_existing_github: bool = False
     precomputed_normalized_url: str | None = None
     precomputed_canonical_arxiv_url: str | None = None
     url_resolution_authoritative: bool = False
@@ -47,10 +48,11 @@ async def process_single_paper(
     title = (request.title or "").strip()
     raw_url = (request.raw_url or "").strip()
     existing_value = (request.existing_github_url or "").strip()
+    skip_url_resolution = bool(existing_value) and (request.trust_existing_github or not raw_url)
     if request.url_resolution_authoritative:
         normalized_url = request.precomputed_normalized_url or raw_url or None
         canonical_arxiv_url = request.precomputed_canonical_arxiv_url
-    elif existing_value and not raw_url:
+    elif skip_url_resolution:
         normalized_url = None
         canonical_arxiv_url = None
     else:

@@ -349,6 +349,90 @@ async def test_run_csv_mode_builds_and_passes_metadata_clients(tmp_path: Path, m
 
 
 @pytest.mark.anyio
+async def test_run_csv_mode_reports_rows_without_inputs_as_preserved_skips(tmp_path: Path, monkeypatch, capsys):
+    csv_path = tmp_path / "papers.csv"
+    csv_path.write_text("Name,Github,Stars\nPaper A,,\n", encoding="utf-8")
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeDiscoveryClient:
+        def __init__(self, session, *, huggingface_token="", max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeGitHubClient:
+        def __init__(self, session, *, github_token="", max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeArxivClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeSemanticScholarGraphClient:
+        def __init__(
+            self,
+            session,
+            *,
+            semantic_scholar_api_key="",
+            aiforscholar_token="",
+            max_concurrent=0,
+            min_interval=0,
+        ):
+            self.session = session
+
+    class FakeCrossrefClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeDataCiteClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeContentClient:
+        def __init__(self, session, *, alphaxiv_token="", max_concurrent=0, min_interval=0):
+            self.session = session
+
+    async def fake_update_csv_file(*args, **kwargs):
+        return SimpleNamespace(
+            csv_path=csv_path,
+            updated=0,
+            skipped=[
+                {
+                    "title": "Paper A",
+                    "github_url": None,
+                    "detail_url": "",
+                    "reason": "Row has neither Github nor Url",
+                }
+            ],
+        )
+
+    monkeypatch.setattr("src.csv_update.runner.update_csv_file", fake_update_csv_file)
+
+    exit_code = await run_csv_mode(
+        csv_path,
+        session_factory=lambda **kwargs: FakeSession(),
+        arxiv_client_cls=FakeArxivClient,
+        discovery_client_cls=FakeDiscoveryClient,
+        github_client_cls=FakeGitHubClient,
+        semanticscholar_graph_client_cls=FakeSemanticScholarGraphClient,
+        crossref_client_cls=FakeCrossrefClient,
+        datacite_client_cls=FakeDataCiteClient,
+        content_client_cls=FakeContentClient,
+        content_cache_root=tmp_path / "cache",
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Skipped rows (CSV rows preserved):" in captured.out
+    assert "Failed rows (need attention):" not in captured.out
+    assert "Row has neither Github nor Url" in captured.out
+
+
+@pytest.mark.anyio
 async def test_update_csv_file_appends_missing_github_and_stars_columns_at_the_end(tmp_path: Path):
     csv_path = tmp_path / "papers.csv"
     csv_path.write_text(
