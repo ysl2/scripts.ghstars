@@ -24,7 +24,18 @@ class RecordingContentCache:
 @pytest.mark.anyio
 async def test_process_single_paper_prefers_existing_valid_github_and_warms_content():
     discovery_client = types.SimpleNamespace(resolve_github_url=AsyncMock())
-    github_client = types.SimpleNamespace(get_star_count=AsyncMock(return_value=(17, None)))
+    github_client = types.SimpleNamespace(
+        get_repo_metadata=AsyncMock(
+            return_value=(
+                types.SimpleNamespace(
+                    stars=17,
+                    created="2024-01-01T00:00:00Z",
+                    about="repo",
+                ),
+                None,
+            )
+        )
+    )
     content_cache = RecordingContentCache()
 
     result = await process_single_paper(
@@ -47,10 +58,12 @@ async def test_process_single_paper_prefers_existing_valid_github_and_warms_cont
     assert result.github_url == "https://github.com/foo/bar"
     assert result.github_source == "existing"
     assert result.stars == 17
+    assert result.created == "2024-01-01T00:00:00Z"
+    assert result.about == "repo"
     assert result.reason is None
     assert content_cache.calls == ["https://arxiv.org/abs/2603.20000"]
     discovery_client.resolve_github_url.assert_not_awaited()
-    github_client.get_star_count.assert_awaited_once_with("foo", "bar")
+    github_client.get_repo_metadata.assert_awaited_once_with("foo", "bar")
 
 
 @pytest.mark.anyio
@@ -211,13 +224,13 @@ async def test_process_single_paper_warms_content_before_github_stars_and_keeps_
             assert canonical_arxiv_url == "https://arxiv.org/abs/2603.10005"
             events.append("content")
 
-    async def get_star_count(owner: str, repo: str):
+    async def get_repo_metadata(owner: str, repo: str):
         assert (owner, repo) == ("foo", "bar")
-        events.append("stars")
+        events.append("metadata")
         return None, "GitHub API error (503)"
 
     discovery_client = types.SimpleNamespace(resolve_github_url=AsyncMock())
-    github_client = types.SimpleNamespace(get_star_count=AsyncMock(side_effect=get_star_count))
+    github_client = types.SimpleNamespace(get_repo_metadata=AsyncMock(side_effect=get_repo_metadata))
 
     result = await process_single_paper(
         PaperEnrichmentRequest(
@@ -235,7 +248,7 @@ async def test_process_single_paper_warms_content_before_github_stars_and_keeps_
     assert result.github_url == "https://github.com/foo/bar"
     assert result.stars is None
     assert result.reason == "GitHub API error (503)"
-    assert events == ["content", "stars"]
+    assert events == ["content", "metadata"]
 
 
 @pytest.mark.anyio

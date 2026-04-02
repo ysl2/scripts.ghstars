@@ -1,10 +1,7 @@
 from dataclasses import dataclass
-from types import SimpleNamespace
 
-from src.shared.arxiv_url_resolution import resolve_arxiv_url
-from src.shared.discovery import resolve_github_url
-from src.shared.github import extract_owner_repo, normalize_github_url
 from src.shared.paper_identity import normalize_arxiv_url, normalize_semanticscholar_paper_url
+from src.shared.property_resolvers import acquire_github_property, resolve_repo_metadata_properties
 
 
 @dataclass(frozen=True)
@@ -29,6 +26,8 @@ class PaperEnrichmentResult:
     github_url: str | None
     github_source: str | None
     stars: int | None
+    created: str | None
+    about: str | None
     reason: str | None
 
 
@@ -47,140 +46,73 @@ async def process_single_paper(
 ) -> PaperEnrichmentResult:
     title = (request.title or "").strip()
     raw_url = (request.raw_url or "").strip()
-    existing_value = (request.existing_github_url or "").strip()
-    skip_url_resolution = bool(existing_value) and (request.trust_existing_github or not raw_url)
-    if request.url_resolution_authoritative:
-        normalized_url = request.precomputed_normalized_url or raw_url or None
-        canonical_arxiv_url = request.precomputed_canonical_arxiv_url
-    elif skip_url_resolution:
-        normalized_url = None
-        canonical_arxiv_url = None
-    else:
-        url_resolution = await resolve_arxiv_url(
-            title,
-            raw_url,
-            arxiv_client=arxiv_client,
-            semanticscholar_graph_client=semanticscholar_graph_client,
-            crossref_client=crossref_client,
-            datacite_client=datacite_client,
-            discovery_client=discovery_client,
-            relation_resolution_cache=relation_resolution_cache,
-            arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
-            allow_title_search=request.allow_title_search,
-        )
-        normalized_url = url_resolution.resolved_url
-        canonical_arxiv_url = url_resolution.canonical_arxiv_url
-
-    github_url = None
-    github_source = None
-    if existing_value:
-        github_source = "existing"
-        github_url = existing_value
-        if not extract_owner_repo(github_url):
-            return PaperEnrichmentResult(
-                title=title,
-                raw_url=raw_url,
-                normalized_url=normalized_url,
-                canonical_arxiv_url=canonical_arxiv_url,
-                github_url=existing_value,
-                github_source=github_source,
-                stars=None,
-                reason="Existing Github URL is not a valid GitHub repository",
-            )
-    else:
-        if canonical_arxiv_url is None:
-            return PaperEnrichmentResult(
-                title=title,
-                raw_url=raw_url,
-                normalized_url=normalized_url,
-                canonical_arxiv_url=None,
-                github_url=None,
-                github_source=None,
-                stars=None,
-                reason="No valid arXiv URL found",
-            )
-
-        if request.allow_github_discovery:
-            github_url = await _resolve_github(title, canonical_arxiv_url, discovery_client)
-
-        if not github_url:
-            return PaperEnrichmentResult(
-                title=title,
-                raw_url=raw_url,
-                normalized_url=normalized_url,
-                canonical_arxiv_url=canonical_arxiv_url,
-                github_url=None,
-                github_source=None,
-                stars=None,
-                reason="No Github URL found from discovery",
-            )
-
-        github_source = "discovered"
-        normalized_github = normalize_github_url(github_url)
-        if not normalized_github:
-            return PaperEnrichmentResult(
-                title=title,
-                raw_url=raw_url,
-                normalized_url=normalized_url,
-                canonical_arxiv_url=canonical_arxiv_url,
-                github_url=github_url,
-                github_source=github_source,
-                stars=None,
-                reason="Discovered URL is not a valid GitHub repository",
-            )
-        github_url = normalized_github
-
-    owner_repo = extract_owner_repo(github_url)
-    if not owner_repo:
-        reason = "Existing Github URL is not a valid GitHub repository"
-        if github_source == "discovered":
-            reason = "Discovered URL is not a valid GitHub repository"
+    acquisition = await acquire_github_property(
+        existing_github_url=request.existing_github_url,
+        raw_url=raw_url,
+        name=title,
+        discovery_client=discovery_client,
+        arxiv_client=arxiv_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
+        crossref_client=crossref_client,
+        datacite_client=datacite_client,
+        relation_resolution_cache=relation_resolution_cache,
+        allow_title_search=request.allow_title_search,
+        allow_github_discovery=request.allow_github_discovery,
+        trust_existing_github=request.trust_existing_github,
+        precomputed_normalized_url=request.precomputed_normalized_url,
+        precomputed_canonical_arxiv_url=request.precomputed_canonical_arxiv_url,
+        url_resolution_authoritative=request.url_resolution_authoritative,
+        arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
+    )
+    if acquisition.reason is not None:
         return PaperEnrichmentResult(
             title=title,
             raw_url=raw_url,
-            normalized_url=normalized_url,
-            canonical_arxiv_url=canonical_arxiv_url,
-            github_url=github_url,
-            github_source=github_source,
+            normalized_url=acquisition.normalized_url,
+            canonical_arxiv_url=acquisition.canonical_arxiv_url,
+            github_url=acquisition.github_url,
+            github_source=acquisition.github_source,
             stars=None,
-            reason=reason,
+            created=None,
+            about=None,
+            reason=acquisition.reason,
         )
 
-    await _warm_content_cache(canonical_arxiv_url, content_cache)
-
-    stars, error = await github_client.get_star_count(*owner_repo)
-    if error:
+    github_url = acquisition.github_url
+    if github_url is None:
         return PaperEnrichmentResult(
             title=title,
             raw_url=raw_url,
-            normalized_url=normalized_url,
-            canonical_arxiv_url=canonical_arxiv_url,
-            github_url=github_url,
-            github_source=github_source,
+            normalized_url=acquisition.normalized_url,
+            canonical_arxiv_url=acquisition.canonical_arxiv_url,
+            github_url=None,
+            github_source=acquisition.github_source,
             stars=None,
-            reason=error,
+            created=None,
+            about=None,
+            reason="No Github URL found from discovery",
         )
+
+    await _warm_content_cache(acquisition.canonical_arxiv_url, content_cache)
+
+    metadata = await resolve_repo_metadata_properties(
+        github_url=github_url,
+        github_client=github_client,
+        repo_metadata_cache=getattr(github_client, "repo_metadata_cache", None),
+    )
 
     return PaperEnrichmentResult(
         title=title,
         raw_url=raw_url,
-        normalized_url=normalized_url,
-        canonical_arxiv_url=canonical_arxiv_url,
-        github_url=github_url,
-        github_source=github_source,
-        stars=stars,
-        reason=None,
+        normalized_url=acquisition.normalized_url,
+        canonical_arxiv_url=acquisition.canonical_arxiv_url,
+        github_url=metadata.github_url,
+        github_source=acquisition.github_source,
+        stars=metadata.stars,
+        created=metadata.created,
+        about=metadata.about,
+        reason=metadata.reason,
     )
-
-
-async def _resolve_github(name: str, url: str, discovery_client) -> str | None:
-    if discovery_client is None:
-        return None
-    seed = SimpleNamespace(name=name, url=url)
-    resolver = getattr(discovery_client, "resolve_github_url", None)
-    if callable(resolver):
-        return await resolver(seed)
-    return await resolve_github_url(seed, discovery_client)
 
 
 async def _warm_content_cache(normalized_url: str | None, content_cache) -> None:
