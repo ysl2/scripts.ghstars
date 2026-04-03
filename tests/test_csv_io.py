@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import src.shared.csv_io as csv_io
+from src.shared.csv_schema import CSV_HEADERS, CSV_UPDATE_COLUMNS, append_missing_property_columns
 from src.shared.csv_rows import CsvRow
 from src.shared.papers import PaperRecord
 
@@ -124,3 +125,15 @@ def test_write_records_to_csv_path_routes_records_through_fresh_csv_export_adapt
         "Name,Url,Github,Stars,Created,About",
         "Paper A adapted,https://arxiv.org/abs/2501.00001,https://github.com/foo/bar,7,2024-04-01T00:00:00Z,adapter",
     ]
+
+
+def test_csv_update_columns_append_in_canonical_relative_order_without_changing_fresh_export_headers():
+    assert append_missing_property_columns(["Url", "Name"], CSV_UPDATE_COLUMNS) == [
+        "Url",
+        "Name",
+        "Github",
+        "Stars",
+        "Created",
+        "About",
+    ]
+    assert CSV_HEADERS == ["Name", "Url", "Github", "Stars", "Created", "About"]

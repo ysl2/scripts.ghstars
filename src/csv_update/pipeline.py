@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from src.core.input_adapters import CsvRowInputAdapter
+from src.core.output_adapters import CsvUpdateAdapter
+from src.core.record_model import PropertyState
+from src.core.record_sync import RecordSyncService
 from src.shared.async_batch import iter_bounded_as_completed, resolve_worker_count
 from src.shared.csv_schema import (
     ABOUT_COLUMN,
@@ -12,9 +15,8 @@ from src.shared.csv_schema import (
     NAME_COLUMN,
     STARS_COLUMN,
     URL_COLUMN,
-    append_missing_property_columns,
 )
-from src.shared.paper_enrichment import PaperEnrichmentRequest, process_single_paper
+from src.shared.paper_identity import normalize_arxiv_url
 from src.shared.papers import PaperRecord
 
 
@@ -121,12 +123,14 @@ async def build_csv_row_outcome(
     csv_dir: Path,
 ) -> tuple[int, dict[str, str], CsvRowOutcome]:
     updated_row = dict(row)
-    row_url = (updated_row.get(URL_COLUMN, "") or "").strip()
+    csv_update_adapter = CsvUpdateAdapter()
     record = CsvRowInputAdapter().to_record(index, updated_row)
     name = _string_value(record.name.value).strip() or f"Row {index}"
     url = _string_value(record.url.value).strip()
     existing_github = _string_value(record.github.value).strip()
     current_stars = parse_current_stars(record.stars.value)
+    if record.name.value is None:
+        record = record.with_property("name", PropertyState.present(name, source="csv_update"))
 
     if not existing_github and not url:
         outcome = CsvRowOutcome(
@@ -144,62 +148,64 @@ async def build_csv_row_outcome(
         )
         return index - 1, updated_row, outcome
 
-    enrichment = await process_single_paper(
-        PaperEnrichmentRequest(
-            title=name,
-            raw_url=url,
-            existing_github_url=existing_github,
-            allow_title_search=bool(url),
-            allow_github_discovery=not bool(existing_github),
-            trust_existing_github=bool(existing_github),
-        ),
+    record_sync_service = RecordSyncService(
         discovery_client=discovery_client,
         github_client=github_client,
         arxiv_client=arxiv_client,
         semanticscholar_graph_client=semanticscholar_graph_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
-        content_cache=content_cache,
         relation_resolution_cache=relation_resolution_cache,
         arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
     )
+    synced_record = await record_sync_service.sync(
+        record,
+        allow_title_search=bool(url),
+        allow_github_discovery=not bool(existing_github),
+        trust_existing_github=bool(existing_github),
+        before_repo_metadata=lambda synced_record: _warm_content_cache(
+            synced_record.facts.canonical_arxiv_url,
+            content_cache,
+        ),
+    )
+    if not existing_github and synced_record.facts.normalized_url is not None:
+        synced_record = synced_record.with_property(
+            "url",
+            PropertyState.resolved(
+                synced_record.facts.normalized_url,
+                source="url_resolution",
+            ),
+        )
+    updated_row = csv_update_adapter.apply(updated_row, synced_record)
 
-    if (
-        not existing_github
-        and enrichment.normalized_url
-        and enrichment.normalized_url != row_url
-    ):
-        updated_row[URL_COLUMN] = enrichment.normalized_url
-
-    if not existing_github and enrichment.github_url:
-        updated_row[GITHUB_COLUMN] = enrichment.github_url
-
-    if enrichment.reason is None and enrichment.stars is not None:
-        updated_row[STARS_COLUMN] = str(enrichment.stars)
-    if enrichment.reason is None and enrichment.about is not None:
-        updated_row[ABOUT_COLUMN] = enrichment.about
-    if enrichment.reason is None and not (updated_row.get(CREATED_COLUMN, "") or "").strip() and enrichment.created:
-        updated_row[CREATED_COLUMN] = enrichment.created
+    reason = _first_reason(
+        synced_record.github,
+        synced_record.stars,
+        synced_record.created,
+        synced_record.about,
+    )
 
     github_url_set = None
     source_label = None
-    if enrichment.github_source == "existing":
+    github_source = synced_record.facts.github_source
+    github_url = _string_value(synced_record.github.value).strip() or None
+    if github_source == "existing":
         source_label = "existing Github"
-    elif enrichment.github_source == "discovered":
+    elif github_source == "discovered":
         source_label = "Discovered Github"
         if not existing_github.strip():
-            github_url_set = enrichment.github_url
+            github_url_set = github_url
 
     outcome = CsvRowOutcome(
         index=index,
         record=PaperRecord(
             name=name,
-            url=updated_row.get(URL_COLUMN, "") or enrichment.normalized_url or url,
+            url=updated_row.get(URL_COLUMN, "") or "",
             github=updated_row.get(GITHUB_COLUMN, "") or "",
-            stars=enrichment.stars if enrichment.reason is None else updated_row.get(STARS_COLUMN, ""),
+            stars=synced_record.stars.value if reason is None else updated_row.get(STARS_COLUMN, ""),
         ),
         current_stars=current_stars,
-        reason=enrichment.reason,
+        reason=reason,
         source_label=source_label,
         github_url_set=github_url_set,
     )
@@ -248,4 +254,28 @@ def _write_csv_rows(csv_path: Path, fieldnames: list[str], rows: list[dict[str, 
 
 
 def _normalize_fieldnames(fieldnames: list[str]) -> list[str]:
-    return append_missing_property_columns(list(fieldnames), list(MANAGED_COLUMNS))
+    return CsvUpdateAdapter().normalize_fieldnames(list(fieldnames))
+
+
+async def _warm_content_cache(normalized_url: str | None, content_cache) -> None:
+    arxiv_url = normalize_arxiv_url(normalized_url or "")
+    if arxiv_url is None or content_cache is None:
+        return
+
+    warmer = getattr(content_cache, "ensure_local_content_cache", None)
+    if not callable(warmer):
+        return
+
+    try:
+        await warmer(arxiv_url)
+    except Exception:
+        return
+
+
+def _first_reason(*states) -> str | None:
+    for state in states:
+        if state.source == "csv":
+            continue
+        if state.reason is not None:
+            return state.reason
+    return None

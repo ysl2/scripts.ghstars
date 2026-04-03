@@ -1,6 +1,7 @@
 import asyncio
 import csv
 import time
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -8,7 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import src.csv_update.pipeline as csv_update_pipeline
-from src.core.record_model import Record, RecordContext
+from src.core.record_model import PropertyState, Record, RecordContext
 from src.csv_update.pipeline import CsvRowOutcome, build_csv_row_outcome, update_csv_file
 from src.csv_update.runner import run_csv_mode
 from src.shared.paper_content import PaperContentCache
@@ -894,6 +895,9 @@ async def test_build_csv_row_outcome_resolves_repo_then_warms_content_then_fetch
 @pytest.mark.anyio
 async def test_build_csv_row_outcome_uses_csv_row_input_adapter(monkeypatch, tmp_path: Path):
     adapter_calls = []
+    sync_calls = []
+    update_adapter_calls = []
+    init_kwargs = {}
 
     class FakeAdapter:
         def to_record(self, index, row):
@@ -904,21 +908,59 @@ async def test_build_csv_row_outcome_uses_csv_row_input_adapter(monkeypatch, tmp
                 source="csv",
             ).with_supporting_state(context=RecordContext(csv_row_index=index))
 
-    async def fake_process_single_paper(request, **kwargs):
-        assert request.title == "Adapted Title"
-        assert request.raw_url == "https://arxiv.org/abs/2603.12345"
-        return SimpleNamespace(
-            normalized_url="https://arxiv.org/abs/2603.12345",
-            github_url="https://github.com/foo/bar",
-            stars=7,
-            created="2024-01-01T00:00:00Z",
-            about="repo",
-            reason=None,
-            github_source="discovered",
-        )
+    class FakeRecordSyncService:
+        def __init__(self, **kwargs):
+            init_kwargs.update(kwargs)
+
+        async def sync(self, record, **kwargs):
+            before_repo_metadata = kwargs.get("before_repo_metadata")
+            sync_calls.append((record.name.value, record.url.value, kwargs))
+            synced_record = (
+                record.with_property(
+                    "github",
+                    PropertyState.resolved("https://github.com/foo/bar", source="github_api"),
+                )
+                .with_property(
+                    "stars",
+                    PropertyState.resolved(7, source="github_api"),
+                )
+                .with_property(
+                    "created",
+                    PropertyState.resolved("2024-01-01T00:00:00Z", source="github_api"),
+                )
+                .with_property(
+                    "about",
+                    PropertyState.resolved("repo", source="github_api"),
+                )
+                .with_supporting_state(
+                    facts=replace(
+                        record.facts,
+                        normalized_url="https://arxiv.org/abs/2603.12345",
+                        canonical_arxiv_url="https://arxiv.org/abs/2603.12345",
+                        github_source="discovered",
+                    )
+                )
+            )
+            if callable(before_repo_metadata):
+                await before_repo_metadata(synced_record)
+            return synced_record
+
+    class FakeCsvUpdateAdapter:
+        def apply(self, row, record):
+            update_adapter_calls.append((dict(row), record.github.value, record.stars.value))
+            updated = dict(row)
+            updated["Url"] = "https://arxiv.org/abs/2603.12345"
+            updated["Github"] = "https://github.com/foo/bar"
+            updated["Stars"] = "7"
+            updated["Created"] = "2024-01-01T00:00:00Z"
+            updated["About"] = "repo"
+            return updated
 
     monkeypatch.setattr(csv_update_pipeline, "CsvRowInputAdapter", FakeAdapter)
-    monkeypatch.setattr(csv_update_pipeline, "process_single_paper", fake_process_single_paper)
+    monkeypatch.setattr(csv_update_pipeline, "RecordSyncService", FakeRecordSyncService, raising=False)
+    monkeypatch.setattr(csv_update_pipeline, "CsvUpdateAdapter", FakeCsvUpdateAdapter, raising=False)
+
+    content_cache = FakeContentCache()
 
     _, updated_row, outcome = await build_csv_row_outcome(
         3,
@@ -930,7 +972,7 @@ async def test_build_csv_row_outcome_uses_csv_row_input_adapter(monkeypatch, tmp
         },
         discovery_client=SimpleNamespace(),
         github_client=SimpleNamespace(),
-        content_cache=FakeContentCache(),
+        content_cache=content_cache,
         csv_dir=tmp_path,
     )
 
@@ -945,9 +987,33 @@ async def test_build_csv_row_outcome_uses_csv_row_input_adapter(monkeypatch, tmp
             },
         )
     ]
+    assert len(sync_calls) == 1
+    assert init_kwargs["discovery_client"] is not None
+    assert init_kwargs["github_client"] is not None
+    assert sync_calls[0][0] == "Adapted Title"
+    assert sync_calls[0][1] == "https://arxiv.org/abs/2603.12345"
+    assert sync_calls[0][2]["allow_title_search"] is True
+    assert sync_calls[0][2]["allow_github_discovery"] is True
+    assert sync_calls[0][2]["trust_existing_github"] is False
+    assert callable(sync_calls[0][2]["before_repo_metadata"])
+    assert update_adapter_calls == [
+        (
+            {
+                "Name": "Original Title",
+                "Url": "https://example.com/ignored",
+                "Github": "",
+                "Stars": "",
+            },
+            "https://github.com/foo/bar",
+            7,
+        )
+    ]
     assert updated_row["Url"] == "https://arxiv.org/abs/2603.12345"
     assert updated_row["Github"] == "https://github.com/foo/bar"
     assert outcome.record.name == "Adapted Title"
+    assert outcome.source_label == "Discovered Github"
+    assert outcome.github_url_set == "https://github.com/foo/bar"
+    assert content_cache.calls == ["https://arxiv.org/abs/2603.12345"]
 
 
 @pytest.mark.anyio
