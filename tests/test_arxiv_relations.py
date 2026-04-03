@@ -10,7 +10,6 @@ import aiohttp
 import pytest
 
 from src.arxiv_relations.pipeline import ArxivRelationsExportResult, export_arxiv_relations_to_csv
-from src.core.record_model import Record
 from src.shared.relation_candidates import RelatedWorkCandidate
 from src.shared.papers import ConversionResult, PaperSeed
 from src.shared.papers import PaperRecord
@@ -3567,21 +3566,11 @@ async def test_export_arxiv_relations_to_csv_threads_metadata_clients_to_shared_
 
 
 @pytest.mark.anyio
-async def test_export_arxiv_relations_to_csv_adapts_normalized_paper_seeds_before_export(
+async def test_export_arxiv_relations_passes_normalized_seeds_directly_to_export(
     monkeypatch,
     tmp_path: Path,
 ):
-    adapter_calls = []
     export_calls = []
-
-    class FakeAdapter:
-        def to_record(self, seed):
-            adapter_calls.append((seed.name, seed.url))
-            return Record.from_source(
-                name=f"{seed.name} adapted",
-                url=f"{seed.url}?adapted",
-                source="paper_seed",
-            )
 
     class FakeArxivClient:
         async def get_title(self, arxiv_url: str):
@@ -3605,14 +3594,15 @@ async def test_export_arxiv_relations_to_csv_adapts_normalized_paper_seeds_befor
         def build_related_work_candidate(self, paper: dict):
             raise AssertionError("No relation candidates should be built for empty Semantic Scholar rows")
 
+    normalized_seeds = [PaperSeed(name="Mapped Related", url="https://doi.org/10.1145/example")]
+
     async def fake_normalize_related_work_candidates_to_seeds(*args, **kwargs):
-        return [PaperSeed(name="Mapped Related", url="https://doi.org/10.1145/example")]
+        return normalized_seeds
 
     async def fake_export_paper_seeds_to_csv(seeds, csv_path, **kwargs):
         export_calls.append(seeds)
         return ConversionResult(csv_path=csv_path, resolved=0, skipped=[])
 
-    monkeypatch.setattr("src.arxiv_relations.pipeline.PaperSeedInputAdapter", FakeAdapter)
     monkeypatch.setattr(
         "src.arxiv_relations.pipeline.normalize_related_work_candidates_to_seeds",
         fake_normalize_related_work_candidates_to_seeds,
@@ -3631,11 +3621,7 @@ async def test_export_arxiv_relations_to_csv_adapts_normalized_paper_seeds_befor
         output_dir=tmp_path,
     )
 
-    assert adapter_calls == [
-        ("Mapped Related", "https://doi.org/10.1145/example"),
-        ("Mapped Related", "https://doi.org/10.1145/example"),
-    ]
     assert export_calls == [
-        [PaperSeed(name="Mapped Related adapted", url="https://doi.org/10.1145/example?adapted")],
-        [PaperSeed(name="Mapped Related adapted", url="https://doi.org/10.1145/example?adapted")],
+        normalized_seeds,
+        normalized_seeds,
     ]

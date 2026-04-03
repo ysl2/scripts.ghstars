@@ -1,6 +1,5 @@
 from pathlib import Path
 
-from src.core.input_adapters import PaperSeedInputAdapter
 from src.shared.async_batch import iter_bounded_as_completed, resolve_worker_count
 from src.shared.arxiv_url_resolution import resolve_arxiv_url
 from src.shared.paper_export import export_paper_seeds_to_csv
@@ -131,9 +130,8 @@ async def export_url_to_csv(
         output_dir=output_dir,
         status_callback=status_callback,
     )
-    export_seeds = _adapt_paper_seeds_for_export(fetched.seeds)
     return await export_paper_seeds_to_csv(
-        export_seeds,
+        fetched.seeds,
         fetched.csv_path,
         discovery_client=discovery_client,
         github_client=github_client,
@@ -230,25 +228,3 @@ async def _normalize_seed_to_arxiv(
     if not resolution.canonical_arxiv_url:
         return None, None
     return PaperSeed(name=seed.name, url=resolution.resolved_url or resolution.canonical_arxiv_url), resolution.canonical_arxiv_url
-
-
-def _adapt_paper_seeds_for_export(seeds: list[PaperSeed]) -> list[PaperSeed]:
-    adapter = PaperSeedInputAdapter()
-    adapted = []
-    for seed in seeds:
-        record = adapter.to_record(seed)
-        adapted.append(
-            PaperSeed(
-                name=_string_value(record.name.value, seed.name),
-                url=_string_value(record.url.value, seed.url),
-                canonical_arxiv_url=seed.canonical_arxiv_url,
-                url_resolution_authoritative=seed.url_resolution_authoritative,
-            )
-        )
-    return adapted
-
-
-def _string_value(value, fallback: str) -> str:
-    if value is None:
-        return fallback
-    return str(value)

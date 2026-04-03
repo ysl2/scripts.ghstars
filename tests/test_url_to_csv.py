@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.core.record_model import Record
 from src.shared.paper_content import PaperContentCache
 from src.shared.settings import ABS_CACHE_SUBDIR, OVERVIEW_CACHE_SUBDIR
 from src.shared.papers import ConversionResult, PaperSeed
@@ -420,22 +419,13 @@ async def test_export_url_to_csv_defaults_to_output_directory_and_creates_it(tmp
 
 
 @pytest.mark.anyio
-async def test_export_url_to_csv_adapts_paper_seeds_before_shared_export(monkeypatch, tmp_path: Path):
-    adapter_calls = []
+async def test_export_url_to_csv_passes_fetched_seeds_directly_to_export(monkeypatch, tmp_path: Path):
     exported = {}
-
-    class FakeAdapter:
-        def to_record(self, seed):
-            adapter_calls.append((seed.name, seed.url))
-            return Record.from_source(
-                name=f"{seed.name} adapted",
-                url=f"{seed.url}?adapted",
-                source="paper_seed",
-            )
+    fetched_seeds = [PaperSeed(name="Paper A", url="https://arxiv.org/abs/2501.00001")]
 
     async def fake_fetch_paper_seeds_from_url(*args, **kwargs):
         return FetchedSeedsResult(
-            seeds=[PaperSeed(name="Paper A", url="https://arxiv.org/abs/2501.00001")],
+            seeds=fetched_seeds,
             csv_path=tmp_path / "papers.csv",
         )
 
@@ -443,7 +433,6 @@ async def test_export_url_to_csv_adapts_paper_seeds_before_shared_export(monkeyp
         exported["seeds"] = seeds
         return ConversionResult(csv_path=csv_path, resolved=1, skipped=[])
 
-    monkeypatch.setattr(url_pipeline, "PaperSeedInputAdapter", FakeAdapter)
     monkeypatch.setattr(url_pipeline, "fetch_paper_seeds_from_url", fake_fetch_paper_seeds_from_url)
     monkeypatch.setattr(url_pipeline, "export_paper_seeds_to_csv", fake_export_paper_seeds_to_csv)
 
@@ -454,10 +443,7 @@ async def test_export_url_to_csv_adapts_paper_seeds_before_shared_export(monkeyp
         github_client=SimpleNamespace(),
     )
 
-    assert adapter_calls == [("Paper A", "https://arxiv.org/abs/2501.00001")]
-    assert exported["seeds"] == [
-        PaperSeed(name="Paper A adapted", url="https://arxiv.org/abs/2501.00001?adapted")
-    ]
+    assert exported["seeds"] is fetched_seeds
 
 
 @pytest.mark.anyio

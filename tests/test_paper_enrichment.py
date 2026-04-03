@@ -23,35 +23,34 @@ class RecordingContentCache:
 
 
 @pytest.mark.anyio
-async def test_process_single_paper_routes_through_record_sync_service(monkeypatch):
+async def test_process_single_paper_routes_through_sync_paper_record_facade(monkeypatch):
     import src.shared.paper_enrichment as paper_enrichment
 
     calls: dict[str, object] = {}
-    updated = (
-        Record.from_source(
-            name="Paper A",
-            url="https://arxiv.org/pdf/2603.20000v2.pdf",
-            github="https://github.com/foo/bar",
-            stars=17,
-            created="2024-01-01T00:00:00Z",
-            about="repo",
-            source="record_sync",
-            trusted_fields={"github"},
-        ).with_supporting_state(
-            facts=RecordFacts(
-                normalized_url="https://arxiv.org/pdf/2603.20000v2.pdf",
-                canonical_arxiv_url="https://arxiv.org/abs/2603.20000",
-                github_source="existing",
-            )
+    updated = Record.from_source(
+        name="Paper A",
+        url="https://arxiv.org/pdf/2603.20000v2.pdf",
+        github="https://github.com/foo/bar",
+        stars=17,
+        created="2024-01-01T00:00:00Z",
+        about="repo",
+        source="record_sync",
+        trusted_fields={"github"},
+    ).with_supporting_state(
+        facts=RecordFacts(
+            normalized_url="https://arxiv.org/pdf/2603.20000v2.pdf",
+            canonical_arxiv_url="https://arxiv.org/abs/2603.20000",
+            github_source="existing",
         )
     )
+    synced = types.SimpleNamespace(record=updated, reason=None)
 
-    async def fake_sync(self, record, **kwargs):
+    async def fake_sync_paper_record(record, **kwargs):
         calls["record"] = record
         calls.update(kwargs)
-        return updated
+        return synced
 
-    monkeypatch.setattr(paper_enrichment.RecordSyncService, "sync", fake_sync)
+    monkeypatch.setattr(paper_enrichment, "sync_paper_record", fake_sync_paper_record)
 
     result = await process_single_paper(
         PaperEnrichmentRequest(
@@ -61,6 +60,9 @@ async def test_process_single_paper_routes_through_record_sync_service(monkeypat
             allow_title_search=False,
             allow_github_discovery=True,
             trust_existing_github=True,
+            precomputed_normalized_url="https://arxiv.org/pdf/2603.20000v2.pdf",
+            precomputed_canonical_arxiv_url="https://arxiv.org/abs/2603.20000",
+            url_resolution_authoritative=True,
         ),
         discovery_client=types.SimpleNamespace(resolve_github_url=AsyncMock()),
         github_client=types.SimpleNamespace(get_repo_metadata=AsyncMock()),
@@ -72,8 +74,15 @@ async def test_process_single_paper_routes_through_record_sync_service(monkeypat
     assert result.stars == 17
     assert result.created == "2024-01-01T00:00:00Z"
     assert result.about == "repo"
+    assert calls["record"].name.value == "Paper A"
+    assert calls["record"].url.value == "https://arxiv.org/pdf/2603.20000v2.pdf"
     assert calls["record"].github.value == "https://github.com/foo/bar"
     assert calls["record"].github.trusted is True
+    assert calls["record"].facts == RecordFacts(
+        normalized_url="https://arxiv.org/pdf/2603.20000v2.pdf",
+        canonical_arxiv_url="https://arxiv.org/abs/2603.20000",
+        url_resolution_authoritative=True,
+    )
     assert calls["allow_title_search"] is False
     assert calls["allow_github_discovery"] is True
     assert calls["trust_existing_github"] is True

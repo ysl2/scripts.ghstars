@@ -4,8 +4,6 @@ from enum import IntEnum
 from pathlib import Path
 
 import aiohttp
-
-from src.core.input_adapters import PaperSeedInputAdapter
 from src.shared.arxiv import normalize_title_for_matching
 from src.shared.arxiv_url_resolution import resolve_arxiv_url
 from src.shared.paper_export import export_paper_seeds_to_csv
@@ -498,8 +496,6 @@ async def export_arxiv_relations_to_csv(
         status_callback(f"🧭 Kept {len(citation_seeds)}/{len(citation_candidates)} citation works after arXiv normalization")
 
     references_csv_path, citations_csv_path = build_relations_csv_paths(arxiv_url, output_dir=output_dir)
-    reference_seeds = _adapt_paper_seeds_for_export(reference_seeds)
-    citation_seeds = _adapt_paper_seeds_for_export(citation_seeds)
 
     references_result = await export_paper_seeds_to_csv(
         reference_seeds,
@@ -538,25 +534,3 @@ async def export_arxiv_relations_to_csv(
         references=references_result,
         citations=citations_result,
     )
-
-
-def _adapt_paper_seeds_for_export(seeds: list[PaperSeed]) -> list[PaperSeed]:
-    adapter = PaperSeedInputAdapter()
-    adapted = []
-    for seed in seeds:
-        record = adapter.to_record(seed)
-        adapted.append(
-            PaperSeed(
-                name=_string_value(record.name.value, seed.name),
-                url=_string_value(record.url.value, seed.url),
-                canonical_arxiv_url=seed.canonical_arxiv_url,
-                url_resolution_authoritative=seed.url_resolution_authoritative,
-            )
-        )
-    return adapted
-
-
-def _string_value(value, fallback: str) -> str:
-    if value is None:
-        return fallback
-    return str(value)
