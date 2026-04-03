@@ -69,6 +69,23 @@ def test_page_helpers_read_title_github_and_stars():
     assert get_github_property_type(page) == "url"
 
 
+def test_page_helpers_join_all_title_fragments():
+    page = {
+        "properties": {
+            "Name": {
+                "type": "title",
+                "title": [
+                    {"plain_text": "Test"},
+                    {"plain_text": " "},
+                    {"plain_text": "Paper"},
+                ],
+            },
+        }
+    }
+
+    assert get_page_title(page) == "Test Paper"
+
+
 def test_page_helpers_do_not_read_legacy_rich_text_github_type():
     page = {
         "properties": {
@@ -609,6 +626,103 @@ async def test_process_page_writes_stars_about_and_created_backfill_when_created
 
 
 @pytest.mark.anyio
+async def test_process_page_skips_repo_metadata_failure_when_page_is_fully_populated():
+    page = {
+        "id": "page-1",
+        "url": "https://notion.so/page-1",
+        "properties": {
+            "Name": {"type": "title", "title": [{"plain_text": "Paper A"}]},
+            "Github": {"type": "url", "url": "https://github.com/foo/bar"},
+            "Stars": {"type": "number", "number": 10},
+            "Created": {"type": "date", "date": {"start": "2020-01-01T00:00:00Z"}},
+            "About": {
+                "type": "rich_text",
+                "rich_text": [{"plain_text": "old about", "text": {"content": "old about"}}],
+            },
+        },
+    }
+    discovery_client = types.SimpleNamespace(resolve_github_url=AsyncMock())
+    github_client = types.SimpleNamespace(
+        get_repo_metadata=AsyncMock(return_value=(None, "GitHub API error (500)"))
+    )
+    notion_client = types.SimpleNamespace(update_page_properties=AsyncMock(return_value=None))
+    results = {"updated": 0, "skipped": []}
+    lock = asyncio.Lock()
+
+    await process_page(
+        page,
+        index=1,
+        total=1,
+        discovery_client=discovery_client,
+        github_client=github_client,
+        notion_client=notion_client,
+        results=results,
+        lock=lock,
+        content_cache=None,
+    )
+
+    assert results["updated"] == 0
+    assert results["skipped"] == [
+        {
+            "title": "Paper A",
+            "github_url": "https://github.com/foo/bar",
+            "detail_url": "https://notion.so/page-1",
+            "reason": "GitHub API error (500)",
+        }
+    ]
+    notion_client.update_page_properties.assert_not_awaited()
+    discovery_client.resolve_github_url.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_process_page_clears_about_when_remote_description_is_null():
+    page = {
+        "id": "page-1",
+        "url": "https://notion.so/page-1",
+        "properties": {
+            "Name": {"type": "title", "title": [{"plain_text": "Paper A"}]},
+            "Github": {"type": "url", "url": "https://github.com/foo/bar"},
+            "Stars": {"type": "number", "number": 10},
+            "Created": {"type": "date", "date": {"start": "2020-01-01T00:00:00Z"}},
+            "About": {
+                "type": "rich_text",
+                "rich_text": [{"plain_text": "old about", "text": {"content": "old about"}}],
+            },
+        },
+    }
+    discovery_client = types.SimpleNamespace(resolve_github_url=AsyncMock())
+    github_client = types.SimpleNamespace(
+        get_repo_metadata=AsyncMock(
+            return_value=(types.SimpleNamespace(stars=12, created="2024-02-02T00:00:00Z", about=None), None)
+        )
+    )
+    notion_client = types.SimpleNamespace(update_page_properties=AsyncMock(return_value=None))
+    results = {"updated": 0, "skipped": []}
+    lock = asyncio.Lock()
+
+    await process_page(
+        page,
+        index=1,
+        total=1,
+        discovery_client=discovery_client,
+        github_client=github_client,
+        notion_client=notion_client,
+        results=results,
+        lock=lock,
+        content_cache=None,
+    )
+
+    notion_client.update_page_properties.assert_awaited_once_with(
+        "page-1",
+        properties={
+            "Stars": {"number": 12},
+            "About": {"rich_text": []},
+        },
+    )
+    discovery_client.resolve_github_url.assert_not_awaited()
+
+
+@pytest.mark.anyio
 async def test_process_page_does_not_overwrite_existing_created_value():
     page = {
         "id": "page-1",
@@ -777,6 +891,63 @@ async def test_run_notion_mode_ensures_sync_properties_before_querying_pages(mon
         ("ensure_sync_properties", "data-source-1", NotionUpdateAdapter.MANAGED_NOTION_PROPERTIES),
         ("query_pages", "data-source-1"),
     ]
+
+
+@pytest.mark.anyio
+async def test_run_notion_mode_reports_found_pages_without_claiming_github_filter(monkeypatch, capsys):
+    monkeypatch.setenv("NOTION_TOKEN", "notion_xxx")
+    monkeypatch.setenv("DATABASE_ID", "db_123")
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeArxivClient:
+        def __init__(self, session, *, max_concurrent=0, min_interval=0):
+            self.session = session
+
+    class FakeDiscoveryClient:
+        def __init__(self, session, **kwargs):
+            self.session = session
+
+    class FakeGitHubClient:
+        def __init__(self, session, **kwargs):
+            self.session = session
+
+    class FakeNotionClient:
+        def __init__(self, token, max_concurrent):
+            self.token = token
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get_data_source_id(self, database_id):
+            return "data-source-1"
+
+        async def ensure_sync_properties(self, data_source_id, managed_properties=None):
+            return None
+
+        async def query_pages(self, data_source_id):
+            return []
+
+    exit_code = await run_notion_mode(
+        session_factory=lambda **kwargs: FakeSession(),
+        arxiv_client_cls=FakeArxivClient,
+        discovery_client_cls=FakeDiscoveryClient,
+        github_client_cls=FakeGitHubClient,
+        notion_client_cls=FakeNotionClient,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Found 0 pages" in captured.out
+    assert "with Github field" not in captured.out
 
 
 @pytest.mark.anyio

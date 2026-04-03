@@ -284,6 +284,8 @@ class RecordSyncService:
             stars = getattr(metadata, "stars", None)
             created = getattr(metadata, "created", None)
             about = getattr(metadata, "about", None)
+            if hasattr(metadata, "about") and about is None:
+                about = ""
             if created is None and self.repo_metadata_cache is not None:
                 try:
                     entry = self.repo_metadata_cache.get(github_url)

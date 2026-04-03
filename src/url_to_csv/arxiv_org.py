@@ -6,6 +6,7 @@ from urllib.parse import parse_qsl, parse_qs, urlencode, urlparse, urlunparse
 
 import aiohttp
 
+from src.shared.async_batch import iter_bounded_as_completed, resolve_worker_count
 from src.shared.http import MAX_RETRIES, RateLimiter
 from src.shared.paper_identity import normalize_arxiv_url
 from src.shared.papers import PaperSeed
@@ -265,20 +266,28 @@ async def _fetch_list_seeds(
         return seeds
 
     extracted_entries = len(first_page_seeds)
-    tasks = [
-        asyncio.create_task(
-            _fetch_list_page(
-                arxiv_org_client,
-                build_arxiv_list_page_url(input_url, skip=skip, show=page_size),
-                page_number=index,
-                status_callback=status_callback,
-            )
-        )
-        for index, skip in enumerate(range(page_size, total_entries, page_size), start=2)
-    ]
+    worker_count = resolve_worker_count(arxiv_org_client)
 
-    for task in asyncio.as_completed(tasks):
-        page_seeds = await task
+    async def fetch_page(item: tuple[int, int]) -> tuple[int, list[PaperSeed]]:
+        page_number, skip = item
+        page_seeds = await _fetch_list_page(
+            arxiv_org_client,
+            build_arxiv_list_page_url(input_url, skip=skip, show=page_size),
+            page_number=page_number,
+            status_callback=status_callback,
+        )
+        return page_number, page_seeds
+
+    fetched_pages: dict[int, list[PaperSeed]] = {}
+    async for page_number, page_seeds in iter_bounded_as_completed(
+        enumerate(range(page_size, total_entries, page_size), start=2),
+        fetch_page,
+        max_concurrent=worker_count,
+    ):
+        fetched_pages[page_number] = page_seeds
+
+    for page_number in sorted(fetched_pages):
+        page_seeds = fetched_pages[page_number]
         extracted_entries += len(page_seeds)
         _append_unique_seeds(seeds, seen_urls, page_seeds)
 
@@ -324,20 +333,28 @@ async def _fetch_search_seeds(input_url: str, *, arxiv_org_client, status_callba
         return seeds
 
     extracted_results = len(first_page_seeds)
-    tasks = [
-        asyncio.create_task(
-            _fetch_search_page(
-                arxiv_org_client,
-                build_arxiv_search_page_url(input_url, start=start),
-                page_number=index,
-                status_callback=status_callback,
-            )
-        )
-        for index, start in enumerate(range(page_size, total_results, page_size), start=2)
-    ]
+    worker_count = resolve_worker_count(arxiv_org_client)
 
-    for task in asyncio.as_completed(tasks):
-        page_seeds = await task
+    async def fetch_page(item: tuple[int, int]) -> tuple[int, list[PaperSeed]]:
+        page_number, start = item
+        page_seeds = await _fetch_search_page(
+            arxiv_org_client,
+            build_arxiv_search_page_url(input_url, start=start),
+            page_number=page_number,
+            status_callback=status_callback,
+        )
+        return page_number, page_seeds
+
+    fetched_pages: dict[int, list[PaperSeed]] = {}
+    async for page_number, page_seeds in iter_bounded_as_completed(
+        enumerate(range(page_size, total_results, page_size), start=2),
+        fetch_page,
+        max_concurrent=worker_count,
+    ):
+        fetched_pages[page_number] = page_seeds
+
+    for page_number in sorted(fetched_pages):
+        page_seeds = fetched_pages[page_number]
         extracted_results += len(page_seeds)
         _append_unique_seeds(seeds, seen_urls, page_seeds)
 

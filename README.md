@@ -446,5 +446,5 @@ Notion page updates still target the original page id; only the paper-identity p
 ## Tests
 
 ```bash
-uv run pytest
+uv run python -m pytest -q
 ```

@@ -101,7 +101,11 @@ def get_page_title(page: dict) -> str:
         if title_prop.get("type") == "title":
             title_list = title_prop.get("title", [])
             if title_list:
-                return title_list[0].get("plain_text", "")
+                return "".join(
+                    item.get("plain_text", "")
+                    for item in title_list
+                    if item.get("plain_text") is not None
+                )
     return ""
 
 
@@ -264,6 +268,8 @@ async def process_page(
         synced_record.created,
         synced_record.about,
     )
+    if reason is None:
+        reason = synced_record.facts.repo_metadata_error
     if reason is not None or not github_url:
         reason = reason or "No Github URL found from discovery"
         owner_repo = extract_owner_repo(github_url) if github_url else None

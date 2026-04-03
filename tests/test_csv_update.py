@@ -678,6 +678,105 @@ async def test_update_csv_file_refreshes_repo_metadata_without_url_when_github_e
 
 
 @pytest.mark.anyio
+async def test_update_csv_file_marks_repo_metadata_failure_as_skipped_when_row_is_fully_populated(tmp_path: Path):
+    csv_path = tmp_path / "papers.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "Name,Github,Stars,Created,About",
+                "Paper A,https://github.com/foo/bar,11,2024-01-01T00:00:00Z,old about",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    discovery_client = SimpleNamespace(resolve_github_url=AsyncMock())
+    github_client = SimpleNamespace(
+        get_repo_metadata=AsyncMock(return_value=(None, "GitHub API error (500)"))
+    )
+
+    result = await update_csv_file(
+        csv_path,
+        discovery_client=discovery_client,
+        github_client=github_client,
+        content_cache=FakeContentCache(),
+    )
+
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert result.updated == 0
+    assert result.skipped == [
+        {
+            "title": "Paper A",
+            "github_url": "https://github.com/foo/bar",
+            "detail_url": "",
+            "reason": "GitHub API error (500)",
+        }
+    ]
+    assert rows == [
+        {
+            "Name": "Paper A",
+            "Github": "https://github.com/foo/bar",
+            "Stars": "11",
+            "Created": "2024-01-01T00:00:00Z",
+            "About": "old about",
+        }
+    ]
+    discovery_client.resolve_github_url.assert_not_awaited()
+    github_client.get_repo_metadata.assert_awaited_once_with("foo", "bar")
+
+
+@pytest.mark.anyio
+async def test_update_csv_file_clears_about_when_remote_description_is_null(tmp_path: Path):
+    csv_path = tmp_path / "papers.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "Name,Github,Stars,Created,About",
+                "Paper A,https://github.com/foo/bar,11,2024-01-01T00:00:00Z,old about",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = await update_csv_file(
+        csv_path,
+        discovery_client=SimpleNamespace(resolve_github_url=AsyncMock()),
+        github_client=SimpleNamespace(
+            get_repo_metadata=AsyncMock(
+                return_value=(
+                    SimpleNamespace(
+                        stars=12,
+                        created="2020-12-31T00:00:00Z",
+                        about=None,
+                    ),
+                    None,
+                )
+            )
+        ),
+        content_cache=FakeContentCache(),
+    )
+
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert result.updated == 1
+    assert result.skipped == []
+    assert rows == [
+        {
+            "Name": "Paper A",
+            "Github": "https://github.com/foo/bar",
+            "Stars": "12",
+            "Created": "2024-01-01T00:00:00Z",
+            "About": "",
+        }
+    ]
+
+
+@pytest.mark.anyio
 async def test_update_csv_file_does_not_use_or_rewrite_url_when_github_exists(tmp_path: Path):
     csv_path = tmp_path / "papers.csv"
     csv_path.write_text(

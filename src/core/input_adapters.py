@@ -123,7 +123,11 @@ class NotionPageInputAdapter:
                 continue
             title_list = title_prop.get("title", [])
             if title_list:
-                return title_list[0].get("plain_text", "")
+                return "".join(
+                    item.get("plain_text", "")
+                    for item in title_list
+                    if item.get("plain_text") is not None
+                )
         return ""
 
     def _get_paper_url(self, page: dict) -> str:

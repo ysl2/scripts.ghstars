@@ -46,7 +46,15 @@ def is_supported_semanticscholar_url(raw_url: str) -> bool:
     parsed = urlparse(raw_url)
     host = (parsed.netloc or parsed.hostname or "").lower()
     path = parsed.path.rstrip("/")
-    return parsed.scheme in {"http", "https"} and host in SEMANTIC_SCHOLAR_HOSTS and path == "/search"
+    if parsed.scheme not in {"http", "https"} or host not in SEMANTIC_SCHOLAR_HOSTS or path != "/search":
+        return False
+
+    for key, value in parse_qsl(parsed.query, keep_blank_values=False):
+        if key != "q":
+            continue
+        if " ".join(value.replace("+", " ").split()).strip():
+            return True
+    return False
 
 
 def parse_semanticscholar_url(raw_url: str) -> SemanticScholarSearchSpec:

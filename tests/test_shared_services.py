@@ -926,6 +926,39 @@ async def test_github_client_fetches_repo_metadata_with_created_and_about():
     assert metadata.about == "repo"
 
 
+@pytest.mark.anyio
+async def test_github_client_normalizes_null_description_to_empty_about():
+    class FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {
+                "stargazers_count": 123,
+                "created_at": "2024-01-01T00:00:00Z",
+                "description": None,
+            }
+
+    class FakeSession:
+        def get(self, url, headers=None):
+            return FakeResponse()
+
+    session = FakeSession()
+    client = GitHubClient(session=session)
+
+    metadata, error = await client.get_repo_metadata("foo", "bar")
+
+    assert error is None
+    assert metadata.stars == 123
+    assert metadata.created == "2024-01-01T00:00:00Z"
+    assert metadata.about == ""
+
+
 def test_repo_metadata_cache_store_round_trips_created_value(tmp_path):
     store = RepoMetadataCacheStore(tmp_path / "cache.db")
     store.record_created("https://github.com/foo/bar", "2024-01-01T00:00:00Z")

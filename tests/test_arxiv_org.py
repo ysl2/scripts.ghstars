@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -284,6 +285,70 @@ async def test_fetch_paper_seeds_from_arxiv_org_url_pages_list_results_until_tot
         "https://arxiv.org/list/cs.CV/recent?skip=2&show=2",
     ]
     assert result.csv_path == tmp_path / "arxiv-cs.CV-recent-20260326113045.csv"
+
+
+@pytest.mark.anyio
+async def test_fetch_paper_seeds_from_arxiv_org_url_bounds_pagination_by_client_limit(tmp_path: Path):
+    class FakeArxivOrgClient:
+        def __init__(self):
+            self.semaphore = asyncio.Semaphore(1)
+            self.urls: list[str] = []
+            self.release = asyncio.Event()
+
+        async def fetch_page_html(self, url: str):
+            self.urls.append(url)
+            if url == "https://arxiv.org/list/cs.CV/recent":
+                return """
+                <div class='paging'>Total of 3 entries : <span>1-1</span></div>
+                <div class='morefewer'>Showing up to 1 entries per page:</div>
+                <dl id="articles">
+                  <dt><a href="/abs/2603.23502">arXiv:2603.23502</a></dt>
+                  <dd><div class="list-title mathjax"><span class="descriptor">Title:</span> Page 1</div></dd>
+                </dl>
+                """
+
+            await self.release.wait()
+            if url == "https://arxiv.org/list/cs.CV/recent?skip=1&show=1":
+                return """
+                <div class='paging'>Total of 3 entries : <a href="/list/cs.CV/recent?skip=0&amp;show=1">1-1</a> <span>2-2</span></div>
+                <div class='morefewer'>Showing up to 1 entries per page:</div>
+                <dl id="articles">
+                  <dt><a href="/abs/2603.23501">arXiv:2603.23501</a></dt>
+                  <dd><div class="list-title mathjax"><span class="descriptor">Title:</span> Page 2</div></dd>
+                </dl>
+                """
+            if url == "https://arxiv.org/list/cs.CV/recent?skip=2&show=1":
+                return """
+                <div class='paging'>Total of 3 entries : <a href="/list/cs.CV/recent?skip=0&amp;show=1">1-1</a> <span>3-3</span></div>
+                <div class='morefewer'>Showing up to 1 entries per page:</div>
+                <dl id="articles">
+                  <dt><a href="/abs/2603.23500">arXiv:2603.23500</a></dt>
+                  <dd><div class="list-title mathjax"><span class="descriptor">Title:</span> Page 3</div></dd>
+                </dl>
+                """
+            raise AssertionError(f"unexpected url: {url}")
+
+    client = FakeArxivOrgClient()
+    export_task = asyncio.create_task(
+        fetch_paper_seeds_from_arxiv_org_url(
+            "https://arxiv.org/list/cs.CV/recent",
+            arxiv_org_client=client,
+            output_dir=tmp_path,
+        )
+    )
+
+    try:
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert client.urls == [
+            "https://arxiv.org/list/cs.CV/recent",
+            "https://arxiv.org/list/cs.CV/recent?skip=1&show=1",
+        ]
+    finally:
+        client.release.set()
+
+    result = await export_task
+    assert [seed.name for seed in result.seeds] == ["Page 1", "Page 2", "Page 3"]
 
 
 @pytest.mark.anyio

@@ -63,3 +63,10 @@ def test_orphan_readme_asset_is_removed():
 
 def test_src_legacy_directory_is_absent():
     assert not Path("src/legacy").exists()
+
+
+def test_readme_documents_the_runnable_pytest_command():
+    readme = Path("README.md").read_text(encoding="utf-8")
+
+    assert "uv run pytest" not in readme
+    assert "uv run python -m pytest -q" in readme

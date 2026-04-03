@@ -127,7 +127,7 @@ async def run_notion_mode(
                 return 1
 
             pages = await notion_client.query_pages(data_source_id)
-            print(f"📝 Found {len(pages)} pages with Github field\n")
+            print(f"📝 Found {len(pages)} pages\n")
 
             results = {"updated": 0, "skipped": []}
             lock = asyncio.Lock()

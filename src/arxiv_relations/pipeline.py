@@ -4,6 +4,7 @@ from enum import IntEnum
 from pathlib import Path
 
 import aiohttp
+from src.shared.async_batch import iter_bounded_as_completed, resolve_worker_count
 from src.shared.arxiv import normalize_title_for_matching
 from src.shared.arxiv_url_resolution import resolve_arxiv_url
 from src.shared.paper_export import export_paper_seeds_to_csv
@@ -233,8 +234,15 @@ async def _resolve_related_work_rows(
     progress_callback=None,
 ) -> list[NormalizedRelatedRow]:
     total = len(candidates)
+    worker_count = resolve_worker_count(
+        arxiv_client,
+        semanticscholar_graph_client,
+        crossref_client,
+        datacite_client,
+        discovery_client,
+    )
 
-    async def resolve_candidate(item: tuple[int, object]) -> NormalizedRelatedRow:
+    async def resolve_candidate(item: tuple[int, object]) -> tuple[int, NormalizedRelatedRow]:
         index, candidate = item
         row = await _resolve_related_work_row(
             candidate,
@@ -249,14 +257,17 @@ async def _resolve_related_work_rows(
         )
         if callable(progress_callback):
             progress_callback(RelationNormalizationProgressOutcome(index=index, row=row), total)
-        return row
+        return index, row
 
-    return await asyncio.gather(
-        *[
-            resolve_candidate((index, candidate))
-            for index, candidate in enumerate(candidates, 1)
-        ]
-    )
+    rows_by_index: dict[int, NormalizedRelatedRow] = {}
+    async for index, row in iter_bounded_as_completed(
+        enumerate(candidates, 1),
+        resolve_candidate,
+        max_concurrent=worker_count,
+    ):
+        rows_by_index[index] = row
+
+    return [rows_by_index[index] for index in sorted(rows_by_index)]
 
 
 def _normalized_row_ordering(row: NormalizedRelatedRow) -> tuple[int, str, str, str, str]:

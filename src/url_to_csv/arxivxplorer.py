@@ -33,7 +33,14 @@ def is_supported_arxivxplorer_url(raw_url: str) -> bool:
         return False
 
     parsed = urlparse(raw_url)
-    return parsed.scheme in {"http", "https"} and (parsed.netloc or parsed.hostname or "").lower() in ARXIVXPLORER_HOSTS
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    if (parsed.netloc or parsed.hostname or "").lower() not in ARXIVXPLORER_HOSTS:
+        return False
+
+    query = parse_qs(parsed.query, keep_blank_values=False)
+    search_text = (query.get("q", [""])[0] or "").replace("+", " ").strip()
+    return bool(search_text)
 
 
 def parse_arxivxplorer_url(raw_url: str) -> ArxivXplorerQuery:

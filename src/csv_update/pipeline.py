@@ -184,6 +184,8 @@ async def build_csv_row_outcome(
         synced_record.created,
         synced_record.about,
     )
+    if reason is None:
+        reason = synced_record.facts.repo_metadata_error
 
     github_url_set = None
     source_label = None

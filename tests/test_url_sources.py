@@ -33,3 +33,10 @@ def test_detect_url_source_returns_none_for_unsupported_url():
     assert detect_url_source("https://example.com/search?q=test") is None
     assert not is_supported_url_source("https://arxiv.org/abs/2603.23502")
     assert not is_supported_url_source("https://example.com/search?q=test")
+
+
+def test_detect_url_source_rejects_missing_required_query_text():
+    assert detect_url_source("https://arxivxplorer.com/?cats=cs.CV") is None
+    assert detect_url_source("https://www.semanticscholar.org/search?sort=pub-date") is None
+    assert not is_supported_url_source("https://arxivxplorer.com/?cats=cs.CV")
+    assert not is_supported_url_source("https://www.semanticscholar.org/search?sort=pub-date")

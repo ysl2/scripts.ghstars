@@ -1466,6 +1466,80 @@ async def test_normalize_related_works_resolves_non_direct_rows_concurrently():
 
 
 @pytest.mark.anyio
+async def test_normalize_related_works_respects_client_worker_limit():
+    from src.arxiv_relations.pipeline import normalize_related_papers_to_seeds
+
+    class FakeRelatedPaperBuilder:
+        def build_related_work_candidate(self, work: dict):
+            mapping = {
+                "R6": RelatedWorkCandidate(
+                    title="Bounded Paper A",
+                    direct_arxiv_url=None,
+                    doi_url=None,
+                    landing_page_url="https://publisher.example/a",
+                    source_url="https://www.semanticscholar.org/paper/Seed/W6",
+                ),
+                "R7": RelatedWorkCandidate(
+                    title="Bounded Paper B",
+                    direct_arxiv_url=None,
+                    doi_url=None,
+                    landing_page_url="https://publisher.example/b",
+                    source_url="https://www.semanticscholar.org/paper/Seed/W7",
+                ),
+            }
+            return mapping[work["id"]]
+
+    class FakeArxivClient:
+        def __init__(self):
+            self.semaphore = asyncio.Semaphore(1)
+            self.search_started: list[str] = []
+            self.release_searches = asyncio.Event()
+
+        async def get_arxiv_id_by_title(self, title: str):
+            self.search_started.append(title)
+            if len(self.search_started) == 1:
+                await self.release_searches.wait()
+
+            mapping = {
+                "Bounded Paper A": ("2601.10001", "title_search_exact", None),
+                "Bounded Paper B": ("2601.10002", "title_search_exact", None),
+            }
+            return mapping[title]
+
+        async def get_arxiv_match_by_title_from_api(self, title: str):
+            raise AssertionError("Shared relation normalization should use the common HTML title search entrypoint")
+
+        async def get_title(self, arxiv_identifier: str):
+            mapping = {
+                "2601.10001": ("Bounded Match A", None),
+                "2601.10002": ("Bounded Match B", None),
+            }
+            return mapping[arxiv_identifier]
+
+    arxiv_client = FakeArxivClient()
+    seeds_task = asyncio.create_task(
+        normalize_related_papers_to_seeds(
+            [{"id": "R6"}, {"id": "R7"}],
+            related_work_candidate_builder=FakeRelatedPaperBuilder(),
+            arxiv_client=arxiv_client,
+        )
+    )
+
+    try:
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert arxiv_client.search_started == ["Bounded Paper A"]
+    finally:
+        arxiv_client.release_searches.set()
+
+    seeds = await seeds_task
+    assert seeds == [
+        PaperSeed(name="Bounded Match A", url="https://arxiv.org/abs/2601.10001"),
+        PaperSeed(name="Bounded Match B", url="https://arxiv.org/abs/2601.10002"),
+    ]
+
+
+@pytest.mark.anyio
 async def test_export_arxiv_relations_to_csv_exports_mixed_direct_mapped_and_retained_rows(
     tmp_path: Path, monkeypatch
 ):

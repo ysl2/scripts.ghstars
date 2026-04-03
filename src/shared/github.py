@@ -134,11 +134,14 @@ class GitHubClient:
                         if response.status == 200:
                             payload = await response.json()
                             created = payload.get("created_at") or cached_created
+                            about = payload.get("description")
+                            if about is None:
+                                about = ""
                             return (
                                 RepoMetadata(
                                     stars=payload.get("stargazers_count"),
                                     created=created,
-                                    about=payload.get("description"),
+                                    about=about,
                                 ),
                                 None,
                             )

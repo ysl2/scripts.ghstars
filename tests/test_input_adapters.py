@@ -141,3 +141,23 @@ def test_notion_page_input_adapter_builds_record_from_existing_page_properties()
     assert record.github.trusted is True
     assert record.url.value == "https://arxiv.org/abs/2501.12345"
     assert record.about.value == "Current about"
+
+
+def test_notion_page_input_adapter_joins_all_title_fragments():
+    record = NotionPageInputAdapter().to_record(
+        {
+            "id": "page-1",
+            "properties": {
+                "Name": {
+                    "type": "title",
+                    "title": [
+                        {"plain_text": "Paper"},
+                        {"plain_text": " "},
+                        {"plain_text": "A"},
+                    ],
+                },
+            },
+        }
+    )
+
+    assert record.name.value == "Paper A"
