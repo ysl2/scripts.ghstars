@@ -87,7 +87,10 @@ async def sync_paper_record(
         before_repo_metadata=_build_content_warming_callback(content_cache),
     )
 
-    if synced.facts.normalized_url is not None:
+    if (
+        synced.facts.normalized_url is not None
+        and synced.facts.url_resolution_authoritative
+    ):
         synced = synced.with_property(
             "url",
             PropertyState.resolved(

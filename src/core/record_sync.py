@@ -110,6 +110,10 @@ class RecordSyncService:
                     else record.facts.github_source
                 ),
                 repo_metadata_error=None,
+                url_resolution_authoritative=(
+                    record.facts.url_resolution_authoritative
+                    or acquisition.normalized_url is not None
+                ),
             )
         )
 

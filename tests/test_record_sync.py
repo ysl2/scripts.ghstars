@@ -36,6 +36,7 @@ async def test_record_sync_discovers_github_and_repo_metadata_for_paper_like_rec
     assert updated.stars.value == 12
     assert updated.created.value == "2020-01-01T00:00:00Z"
     assert updated.about.value == "repo"
+    assert updated.facts.url_resolution_authoritative is True
 
 
 @pytest.mark.anyio

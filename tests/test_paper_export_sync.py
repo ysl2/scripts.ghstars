@@ -276,3 +276,46 @@ async def test_sync_paper_record_does_not_warm_content_cache_for_host_spoofed_ar
     )
 
     content_cache.ensure_local_content_cache.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_sync_paper_record_does_not_overwrite_url_from_non_authoritative_normalized_fact(
+    monkeypatch,
+):
+    import src.core.paper_export_sync as paper_export_sync
+
+    record = Record.from_source(
+        name="Paper A",
+        url="https://doi.org/10.1145/example",
+        source="csv",
+    ).with_supporting_state(
+        facts=RecordFacts(
+            normalized_url="https://stale.example/should-not-promote",
+            canonical_arxiv_url="https://arxiv.org/abs/2501.12345",
+            url_resolution_authoritative=False,
+        )
+    )
+
+    class FakeRecordSyncService:
+        def __init__(self, **kwargs):
+            pass
+
+        async def sync(self, record, **kwargs):
+            return record
+
+    monkeypatch.setattr(
+        paper_export_sync,
+        "RecordSyncService",
+        FakeRecordSyncService,
+    )
+
+    result = await paper_export_sync.sync_paper_record(
+        record,
+        allow_title_search=False,
+        allow_github_discovery=False,
+        discovery_client=object(),
+        github_client=object(),
+    )
+
+    assert result.record.url.value == "https://doi.org/10.1145/example"
+    assert result.record.url.source == "csv"
