@@ -3,6 +3,7 @@ import os
 
 import aiohttp
 
+from src.core.output_adapters import NotionUpdateAdapter
 from src.notion_sync.config import load_config_from_env
 from src.notion_sync.notion_client import NotionClient
 from src.notion_sync.pipeline import process_page
@@ -117,7 +118,10 @@ async def run_notion_mode(
 
             print(f"📚 Data source ID: {data_source_id}")
             try:
-                await notion_client.ensure_sync_properties(data_source_id)
+                await notion_client.ensure_sync_properties(
+                    data_source_id,
+                    managed_properties=NotionUpdateAdapter.MANAGED_NOTION_PROPERTIES,
+                )
             except ValueError as exc:
                 print(colored(f"❌ {exc}", Colors.RED))
                 return 1

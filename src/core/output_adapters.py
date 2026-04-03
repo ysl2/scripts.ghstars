@@ -48,6 +48,69 @@ class CsvUpdateAdapter:
         return updated
 
 
+class NotionUpdateAdapter:
+    MANAGED_PROPERTY_TYPES = {
+        "Github": "url",
+        "Stars": "number",
+        "Created": "date",
+        "About": "rich_text",
+    }
+    MANAGED_NOTION_PROPERTIES = {
+        "Github": {
+            "type": "url",
+            "url": {},
+        },
+        "Stars": {
+            "type": "number",
+            "number": {"format": "number"},
+        },
+        "Created": {
+            "type": "date",
+            "date": {},
+        },
+        "About": {
+            "type": "rich_text",
+            "rich_text": {},
+        },
+    }
+
+    def validate_schema(self, properties: dict) -> None:
+        for name, expected_type in self.MANAGED_PROPERTY_TYPES.items():
+            property_value = properties.get(name)
+            if property_value is None:
+                continue
+            actual_type = property_value.get("type")
+            if actual_type != expected_type:
+                raise ValueError(f"Notion property {name} must have type {expected_type}")
+
+    def build_patch(self, page: dict, record: Record, *, update_github: bool) -> dict:
+        patch = {}
+        if record.stars.value is not None:
+            patch["Stars"] = {"number": int(record.stars.value)}
+        if record.about.value is not None:
+            if _string_value(record.about.value):
+                patch["About"] = {
+                    "rich_text": [
+                        {
+                            "type": "text",
+                            "text": {"content": _string_value(record.about.value)},
+                        }
+                    ]
+                }
+            else:
+                patch["About"] = {"rich_text": []}
+
+        created_property = page.get("properties", {}).get("Created", {})
+        has_created = bool((created_property.get("date") or {}).get("start"))
+        if not has_created and record.created.value is not None:
+            patch["Created"] = {"date": {"start": _string_value(record.created.value)}}
+
+        if update_github and record.github.value is not None:
+            patch["Github"] = {"url": _string_value(record.github.value)}
+
+        return patch
+
+
 def _string_value(value) -> str:
     if value is None:
         return ""

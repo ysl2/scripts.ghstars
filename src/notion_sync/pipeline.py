@@ -1,8 +1,10 @@
 import asyncio
 
 from src.core.input_adapters import NotionPageInputAdapter
+from src.core.output_adapters import NotionUpdateAdapter
+from src.core.record_sync import RecordSyncService
 from src.shared.github import extract_owner_repo, is_valid_github_repo_url
-from src.shared.paper_enrichment import PaperEnrichmentRequest, process_single_paper
+from src.shared.paper_enrichment import PaperEnrichmentRequest
 from src.shared.paper_identity import build_arxiv_abs_url, extract_arxiv_id
 from src.shared.progress import print_item_skip, print_item_success
 from src.shared.skip_reasons import is_minor_skip_reason
@@ -56,15 +58,7 @@ def get_github_property_type(page: dict) -> str | None:
 
 
 def validate_managed_property_types(page: dict) -> None:
-    properties = page.get("properties", {})
-    for property_name, expected_type in MANAGED_PROPERTY_TYPES.items():
-        property_value = properties.get(property_name)
-        if property_value is None:
-            continue
-
-        actual_type = property_value.get("type")
-        if actual_type != expected_type:
-            raise ValueError(f"Notion property {property_name} must have type {expected_type}")
+    NotionUpdateAdapter().validate_schema(page.get("properties", {}))
 
 
 def classify_github_value(value) -> str:
@@ -206,9 +200,9 @@ async def process_page(
     page_id = page["id"]
     current_stars = get_current_stars_from_page(page)
     current_created = get_current_created_from_page(page)
-    github_property_type = get_github_property_type(page) or "url"
     title = get_page_title(page) or page_id
     notion_url = get_page_url(page)
+    update_adapter = NotionUpdateAdapter()
 
     try:
         validate_managed_property_types(page)
@@ -228,6 +222,7 @@ async def process_page(
         return
 
     request, needs_github_update, local_reason = build_page_enrichment_request(page)
+    record = NotionPageInputAdapter().to_record(page)
     if request is None:
         async with lock:
             print_item_skip(
@@ -242,21 +237,35 @@ async def process_page(
             )
         return
 
-    result = await process_single_paper(
-        request,
+    record_sync_service = RecordSyncService(
         discovery_client=discovery_client,
         github_client=github_client,
         arxiv_client=arxiv_client,
         semanticscholar_graph_client=semanticscholar_graph_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
-        content_cache=content_cache,
         relation_resolution_cache=relation_resolution_cache,
         arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
     )
-    github_url = result.github_url
-    if result.reason is not None or not github_url:
-        reason = result.reason or "No Github URL found from discovery"
+    synced_record = await record_sync_service.sync(
+        record,
+        allow_title_search=request.allow_title_search,
+        allow_github_discovery=request.allow_github_discovery,
+        trust_existing_github=request.trust_existing_github,
+        before_repo_metadata=lambda synced_record: _warm_content_cache(
+            synced_record.facts.canonical_arxiv_url,
+            content_cache,
+        ),
+    )
+    github_url = _string_value(synced_record.github.value) or None
+    reason = _first_reason(
+        synced_record.github,
+        synced_record.stars,
+        synced_record.created,
+        synced_record.about,
+    )
+    if reason is not None or not github_url:
+        reason = reason or "No Github URL found from discovery"
         owner_repo = extract_owner_repo(github_url) if github_url else None
         async with lock:
             print_item_skip(
@@ -273,16 +282,17 @@ async def process_page(
         return
 
     owner_repo = extract_owner_repo(github_url)
-    new_stars = result.stars
+    new_stars = synced_record.stars.value if isinstance(synced_record.stars.value, int) else None
 
     try:
+        patch = update_adapter.build_patch(
+            page,
+            synced_record,
+            update_github=needs_github_update and synced_record.facts.github_source == "discovered",
+        )
         await notion_client.update_page_properties(
             page_id,
-            github_url=github_url if needs_github_update and result.github_source == "discovered" else None,
-            stars_count=new_stars,
-            created_value=result.created if not current_created and result.created else None,
-            about_text=result.about,
-            github_property_type=github_property_type,
+            properties=patch,
         )
     except Exception as exc:
         reason = f"Notion update failed: {exc}"
@@ -308,7 +318,31 @@ async def process_page(
             owner_repo=owner_repo,
             current_stars=current_stars,
             new_stars=new_stars,
-            source_label=format_resolution_source_label(result.github_source),
-            github_url_set=github_url if needs_github_update and result.github_source == "discovered" else None,
+            source_label=format_resolution_source_label(synced_record.facts.github_source),
+            github_url_set=github_url if needs_github_update and synced_record.facts.github_source == "discovered" else None,
         )
         results["updated"] += 1
+
+
+async def _warm_content_cache(canonical_arxiv_url: str | None, content_cache) -> None:
+    arxiv_id = extract_arxiv_id(canonical_arxiv_url or "")
+    if not arxiv_id or content_cache is None:
+        return
+
+    warmer = getattr(content_cache, "ensure_local_content_cache", None)
+    if not callable(warmer):
+        return
+
+    try:
+        await warmer(build_arxiv_abs_url(arxiv_id))
+    except Exception:
+        return
+
+
+def _first_reason(*states) -> str | None:
+    for state in states:
+        if state.source == "notion":
+            continue
+        if state.reason is not None:
+            return state.reason
+    return None

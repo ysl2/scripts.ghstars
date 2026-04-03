@@ -2,30 +2,15 @@ import asyncio
 
 from notion_client import AsyncClient
 
+from src.core.output_adapters import NotionUpdateAdapter
+
 
 GITHUB_PROPERTY_NAME = "Github"
 GITHUB_STARS_PROPERTY_NAME = "Stars"
 CREATED_PROPERTY_NAME = "Created"
 ABOUT_PROPERTY_NAME = "About"
 NOTION_MAX_RETRIES = 2
-MANAGED_NOTION_PROPERTIES = {
-    GITHUB_PROPERTY_NAME: {
-        "type": "url",
-        "url": {},
-    },
-    GITHUB_STARS_PROPERTY_NAME: {
-        "type": "number",
-        "number": {"format": "number"},
-    },
-    CREATED_PROPERTY_NAME: {
-        "type": "date",
-        "date": {},
-    },
-    ABOUT_PROPERTY_NAME: {
-        "type": "rich_text",
-        "rich_text": {},
-    },
-}
+MANAGED_NOTION_PROPERTIES = NotionUpdateAdapter.MANAGED_NOTION_PROPERTIES
 
 
 def clean_database_id(database_id: str) -> str:
@@ -43,33 +28,35 @@ class NotionClient:
         self,
         page_id: str,
         *,
+        properties: dict | None = None,
         github_url: str | None = None,
         stars_count: int | None = None,
         created_value: str | None = None,
         about_text: str | None = None,
         github_property_type: str = "url",
     ) -> None:
-        properties = {}
-        if github_url is not None:
-            if github_property_type != "url":
-                raise ValueError(f"Notion property {GITHUB_PROPERTY_NAME} must have type url")
-            properties[GITHUB_PROPERTY_NAME] = {"url": github_url}
-        if stars_count is not None:
-            properties[GITHUB_STARS_PROPERTY_NAME] = {"number": stars_count}
-        if created_value is not None:
-            properties[CREATED_PROPERTY_NAME] = {"date": {"start": created_value}}
-        if about_text is not None:
-            if about_text:
-                properties[ABOUT_PROPERTY_NAME] = {
-                    "rich_text": [
-                        {
-                            "type": "text",
-                            "text": {"content": about_text},
-                        }
-                    ]
-                }
-            else:
-                properties[ABOUT_PROPERTY_NAME] = {"rich_text": []}
+        if properties is None:
+            properties = {}
+            if github_url is not None:
+                if github_property_type != "url":
+                    raise ValueError(f"Notion property {GITHUB_PROPERTY_NAME} must have type url")
+                properties[GITHUB_PROPERTY_NAME] = {"url": github_url}
+            if stars_count is not None:
+                properties[GITHUB_STARS_PROPERTY_NAME] = {"number": stars_count}
+            if created_value is not None:
+                properties[CREATED_PROPERTY_NAME] = {"date": {"start": created_value}}
+            if about_text is not None:
+                if about_text:
+                    properties[ABOUT_PROPERTY_NAME] = {
+                        "rich_text": [
+                            {
+                                "type": "text",
+                                "text": {"content": about_text},
+                            }
+                        ]
+                    }
+                else:
+                    properties[ABOUT_PROPERTY_NAME] = {"rich_text": []}
         if not properties:
             return
 
@@ -88,13 +75,14 @@ class NotionClient:
         if last_error:
             raise last_error
 
-    async def ensure_sync_properties(self, data_source_id: str) -> None:
+    async def ensure_sync_properties(self, data_source_id: str, *, managed_properties: dict | None = None) -> None:
         async with self.semaphore:
             data_source = await self.client.data_sources.retrieve(data_source_id=data_source_id)
 
+        managed_properties = MANAGED_NOTION_PROPERTIES if managed_properties is None else managed_properties
         properties = data_source.get("properties", {})
         missing_properties = {}
-        for property_name, property_schema in MANAGED_NOTION_PROPERTIES.items():
+        for property_name, property_schema in managed_properties.items():
             property_value = properties.get(property_name)
             if property_value is None:
                 missing_properties[property_name] = property_schema

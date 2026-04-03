@@ -8,6 +8,7 @@ import src.notion_sync.runner as notion_runner
 from src.notion_sync.config import load_config_from_env
 from src.notion_sync.notion_client import NotionClient
 import src.notion_sync.pipeline as notion_pipeline
+from src.core.output_adapters import NotionUpdateAdapter
 from src.core.record_model import Record, RecordContext
 from src.notion_sync.pipeline import (
     build_page_enrichment_request,
@@ -551,11 +552,9 @@ async def test_process_page_prefers_existing_github_without_discovery():
     discovery_client.resolve_github_url.assert_not_awaited()
     notion_client.update_page_properties.assert_awaited_once_with(
         "page-1",
-        github_url=None,
-        stars_count=12,
-        created_value=None,
-        about_text=None,
-        github_property_type="url",
+        properties={
+            "Stars": {"number": 12},
+        },
     )
 
 
@@ -600,11 +599,11 @@ async def test_process_page_writes_stars_about_and_created_backfill_when_created
 
     notion_client.update_page_properties.assert_awaited_once_with(
         "page-1",
-        github_url=None,
-        stars_count=12,
-        created_value="2024-02-02T00:00:00Z",
-        about_text="",
-        github_property_type="url",
+        properties={
+            "Stars": {"number": 12},
+            "Created": {"date": {"start": "2024-02-02T00:00:00Z"}},
+            "About": {"rich_text": []},
+        },
     )
     discovery_client.resolve_github_url.assert_not_awaited()
 
@@ -650,11 +649,17 @@ async def test_process_page_does_not_overwrite_existing_created_value():
 
     notion_client.update_page_properties.assert_awaited_once_with(
         "page-1",
-        github_url=None,
-        stars_count=12,
-        created_value=None,
-        about_text="remote about",
-        github_property_type="url",
+        properties={
+            "Stars": {"number": 12},
+            "About": {
+                "rich_text": [
+                    {
+                        "type": "text",
+                        "text": {"content": "remote about"},
+                    }
+                ]
+            },
+        },
     )
     discovery_client.resolve_github_url.assert_not_awaited()
 
@@ -700,11 +705,10 @@ async def test_process_page_uses_title_search_when_github_field_is_empty():
     discovery_client.resolve_github_url.assert_awaited_once()
     notion_client.update_page_properties.assert_awaited_once_with(
         "page-1",
-        github_url="https://github.com/foo/bar",
-        stars_count=12,
-        created_value=None,
-        about_text=None,
-        github_property_type="url",
+        properties={
+            "Github": {"url": "https://github.com/foo/bar"},
+            "Stars": {"number": 12},
+        },
     )
     content_cache.ensure_local_content_cache.assert_awaited_once_with("https://arxiv.org/abs/2603.05078")
 
@@ -752,8 +756,8 @@ async def test_run_notion_mode_ensures_sync_properties_before_querying_pages(mon
             self.calls.append(("get_data_source_id", database_id))
             return "data-source-1"
 
-        async def ensure_sync_properties(self, data_source_id):
-            self.calls.append(("ensure_sync_properties", data_source_id))
+        async def ensure_sync_properties(self, data_source_id, managed_properties=None):
+            self.calls.append(("ensure_sync_properties", data_source_id, managed_properties))
 
         async def query_pages(self, data_source_id):
             self.calls.append(("query_pages", data_source_id))
@@ -770,7 +774,7 @@ async def test_run_notion_mode_ensures_sync_properties_before_querying_pages(mon
     assert exit_code == 0
     assert FakeNotionClient.instances[0].calls == [
         ("get_data_source_id", "db_123"),
-        ("ensure_sync_properties", "data-source-1"),
+        ("ensure_sync_properties", "data-source-1", NotionUpdateAdapter.MANAGED_NOTION_PROPERTIES),
         ("query_pages", "data-source-1"),
     ]
 
@@ -814,7 +818,7 @@ async def test_run_notion_mode_returns_error_when_schema_validation_fails(monkey
         async def get_data_source_id(self, database_id):
             return "data-source-1"
 
-        async def ensure_sync_properties(self, data_source_id):
+        async def ensure_sync_properties(self, data_source_id, managed_properties=None):
             raise ValueError("Notion property Github must have type url")
 
         async def query_pages(self, data_source_id):
@@ -912,7 +916,7 @@ async def test_run_notion_mode_builds_and_passes_content_cache(monkeypatch):
         async def get_data_source_id(self, database_id):
             return "data-source-1"
 
-        async def ensure_sync_properties(self, data_source_id):
+        async def ensure_sync_properties(self, data_source_id, managed_properties=None):
             return None
 
         async def query_pages(self, data_source_id):
@@ -995,7 +999,7 @@ async def test_run_notion_mode_limits_started_pages_to_notion_concurrent_limit(m
         async def get_data_source_id(self, database_id):
             return "data-source-1"
 
-        async def ensure_sync_properties(self, data_source_id):
+        async def ensure_sync_properties(self, data_source_id, managed_properties=None):
             return None
 
         async def query_pages(self, data_source_id):
