@@ -102,6 +102,17 @@ CSV update, collection URL export, Notion sync, and single-paper relation export
 
 Use the standalone cache maintenance script when you want to inspect or clear negative cache entries from `cache.db`.
 
+Every run of `cache.py` also performs best-effort cache schema migration first, even without `--apply`.
+That migration keeps cache rows that still fit the current schema, creates any missing current cache tables, and deletes legacy cache rows that the current code can no longer consume.
+
+If you are upgrading from an older version and already have a `cache.db`, the recommended path is:
+
+1. Back up the existing `cache.db`
+2. Run `uv run cache.py` once to apply schema migration and inspect the migration summary
+3. Run `uv run cache.py --apply` if you also want to clear stale negative cache entries after migration
+
+`cache.db` is only a cache, not a source-of-truth database, so unsupported legacy cache rows may be dropped during migration when they cannot be adapted to the current schema.
+
 A negative cache entry means:
 
 - `github_url` is `NULL` or blank
