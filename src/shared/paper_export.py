@@ -2,10 +2,9 @@ from dataclasses import replace
 from pathlib import Path
 
 from src.core.output_adapters import FreshCsvExportAdapter
-from src.core.record_model import Record
+from src.core.paper_export_sync import sync_paper_seed
 from src.shared.async_batch import iter_bounded_as_completed, resolve_worker_count
 from src.shared.csv_io import write_rows_to_csv_path
-from src.shared.paper_enrichment import PaperEnrichmentRequest, process_single_paper
 from src.shared.papers import ConversionResult, PaperOutcome, PaperSeed, sort_paper_export_rows
 
 
@@ -23,17 +22,8 @@ async def build_paper_outcome(
     relation_resolution_cache=None,
     arxiv_relation_no_arxiv_recheck_days: int = 30,
 ) -> PaperOutcome:
-    enrichment = await process_single_paper(
-        PaperEnrichmentRequest(
-            title=seed.name,
-            raw_url=seed.url,
-            existing_github_url=None,
-            allow_title_search=True,
-            allow_github_discovery=True,
-            precomputed_normalized_url=seed.url if seed.url_resolution_authoritative else None,
-            precomputed_canonical_arxiv_url=seed.canonical_arxiv_url,
-            url_resolution_authoritative=seed.url_resolution_authoritative,
-        ),
+    sync_result = await sync_paper_seed(
+        seed,
         discovery_client=discovery_client,
         github_client=github_client,
         arxiv_client=arxiv_client,
@@ -46,21 +36,14 @@ async def build_paper_outcome(
     )
 
     adapter = FreshCsvExportAdapter()
+    row = adapter.to_csv_row(sync_result.record, sort_index=index)
+    if sync_result.reason is not None:
+        row = replace(row, stars="")
+
     return PaperOutcome(
         index=index,
-        record=adapter.to_csv_row(
-            Record.from_source(
-                name=enrichment.title,
-                url=enrichment.normalized_url or enrichment.raw_url or "",
-                github=enrichment.github_url,
-                stars=enrichment.stars if enrichment.reason is None else None,
-                created=enrichment.created,
-                about=enrichment.about,
-                source="paper_export",
-            ),
-            sort_index=index,
-        ),
-        reason=enrichment.reason,
+        record=row,
+        reason=sync_result.reason,
     )
 
 

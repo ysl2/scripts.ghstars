@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import src.shared.paper_export as paper_export
+from src.core.record_model import Record
 from src.shared.csv_rows import CsvRow
 from src.shared.papers import PaperOutcome, PaperSeed
 
@@ -63,61 +64,94 @@ async def test_export_paper_seeds_to_csv_limits_started_tasks_to_worker_count(tm
 
 
 @pytest.mark.anyio
-async def test_build_paper_outcome_threads_metadata_clients_to_process_single_paper(monkeypatch):
+async def test_build_paper_outcome_routes_seed_through_core_sync_helper(monkeypatch):
     received = {}
 
-    async def fake_process_single_paper(request, **kwargs):
+    async def fake_sync_paper_seed(seed, **kwargs):
+        received["seed"] = seed
+        received["discovery_client"] = kwargs.get("discovery_client")
+        received["github_client"] = kwargs.get("github_client")
         received["arxiv_client"] = kwargs.get("arxiv_client")
         received["semanticscholar_graph_client"] = kwargs.get("semanticscholar_graph_client")
         received["crossref_client"] = kwargs.get("crossref_client")
         received["datacite_client"] = kwargs.get("datacite_client")
+        received["content_cache"] = kwargs.get("content_cache")
         received["relation_resolution_cache"] = kwargs.get("relation_resolution_cache")
         received["arxiv_relation_no_arxiv_recheck_days"] = kwargs.get("arxiv_relation_no_arxiv_recheck_days")
-        received["allow_title_search"] = request.allow_title_search
         return SimpleNamespace(
-            title=request.title,
-            raw_url=request.raw_url,
-            normalized_url="https://arxiv.org/abs/2501.00001",
-            canonical_arxiv_url="https://arxiv.org/abs/2501.00001",
-            github_url="https://github.com/foo/bar",
-            github_source="discovered",
-            stars=12,
-            created="2024-01-01T00:00:00Z",
-            about="repo",
+            record=Record.from_source(
+                name=seed.name,
+                url="https://arxiv.org/abs/2501.00001",
+                github="https://github.com/foo/bar",
+                stars=12,
+                created="2024-01-01T00:00:00Z",
+                about="repo",
+                source="paper_export_sync",
+            ),
             reason=None,
         )
 
-    monkeypatch.setattr(paper_export, "process_single_paper", fake_process_single_paper)
+    adapter_calls = []
+
+    class FakeAdapter:
+        def to_csv_row(self, record, *, sort_index=0):
+            adapter_calls.append((record.name.value, record.url.value, sort_index))
+            return CsvRow(
+                name="Adapter Name",
+                url="https://adapter.example/paper",
+                github="https://github.com/adapter/paper",
+                stars=99,
+                created="2025-01-01T00:00:00Z",
+                about="adapter",
+                sort_index=sort_index,
+            )
+
+    monkeypatch.setattr(paper_export, "sync_paper_seed", fake_sync_paper_seed)
+    monkeypatch.setattr(
+        paper_export,
+        "FreshCsvExportAdapter",
+        FakeAdapter,
+        raising=False,
+    )
 
     arxiv_client = SimpleNamespace()
     semanticscholar_graph_client = SimpleNamespace()
     crossref_client = SimpleNamespace()
     datacite_client = SimpleNamespace()
+    content_cache = SimpleNamespace(name="content-cache")
     relation_resolution_cache = SimpleNamespace(name="relation-cache")
+    discovery_client = SimpleNamespace(name="discovery")
+    github_client = SimpleNamespace(name="github")
+    seed = PaperSeed(name="Paper A", url="https://doi.org/10.1145/example")
     outcome = await paper_export.build_paper_outcome(
         1,
-        PaperSeed(name="Paper A", url="https://doi.org/10.1145/example"),
-        discovery_client=SimpleNamespace(),
-        github_client=SimpleNamespace(),
+        seed,
+        discovery_client=discovery_client,
+        github_client=github_client,
         arxiv_client=arxiv_client,
         semanticscholar_graph_client=semanticscholar_graph_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
+        content_cache=content_cache,
         relation_resolution_cache=relation_resolution_cache,
         arxiv_relation_no_arxiv_recheck_days=17,
     )
 
-    assert outcome.record.url == "https://arxiv.org/abs/2501.00001"
+    assert outcome.record.url == "https://adapter.example/paper"
     assert isinstance(outcome.record, CsvRow)
-    assert outcome.record.created == "2024-01-01T00:00:00Z"
-    assert outcome.record.about == "repo"
+    assert outcome.record.created == "2025-01-01T00:00:00Z"
+    assert outcome.record.about == "adapter"
+    assert adapter_calls == [("Paper A", "https://arxiv.org/abs/2501.00001", 1)]
+    assert received["seed"] is seed
+    assert received["discovery_client"] is discovery_client
+    assert received["github_client"] is github_client
     assert received["arxiv_client"] is arxiv_client
     assert received["semanticscholar_graph_client"] is semanticscholar_graph_client
     assert received["crossref_client"] is crossref_client
     assert received["datacite_client"] is datacite_client
+    assert received["content_cache"] is content_cache
     assert received["relation_resolution_cache"] is relation_resolution_cache
     assert received["arxiv_relation_no_arxiv_recheck_days"] == 17
-    assert received["allow_title_search"] is True
 
 
 @pytest.mark.anyio
@@ -125,21 +159,21 @@ async def test_export_paper_seeds_to_csv_writes_created_and_about_from_shared_me
     tmp_path: Path,
     monkeypatch,
 ):
-    async def fake_process_single_paper(request, **kwargs):
+    async def fake_sync_paper_seed(seed, **kwargs):
         return SimpleNamespace(
-            title=request.title,
-            raw_url=request.raw_url,
-            normalized_url="https://arxiv.org/abs/2501.00001",
-            canonical_arxiv_url="https://arxiv.org/abs/2501.00001",
-            github_url="https://github.com/foo/bar",
-            github_source="discovered",
-            stars=12,
-            created="2024-01-01T00:00:00Z",
-            about="repo",
+            record=Record.from_source(
+                name=seed.name,
+                url="https://arxiv.org/abs/2501.00001",
+                github="https://github.com/foo/bar",
+                stars=12,
+                created="2024-01-01T00:00:00Z",
+                about="repo",
+                source="paper_export_sync",
+            ),
             reason=None,
         )
 
-    monkeypatch.setattr(paper_export, "process_single_paper", fake_process_single_paper)
+    monkeypatch.setattr(paper_export, "sync_paper_seed", fake_sync_paper_seed)
 
     result = await paper_export.export_paper_seeds_to_csv(
         [PaperSeed(name="Paper A", url="https://arxiv.org/abs/2501.00001")],
@@ -164,45 +198,24 @@ async def test_export_paper_seeds_to_csv_writes_created_and_about_from_shared_me
 
 
 @pytest.mark.anyio
-async def test_build_paper_outcome_routes_row_conversion_through_fresh_csv_export_adapter(
+async def test_build_paper_outcome_suppresses_stars_but_keeps_created_and_about_when_reason_present(
     monkeypatch,
 ):
-    adapter_calls = []
-
-    async def fake_process_single_paper(request, **kwargs):
+    async def fake_sync_paper_seed(seed, **kwargs):
         return SimpleNamespace(
-            title=request.title,
-            raw_url=request.raw_url,
-            normalized_url="https://arxiv.org/abs/2501.00001",
-            canonical_arxiv_url="https://arxiv.org/abs/2501.00001",
-            github_url="https://github.com/foo/bar",
-            github_source="discovered",
-            stars=12,
-            created="2024-01-01T00:00:00Z",
-            about="repo",
-            reason=None,
+            record=Record.from_source(
+                name=seed.name,
+                url="https://arxiv.org/abs/2501.00001",
+                github="https://github.com/foo/bar",
+                stars=12,
+                created="2024-01-01T00:00:00Z",
+                about="repo",
+                source="paper_export_sync",
+            ),
+            reason="repo metadata unavailable",
         )
 
-    class FakeAdapter:
-        def to_csv_row(self, record, *, sort_index=0):
-            adapter_calls.append((record.name.value, record.url.value, sort_index))
-            return CsvRow(
-                name="Adapter Name",
-                url="https://adapter.example/paper",
-                github="https://github.com/adapter/paper",
-                stars=99,
-                created="2025-01-01T00:00:00Z",
-                about="adapter",
-                sort_index=sort_index,
-            )
-
-    monkeypatch.setattr(paper_export, "process_single_paper", fake_process_single_paper)
-    monkeypatch.setattr(
-        paper_export,
-        "FreshCsvExportAdapter",
-        FakeAdapter,
-        raising=False,
-    )
+    monkeypatch.setattr(paper_export, "sync_paper_seed", fake_sync_paper_seed)
 
     outcome = await paper_export.build_paper_outcome(
         4,
@@ -211,14 +224,14 @@ async def test_build_paper_outcome_routes_row_conversion_through_fresh_csv_expor
         github_client=SimpleNamespace(),
     )
 
-    assert adapter_calls == [("Paper A", "https://arxiv.org/abs/2501.00001", 4)]
+    assert outcome.reason == "repo metadata unavailable"
     assert outcome.record == CsvRow(
-        name="Adapter Name",
-        url="https://adapter.example/paper",
-        github="https://github.com/adapter/paper",
-        stars=99,
-        created="2025-01-01T00:00:00Z",
-        about="adapter",
+        name="Paper A",
+        url="https://arxiv.org/abs/2501.00001",
+        github="https://github.com/foo/bar",
+        stars="",
+        created="2024-01-01T00:00:00Z",
+        about="repo",
         sort_index=4,
     )
 
