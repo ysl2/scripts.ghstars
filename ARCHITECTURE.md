@@ -8,41 +8,46 @@ This document is for maintainers.
 
 ## Runtime Shape
 
-The runtime is intentionally shallow at the top and heavier in shared services:
+The runtime is intentionally shallow at the top and centered around a record-oriented core:
 
-`main.py -> src/app.py -> <mode>/runner.py -> <mode>/pipeline.py -> src/shared/*`
+`main.py -> src/app.py -> <input-shape>/runner.py -> <input-shape>/pipeline.py -> src/core/* -> src/shared/*`
 
 Responsibilities by layer:
 
 - `main.py`
   Re-exports the real entrypoint from `src.app`.
 - `src/app.py`
-  Parses the single positional argument shape and dispatches to one of five modes.
+  Detects the single positional argument shape and dispatches to one of five input families.
 - `src/<mode>/runner.py`
   Builds config, HTTP clients, caches, and progress callbacks.
 - `src/<mode>/pipeline.py`
-  Implements mode-specific orchestration.
+  Implements input-family orchestration around adapters and sync services.
+- `src/core/*`
+  Holds the `Record` domain model, sync services, input adapters, output adapters, and repository wrappers.
 - `src/shared/*`
-  Holds reusable normalization, discovery, caching, HTTP, export, and enrichment logic.
+  Holds reusable normalization, discovery, caching, HTTP, export, and enrichment support code.
 
-This split is the core architectural rule of the repository: keep input-shape dispatch and mode wiring thin; keep reusable paper-processing logic in `src/shared/`.
+This split is the core architectural rule of the repository: keep input-shape dispatch and runner wiring thin; keep property semantics in `src/core/*`; keep lower-level transport, normalization, and cache mechanics in `src/shared/*`.
 
-## Property-Centric Core
+## Record-Centric Core
 
-The shared property model is now the center of the architecture.
+The `Record` model and its adapters are now the architectural center.
 
 Key files:
 
-- `src/shared/property_model.py`
-- `src/shared/property_resolvers.py`
-- `src/shared/paper_enrichment.py`
-- `src/shared/paper_export.py`
+- `src/core/record_model.py`
+- `src/core/record_sync.py`
+- `src/core/input_adapters.py`
+- `src/core/output_adapters.py`
+- `src/core/repositories.py`
+- compatibility shims in `src/shared/property_model.py`, `src/shared/property_resolvers.py`, and `src/shared/paper_enrichment.py`
 
 Responsibilities:
 
-- Treat `Github`, `Stars`, `Created`, and `About` as explicit shared properties instead of mode-local fields.
+- Treat `Name`, `Url`, `Github`, `Stars`, `Created`, and `About` as explicit `Record` properties.
 - Reuse one `Github URL -> repo metadata` path across fresh export, CSV update, and Notion sync.
-- Let mode pipelines stay responsible for source-specific ingestion and target-specific writes, while shared code owns acquisition and metadata semantics.
+- Keep input adapters and output adapters thin, with shared acquisition and write-policy semantics owned by sync services.
+- Expose durable-cache access through repository wrappers instead of scattering low-level store calls through pipelines and runtime.
 
 Important semantics:
 

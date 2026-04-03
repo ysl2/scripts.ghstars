@@ -8,6 +8,14 @@ One CLI, five input shapes:
 - One supported GitHub repository-search URL: fetch the full repository result set and write a CSV under `./output` in the current working directory
 - One supported single-paper arXiv URL: export related references and citations into two CSV files under `./output` in the current working directory
 
+Internally, `uv run main.py [input]` now routes by input shape into a shared record-centric core:
+
+- `src/app.py` detects the input shape
+- input adapters turn source data into `Record` objects
+- shared sync services acquire `Github`, `Stars`, `Created`, and `About`
+- output adapters write those properties back to CSV or Notion
+- runtime exposes repository wrappers over durable cache-backed facts such as repo `Created`
+
 Fresh CSV exports from collection URL mode, GitHub repository-search mode, and single-paper arXiv relation mode all use the same fixed column order:
 
 - `Name`, `Url`, `Github`, `Stars`, `Created`, `About`

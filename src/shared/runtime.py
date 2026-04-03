@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import inspect
 import sqlite3
 
+from src.core.repositories import RepoMetadataRepository
 from src.shared.http import build_timeout
 from src.shared.relation_resolution_cache import RelationResolutionCacheStore
 from src.shared.repo_cache import RepoCacheStore
@@ -22,6 +23,7 @@ class RuntimeClients:
     relation_resolution_cache: RelationResolutionCacheStore | None
     discovery_client: object
     github_client: object
+    repo_metadata_repository: RepoMetadataRepository | None
 
 
 def load_runtime_config(env: dict[str, str]) -> dict[str, str | int]:
@@ -99,14 +101,17 @@ async def open_runtime_clients(
 ):
     repo_cache = None
     repo_metadata_cache = None
+    repo_metadata_repository = None
     relation_resolution_cache = None
 
     try:
         repo_cache = RepoCacheStore(REPO_CACHE_DB_PATH)
         try:
             repo_metadata_cache = RepoMetadataCacheStore(REPO_CACHE_DB_PATH)
+            repo_metadata_repository = RepoMetadataRepository(store=repo_metadata_cache)
         except sqlite3.Error:
             repo_metadata_cache = None
+            repo_metadata_repository = None
         if enable_relation_resolution_cache:
             try:
                 relation_resolution_cache = RelationResolutionCacheStore(REPO_CACHE_DB_PATH)
@@ -130,6 +135,7 @@ async def open_runtime_clients(
                 session,
                 github_token=config["github_token"],
                 repo_metadata_cache=repo_metadata_cache,
+                repo_metadata_repository=repo_metadata_repository,
                 max_concurrent=concurrent_limit,
                 min_interval=github_min_interval if github_min_interval is not None else request_delay,
             )
@@ -140,6 +146,7 @@ async def open_runtime_clients(
                 relation_resolution_cache=relation_resolution_cache,
                 discovery_client=discovery_client,
                 github_client=github_client,
+                repo_metadata_repository=repo_metadata_repository,
             )
     finally:
         if relation_resolution_cache is not None:

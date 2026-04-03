@@ -1,6 +1,7 @@
 import asyncio
 import re
 import sys
+from enum import Enum
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -35,6 +36,14 @@ ARXIV_RUNNER_UNAVAILABLE_EXIT_CODE = 3
 ARXIV_RUNNER_UNAVAILABLE_MESSAGE = (
     "Single-paper ArXiv relation mode is unavailable because src.arxiv_relations.runner could not be imported."
 )
+
+
+class InputShape(str, Enum):
+    NOTION = "notion"
+    CSV_FILE = "csv_file"
+    PAPER_COLLECTION_URL = "paper_collection_url"
+    GITHUB_SEARCH_URL = "github_search_url"
+    ARXIV_RELATIONS_URL = "arxiv_relations_url"
 
 
 def _normalize_argv(argv: list[str] | None) -> list[str]:
@@ -81,6 +90,21 @@ def _is_arxiv_single_paper_url(raw_value: str) -> bool:
     return False
 
 
+def detect_input_shape(argv: list[str] | None = None) -> InputShape:
+    args = _normalize_argv(argv)
+    if not args:
+        return InputShape.NOTION
+
+    raw_input = args[0]
+    if _is_arxiv_single_paper_url(raw_input):
+        return InputShape.ARXIV_RELATIONS_URL
+    if _is_url(raw_input) and is_supported_github_search_url(raw_input):
+        return InputShape.GITHUB_SEARCH_URL
+    if _is_url(raw_input):
+        return InputShape.PAPER_COLLECTION_URL
+    return InputShape.CSV_FILE
+
+
 async def async_main(argv: list[str] | None = None) -> int:
     args = _normalize_argv(argv)
 
@@ -88,19 +112,22 @@ async def async_main(argv: list[str] | None = None) -> int:
         print("Expected 0 or 1 positional arguments", file=sys.stderr)
         return 2
 
-    if not args:
+    input_shape = detect_input_shape(args)
+
+    if input_shape is InputShape.NOTION:
         return await run_notion_mode()
 
     raw_input = args[0]
-    if _is_arxiv_single_paper_url(raw_input):
+    if input_shape is InputShape.ARXIV_RELATIONS_URL:
         if not _HAS_ARXIV_RELATIONS_RUNNER:
             print(ARXIV_RUNNER_UNAVAILABLE_MESSAGE, file=sys.stderr)
             return ARXIV_RUNNER_UNAVAILABLE_EXIT_CODE
         return await run_arxiv_relations_mode(raw_input)
 
-    if _is_url(raw_input):
-        if is_supported_github_search_url(raw_input):
-            return await run_github_search_mode(raw_input)
+    if input_shape is InputShape.GITHUB_SEARCH_URL:
+        return await run_github_search_mode(raw_input)
+
+    if input_shape is InputShape.PAPER_COLLECTION_URL:
         if not is_supported_url_source(raw_input):
             print(f"Input file or URL not supported: {raw_input}", file=sys.stderr)
             return 1

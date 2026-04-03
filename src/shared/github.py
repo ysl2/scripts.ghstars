@@ -8,6 +8,7 @@ import aiohttp
 from src.shared.http import MAX_RETRIES, RateLimiter
 
 if TYPE_CHECKING:
+    from src.core.repositories import RepoMetadataRepository
     from src.shared.repo_metadata_cache import RepoMetadataCacheStore
 
 
@@ -65,11 +66,13 @@ class GitHubClient:
         session: aiohttp.ClientSession,
         github_token: str = "",
         repo_metadata_cache: "RepoMetadataCacheStore | None" = None,
+        repo_metadata_repository: "RepoMetadataRepository | None" = None,
         max_concurrent: int = 5,
         min_interval: float = 0.2,
     ):
         self.session = session
         self.github_token = github_token
+        self.repo_metadata_repository = repo_metadata_repository
         self.repo_metadata_cache = repo_metadata_cache
         self.semaphore = asyncio.Semaphore(max_concurrent)
         self.rate_limiter = RateLimiter(resolve_github_min_interval(github_token, min_interval))
@@ -158,29 +161,31 @@ class GitHubClient:
         return None, "GitHub API error"
 
     def _load_cached_created(self, owner: str, repo: str) -> str | None:
-        if self.repo_metadata_cache is None:
-            return None
-
         github_url = normalize_github_url(f"https://github.com/{owner}/{repo}")
         if github_url is None:
             return None
 
         try:
-            entry = self.repo_metadata_cache.get(github_url)
+            if self.repo_metadata_repository is not None:
+                entry = self.repo_metadata_repository.get(github_url)
+            elif self.repo_metadata_cache is not None:
+                entry = self.repo_metadata_cache.get(github_url)
+            else:
+                entry = None
         except Exception:
             return None
         return None if entry is None else entry.created
 
     def _record_created(self, owner: str, repo: str, created: str) -> None:
-        if self.repo_metadata_cache is None:
-            return
-
         github_url = normalize_github_url(f"https://github.com/{owner}/{repo}")
         if github_url is None:
             return
 
         try:
-            self.repo_metadata_cache.record_created(github_url, created)
+            if self.repo_metadata_repository is not None:
+                self.repo_metadata_repository.record_created(github_url, created)
+            elif self.repo_metadata_cache is not None:
+                self.repo_metadata_cache.record_created(github_url, created)
         except Exception:
             return
 

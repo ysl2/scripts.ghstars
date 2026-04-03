@@ -331,3 +331,14 @@ async def test_async_main_routes_supported_github_search_url_to_github_search_ru
     assert called == [
         "https://github.com/search?q=cvpr+2026&type=repositories&s=stars&o=desc"
     ]
+
+
+def test_app_detects_input_shapes_without_exposing_mode_as_top_level_concept():
+    assert app_module.detect_input_shape([]) == app_module.InputShape.NOTION
+    assert app_module.detect_input_shape(["/tmp/input.csv"]) == app_module.InputShape.CSV_FILE
+    assert (
+        app_module.detect_input_shape(
+            ["https://github.com/search?q=cvpr%202026&type=repositories"]
+        )
+        == app_module.InputShape.GITHUB_SEARCH_URL
+    )

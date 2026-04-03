@@ -24,7 +24,7 @@ class RepoMetadataCacheStore:
         self.connection.close()
 
     def get(self, github_url: str) -> RepoMetadataCacheEntry | None:
-        normalized = normalize_github_url(github_url)
+        normalized = self._normalize_key(github_url)
         if normalized is None:
             return None
 
@@ -46,7 +46,7 @@ class RepoMetadataCacheStore:
         )
 
     def record_created(self, github_url: str, created: str) -> None:
-        normalized = normalize_github_url(github_url)
+        normalized = self._normalize_key(github_url)
         if normalized is None or not created:
             return
 
@@ -78,6 +78,9 @@ class RepoMetadataCacheStore:
             """
         )
         self.connection.commit()
+
+    def _normalize_key(self, github_url: str) -> str | None:
+        return normalize_github_url(github_url)
 
 
 def _utc_now() -> str:
