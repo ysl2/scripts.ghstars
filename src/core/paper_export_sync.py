@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from src.core.input_adapters import PaperSeedInputAdapter
 from src.core.record_model import PropertyState, Record
 from src.core.record_sync import RecordSyncService
+from src.shared.paper_identity import normalize_arxiv_url
 
 
 @dataclass(frozen=True)
@@ -14,19 +15,19 @@ class PaperSyncResult:
     reason: str | None
 
 
-def _first_actionable_reason(*states, ignored_sources: Iterable[str] = ()) -> str | None:
-    ignored = {source for source in ignored_sources if source}
-    for state in states:
-        if state.source in ignored:
+def _first_actionable_reason(*states) -> str | None:
+    for synced_state, original_state in states:
+        if synced_state.reason is None:
             continue
-        if state.reason is not None:
-            return state.reason
+        if synced_state == original_state:
+            continue
+        return synced_state.reason
     return None
 
 
 def _build_content_warming_callback(content_cache) -> Callable[[Record], Awaitable[None]]:
     async def warm_content_cache(record: Record) -> None:
-        canonical_arxiv_url = record.facts.canonical_arxiv_url
+        canonical_arxiv_url = normalize_arxiv_url(record.facts.canonical_arxiv_url or "")
         if not canonical_arxiv_url or content_cache is None:
             return
 
@@ -90,21 +91,18 @@ async def sync_paper_record(
             ),
         )
 
-    ignored_sources = {
-        state.source
-        for state in (record.github, record.stars, record.created, record.about)
-        if state.source
-    }
+    reason = _first_actionable_reason(
+        (synced.github, record.github),
+        (synced.stars, record.stars),
+        (synced.created, record.created),
+        (synced.about, record.about),
+    )
+    if reason is None:
+        reason = synced.facts.repo_metadata_error
 
     return PaperSyncResult(
         record=synced,
-        reason=_first_actionable_reason(
-            synced.github,
-            synced.stars,
-            synced.created,
-            synced.about,
-            ignored_sources=ignored_sources,
-        ),
+        reason=reason,
     )
 
 
