@@ -47,6 +47,18 @@ def test_record_can_attach_facts_artifacts_and_context_without_promoting_them_to
     assert record.context.csv_row_index == 7
 
 
+def test_record_facts_can_store_url_resolution_authoritativeness():
+    facts = RecordFacts(
+        canonical_arxiv_url="https://arxiv.org/abs/2501.12345",
+        normalized_url="https://arxiv.org/pdf/2501.12345v2.pdf",
+        url_resolution_authoritative=True,
+    )
+
+    assert facts.canonical_arxiv_url == "https://arxiv.org/abs/2501.12345"
+    assert facts.normalized_url == "https://arxiv.org/pdf/2501.12345v2.pdf"
+    assert facts.url_resolution_authoritative is True
+
+
 def test_property_state_supports_explicit_empty_string_values_for_about_sync():
     state = PropertyState.resolved("", source="github_api", trusted=True)
 

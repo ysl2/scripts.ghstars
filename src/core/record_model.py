@@ -146,6 +146,7 @@ class RecordFacts:
     normalized_url: str | None = None
     github_source: str | None = None
     repo_metadata_error: str | None = None
+    url_resolution_authoritative: bool = False
 
 
 @dataclass(frozen=True)

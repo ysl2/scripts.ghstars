@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from src.core.record_model import PropertyState, Record, RecordContext
+from src.core.record_model import PropertyState, Record, RecordContext, RecordFacts
 from src.shared.csv_schema import (
     ABOUT_COLUMN,
     CREATED_COLUMN,
@@ -20,10 +20,12 @@ STARS_PROPERTY_NAME = "Stars"
 
 class PaperSeedInputAdapter:
     def to_record(self, seed) -> Record:
-        return Record.from_source(
-            name=seed.name,
-            url=seed.url,
-            source="paper_seed",
+        return Record.from_source(name=seed.name, url=seed.url, source="paper_seed").with_supporting_state(
+            facts=RecordFacts(
+                normalized_url=seed.url if seed.url_resolution_authoritative else None,
+                canonical_arxiv_url=seed.canonical_arxiv_url,
+                url_resolution_authoritative=bool(seed.url_resolution_authoritative),
+            )
         )
 
 

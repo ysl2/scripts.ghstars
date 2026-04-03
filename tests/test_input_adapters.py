@@ -60,6 +60,23 @@ def test_paper_seed_input_adapter_keeps_name_and_url_as_source_values():
     assert record.github.value is None
 
 
+def test_paper_seed_input_adapter_preserves_seed_supporting_facts():
+    record = PaperSeedInputAdapter().to_record(
+        PaperSeed(
+            name="Paper A",
+            url="https://arxiv.org/pdf/2501.12345v2.pdf",
+            canonical_arxiv_url="https://arxiv.org/abs/2501.12345",
+            url_resolution_authoritative=True,
+        )
+    )
+
+    assert record.name.value == "Paper A"
+    assert record.url.value == "https://arxiv.org/pdf/2501.12345v2.pdf"
+    assert record.facts.normalized_url == "https://arxiv.org/pdf/2501.12345v2.pdf"
+    assert record.facts.canonical_arxiv_url == "https://arxiv.org/abs/2501.12345"
+    assert record.facts.url_resolution_authoritative is True
+
+
 def test_csv_row_input_adapter_attaches_row_index_context():
     record = CsvRowInputAdapter().to_record(
         7,
