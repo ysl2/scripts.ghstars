@@ -226,3 +226,53 @@ async def test_sync_paper_record_does_not_warm_content_cache_for_invalid_canonic
     )
 
     content_cache.ensure_local_content_cache.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_sync_paper_record_does_not_warm_content_cache_for_host_spoofed_arxiv_url(
+    monkeypatch,
+):
+    import src.core.paper_export_sync as paper_export_sync
+
+    content_cache = type(
+        "RecordingContentCache",
+        (),
+        {"ensure_local_content_cache": AsyncMock()},
+    )()
+    record = Record.from_source(
+        name="Paper A",
+        url="https://example.com/paper",
+        source="paper_seed",
+    )
+
+    class FakeRecordSyncService:
+        def __init__(self, **kwargs):
+            pass
+
+        async def sync(self, record, **kwargs):
+            synced_record = record.with_supporting_state(
+                facts=RecordFacts(
+                    canonical_arxiv_url="https://example.com/archive/arxiv.org/abs/2603.05078"
+                )
+            )
+            before_repo_metadata = kwargs.get("before_repo_metadata")
+            if callable(before_repo_metadata):
+                await before_repo_metadata(synced_record)
+            return synced_record
+
+    monkeypatch.setattr(
+        paper_export_sync,
+        "RecordSyncService",
+        FakeRecordSyncService,
+    )
+
+    await paper_export_sync.sync_paper_record(
+        record,
+        allow_title_search=True,
+        allow_github_discovery=True,
+        discovery_client=object(),
+        github_client=object(),
+        content_cache=content_cache,
+    )
+
+    content_cache.ensure_local_content_cache.assert_not_awaited()

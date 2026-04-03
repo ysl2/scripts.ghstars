@@ -6,7 +6,10 @@ from dataclasses import dataclass
 from src.core.input_adapters import PaperSeedInputAdapter
 from src.core.record_model import PropertyState, Record
 from src.core.record_sync import RecordSyncService
-from src.shared.paper_identity import normalize_arxiv_url
+from src.shared.paper_identity import (
+    build_arxiv_abs_url,
+    extract_arxiv_id_from_single_paper_url,
+)
 
 
 @dataclass(frozen=True)
@@ -27,8 +30,10 @@ def _first_actionable_reason(*states) -> str | None:
 
 def _build_content_warming_callback(content_cache) -> Callable[[Record], Awaitable[None]]:
     async def warm_content_cache(record: Record) -> None:
-        canonical_arxiv_url = normalize_arxiv_url(record.facts.canonical_arxiv_url or "")
-        if not canonical_arxiv_url or content_cache is None:
+        arxiv_id = extract_arxiv_id_from_single_paper_url(
+            record.facts.canonical_arxiv_url or ""
+        )
+        if not arxiv_id or content_cache is None:
             return
 
         warmer = getattr(content_cache, "ensure_local_content_cache", None)
@@ -36,7 +41,7 @@ def _build_content_warming_callback(content_cache) -> Callable[[Record], Awaitab
             return
 
         try:
-            await warmer(canonical_arxiv_url)
+            await warmer(build_arxiv_abs_url(arxiv_id))
         except Exception:
             return
 
