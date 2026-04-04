@@ -2927,6 +2927,7 @@ def _build_relation_export_clients():
 
         async def resolve_github_url(self, seed):
             mapping = {
+                TARGET_PAPER_URL: "https://github.com/foo/target-paper",
                 "https://arxiv.org/abs/2501.00001": "https://github.com/foo/reference",
                 "https://arxiv.org/abs/2502.00002": "https://github.com/foo/citation",
             }
@@ -2935,6 +2936,14 @@ def _build_relation_export_clients():
     class FakeGitHubClient:
         async def get_repo_metadata(self, owner, repo):
             mapping = {
+                ("foo", "target-paper"): (
+                    SimpleNamespace(
+                        stars=99,
+                        created="2024-04-04T00:00:00Z",
+                        about="target repo",
+                    ),
+                    None,
+                ),
                 ("foo", "reference"): (
                     SimpleNamespace(
                         stars=12,
@@ -3058,6 +3067,66 @@ async def test_export_arxiv_relations_to_csv_target_paper_warmup_failure_is_best
         }
     ]
     assert failing_cache.failed_targets == [TARGET_PAPER_URL]
+
+
+@pytest.mark.anyio
+async def test_export_arxiv_relations_to_csv_target_paper_warmup_failure_is_suppressed_at_final_await(
+    monkeypatch,
+    tmp_path: Path,
+):
+    arxiv_client, semanticscholar_graph_client, discovery_client, github_client = _build_relation_export_clients()
+
+    async def exploding_warmup(*args, **kwargs):
+        raise RuntimeError("unexpected target warmup failure")
+
+    monkeypatch.setattr(
+        "src.arxiv_relations.pipeline._warm_target_paper_seed_best_effort",
+        exploding_warmup,
+    )
+
+    result = await export_arxiv_relations_to_csv(
+        TARGET_PAPER_URL,
+        arxiv_client=arxiv_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
+        discovery_client=discovery_client,
+        github_client=github_client,
+        content_cache=RecordingContentCache(),
+        output_dir=tmp_path,
+    )
+
+    with result.references.csv_path.open(newline="", encoding="utf-8") as references_handle:
+        reference_rows = list(csv.DictReader(references_handle))
+    with result.citations.csv_path.open(newline="", encoding="utf-8") as citations_handle:
+        citation_rows = list(csv.DictReader(citations_handle))
+
+    assert reference_rows == [
+        {
+            "Name": "Direct Reference",
+            "Url": "https://arxiv.org/abs/2501.00001",
+            "Github": "https://github.com/foo/reference",
+            "Stars": "12",
+            "Created": "2024-03-03T00:00:00Z",
+            "About": "reference repo",
+        },
+        {
+            "Name": "Retained DOI Reference",
+            "Url": "https://doi.org/10.1145/example",
+            "Github": "",
+            "Stars": "",
+            "Created": "",
+            "About": "",
+        },
+    ]
+    assert citation_rows == [
+        {
+            "Name": "Citation With Missing Stars",
+            "Url": "https://arxiv.org/abs/2502.00002",
+            "Github": "https://github.com/foo/citation",
+            "Stars": "",
+            "Created": "",
+            "About": "",
+        }
+    ]
 
 
 @pytest.mark.anyio

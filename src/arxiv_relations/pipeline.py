@@ -104,7 +104,7 @@ async def _warm_target_paper_seed_best_effort(
         status_callback(f"🔥 Warming target paper cache: {seed.url}")
 
     try:
-        sync_result = await sync_paper_seed(
+        await sync_paper_seed(
             seed,
             discovery_client=discovery_client,
             github_client=github_client,
@@ -120,16 +120,6 @@ async def _warm_target_paper_seed_best_effort(
         if callable(status_callback):
             status_callback(f"⚠️ Skipped target paper cache warmup: {seed.url}")
         return
-
-    warmer = getattr(content_cache, "ensure_local_content_cache", None)
-    canonical_arxiv_url = sync_result.record.facts.canonical_arxiv_url or seed.canonical_arxiv_url
-    if callable(warmer) and canonical_arxiv_url and sync_result.record.github.reason is not None:
-        try:
-            await warmer(canonical_arxiv_url)
-        except Exception:
-            if callable(status_callback):
-                status_callback(f"⚠️ Skipped target paper cache warmup: {seed.url}")
-            return
 
     if callable(status_callback):
         status_callback(f"✅ Warmed target paper cache: {seed.url}")
@@ -616,7 +606,11 @@ async def export_arxiv_relations_to_csv(
         )
     finally:
         if target_warmup_task is not None:
-            await target_warmup_task
+            try:
+                await target_warmup_task
+            except Exception:
+                if callable(status_callback):
+                    status_callback(f"⚠️ Skipped target paper cache warmup: {target_seed.url}")
 
     return ArxivRelationsExportResult(
         arxiv_url=arxiv_url,
