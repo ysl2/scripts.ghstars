@@ -3200,6 +3200,56 @@ async def test_export_arxiv_relations_to_csv_does_not_wait_for_target_warmup_whe
 
 
 @pytest.mark.anyio
+async def test_export_arxiv_relations_to_csv_cancels_and_consumes_target_warmup_task_on_main_flow_failure(
+    monkeypatch,
+    tmp_path: Path,
+):
+    arxiv_client, semanticscholar_graph_client, discovery_client, github_client = _build_relation_export_clients()
+    started = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    reported_contexts: list[dict] = []
+    previous_handler = loop.get_exception_handler()
+
+    async def warmup_that_raises_after_cancel(*args, **kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise RuntimeError("warmup cleanup explosion")
+
+    async def failing_fetch_references(paper: dict):
+        await started.wait()
+        raise RuntimeError("Semantic Scholar references fetch failed: upstream exploded")
+
+    def exception_handler(loop, context):
+        reported_contexts.append(context)
+
+    loop.set_exception_handler(exception_handler)
+    monkeypatch.setattr(
+        "src.arxiv_relations.pipeline._warm_target_paper_seed_best_effort",
+        warmup_that_raises_after_cancel,
+    )
+    monkeypatch.setattr(semanticscholar_graph_client, "fetch_references", failing_fetch_references)
+
+    try:
+        with pytest.raises(RuntimeError, match="Semantic Scholar references fetch failed: upstream exploded"):
+            await export_arxiv_relations_to_csv(
+                TARGET_PAPER_URL,
+                arxiv_client=arxiv_client,
+                semanticscholar_graph_client=semanticscholar_graph_client,
+                discovery_client=discovery_client,
+                github_client=github_client,
+                content_cache=RecordingContentCache(),
+                output_dir=tmp_path,
+            )
+
+        await asyncio.sleep(0)
+        assert reported_contexts == []
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+
+@pytest.mark.anyio
 async def test_export_arxiv_relations_to_csv_fails_fast_before_scheduling_target_warmup_without_semantic_scholar_client(
     monkeypatch,
 ):
