@@ -2935,6 +2935,9 @@ async def test_export_arxiv_relations_to_csv_warms_content_for_arxiv_rows_and_pr
     ]
 
 
+TARGET_PAPER_URL = "https://arxiv.org/abs/2603.23502"
+
+
 class RecordingContentCache:
     def __init__(self):
         self.calls: list[str] = []
@@ -2944,8 +2947,13 @@ class RecordingContentCache:
 
 
 class FailingTargetContentCache(RecordingContentCache):
+    def __init__(self):
+        super().__init__()
+        self.failed_targets: list[str] = []
+
     async def ensure_local_content_cache(self, canonical_arxiv_url: str) -> None:
-        if canonical_arxiv_url == "https://arxiv.org/abs/2603.23502":
+        if canonical_arxiv_url == TARGET_PAPER_URL:
+            self.failed_targets.append(canonical_arxiv_url)
             raise RuntimeError("target warmup simulation")
         await super().ensure_local_content_cache(canonical_arxiv_url)
 
@@ -3102,7 +3110,7 @@ async def test_export_arxiv_relations_to_csv_warms_target_paper_cache(tmp_path: 
         "arxiv-2603.23502-references-20260326113045.csv",
     ]
     assert set(content_cache.calls) == {
-        "https://arxiv.org/abs/2603.23502",
+        TARGET_PAPER_URL,
         "https://arxiv.org/abs/2501.00001",
         "https://arxiv.org/abs/2502.00002",
     }
@@ -3145,10 +3153,7 @@ async def test_export_arxiv_relations_to_csv_tolerates_target_warmup_failure(tmp
     ]
     assert result.references.csv_path.exists()
     assert result.citations.csv_path.exists()
-    assert set(failing_cache.calls) == {
-        "https://arxiv.org/abs/2501.00001",
-        "https://arxiv.org/abs/2502.00002",
-    }
+    assert failing_cache.failed_targets == [TARGET_PAPER_URL]
 
 
 @pytest.mark.anyio
