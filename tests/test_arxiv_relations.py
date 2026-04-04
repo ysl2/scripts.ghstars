@@ -2751,120 +2751,7 @@ async def test_export_arxiv_relations_to_csv_warms_content_for_arxiv_rows_and_pr
 ):
     from src.arxiv_relations.pipeline import export_arxiv_relations_to_csv
 
-    class RecordingContentCache:
-        def __init__(self):
-            self.calls: list[str] = []
-
-        async def ensure_local_content_cache(self, canonical_arxiv_url: str) -> None:
-            self.calls.append(canonical_arxiv_url)
-
-    class FakeArxivClient:
-        def __init__(self):
-            self.html_title_searches: list[str] = []
-            self.api_title_searches: list[str] = []
-
-        async def get_title(self, arxiv_identifier: str):
-            if arxiv_identifier == "https://arxiv.org/abs/2603.23502":
-                return "Target Paper", None
-            raise AssertionError(f"Unexpected arXiv title lookup: {arxiv_identifier}")
-
-        async def get_arxiv_id_by_title(self, title: str):
-            self.html_title_searches.append(title)
-            return None, None, "No arXiv ID found from title search"
-
-        async def get_arxiv_match_by_title_from_api(self, title: str):
-            self.api_title_searches.append(title)
-            return None, None, None, "No arXiv ID found from title search"
-
-    class FakeSemanticScholarGraphClient:
-        async def fetch_paper_by_identifier(self, identifier: str):
-            if identifier == "DOI:10.48550/arXiv.2603.23502":
-                return {
-                    "paperId": "ss-target",
-                    "title": "Target Paper",
-                    "externalIds": {"ArXiv": "2603.23502"},
-                }
-            return None
-
-        async def search_papers_by_title(self, title: str, *, limit: int = 5):
-            raise AssertionError("Semantic Scholar title fallback should not run when DOI lookup succeeds")
-
-        async def fetch_references(self, paper: dict):
-            assert paper == {"paperId": "ss-target", "title": "Target Paper", "externalIds": {"ArXiv": "2603.23502"}}
-            return [
-                {"paperId": "R1", "title": "Direct Reference", "externalIds": {"ArXiv": "2501.00001"}},
-                {"paperId": "R2", "title": "Retained DOI Reference", "externalIds": {"DOI": "10.1145/example"}},
-            ]
-
-        async def fetch_citations(self, paper: dict):
-            assert paper == {"paperId": "ss-target", "title": "Target Paper", "externalIds": {"ArXiv": "2603.23502"}}
-            return [{"paperId": "C1", "title": "Citation With Missing Stars", "externalIds": {"ArXiv": "2502.00002"}}]
-
-        def build_related_work_candidate(self, work: dict):
-            mapping = {
-                "R1": RelatedWorkCandidate(
-                    title="Direct Reference",
-                    direct_arxiv_url="https://arxiv.org/abs/2501.00001",
-                    doi_url=None,
-                    landing_page_url="https://arxiv.org/abs/2501.00001",
-                    source_url="https://www.semanticscholar.org/paper/R1",
-                ),
-                "R2": RelatedWorkCandidate(
-                    title="Retained DOI Reference",
-                    direct_arxiv_url=None,
-                    doi_url="https://doi.org/10.1145/example",
-                    landing_page_url="https://publisher.example/reference",
-                    source_url="https://www.semanticscholar.org/paper/R2",
-                ),
-                "C1": RelatedWorkCandidate(
-                    title="Citation With Missing Stars",
-                    direct_arxiv_url="https://arxiv.org/abs/2502.00002",
-                    doi_url=None,
-                    landing_page_url="https://arxiv.org/abs/2502.00002",
-                    source_url="https://www.semanticscholar.org/paper/C1",
-                ),
-            }
-            return mapping[work["paperId"]]
-
-    class ExplodingLegacyMetadataClient:
-        async def fetch_work_by_identifier(self, identifier: str):
-            raise AssertionError("LegacyMetadata target lookup should not run after the Semantic Scholar hard cut")
-
-        async def search_first_work(self, title: str):
-            raise AssertionError("LegacyMetadata title lookup should not run after the Semantic Scholar hard cut")
-
-        async def fetch_referenced_works(self, work: dict):
-            raise AssertionError("LegacyMetadata references should not run after the Semantic Scholar hard cut")
-
-        async def fetch_citations(self, work: dict):
-            raise AssertionError("LegacyMetadata citations should not run after the Semantic Scholar hard cut")
-
-    class FakeDiscoveryClient:
-        huggingface_token = ""
-
-        async def resolve_github_url(self, seed):
-            mapping = {
-                "https://arxiv.org/abs/2501.00001": "https://github.com/foo/reference",
-                "https://arxiv.org/abs/2502.00002": "https://github.com/foo/citation",
-            }
-            return mapping.get(seed.url)
-
-    class FakeGitHubClient:
-        async def get_repo_metadata(self, owner, repo):
-            mapping = {
-                ("foo", "reference"): (
-                    SimpleNamespace(
-                        stars=12,
-                        created="2024-03-03T00:00:00Z",
-                        about="reference repo",
-                    ),
-                    None,
-                ),
-                ("foo", "citation"): (None, "GitHub API error (503)"),
-            }
-            return mapping[(owner, repo)]
-
-    arxiv_client = FakeArxivClient()
+    arxiv_client, semanticscholar_graph_client, discovery_client, github_client = _build_relation_export_clients()
     content_cache = RecordingContentCache()
     result = await export_arxiv_relations_to_csv(
         "https://arxiv.org/abs/2603.23502",
@@ -2936,6 +2823,7 @@ async def test_export_arxiv_relations_to_csv_warms_content_for_arxiv_rows_and_pr
 
 
 TARGET_PAPER_URL = "https://arxiv.org/abs/2603.23502"
+TARGET_PAPER_ID = TARGET_PAPER_URL.rsplit("/", 1)[-1]
 
 
 class RecordingContentCache:
@@ -2965,7 +2853,7 @@ def _build_relation_export_clients():
             self.api_title_searches: list[str] = []
 
         async def get_title(self, arxiv_identifier: str):
-            if arxiv_identifier == "https://arxiv.org/abs/2603.23502":
+            if arxiv_identifier == TARGET_PAPER_URL:
                 return "Target Paper", None
             raise AssertionError(f"Unexpected arXiv title lookup: {arxiv_identifier}")
 
@@ -2991,14 +2879,18 @@ def _build_relation_export_clients():
             raise AssertionError("Semantic Scholar title fallback should not run when DOI lookup succeeds")
 
         async def fetch_references(self, paper: dict):
-            assert paper == {"paperId": "ss-target", "title": "Target Paper", "externalIds": {"ArXiv": "2603.23502"}}
+            assert paper.get("paperId") == "ss-target"
+            assert paper.get("title") == "Target Paper"
+            assert paper.get("externalIds", {}).get("ArXiv") == TARGET_PAPER_ID
             return [
                 {"paperId": "R1", "title": "Direct Reference", "externalIds": {"ArXiv": "2501.00001"}},
                 {"paperId": "R2", "title": "Retained DOI Reference", "externalIds": {"DOI": "10.1145/example"}},
             ]
 
         async def fetch_citations(self, paper: dict):
-            assert paper == {"paperId": "ss-target", "title": "Target Paper", "externalIds": {"ArXiv": "2603.23502"}}
+            assert paper.get("paperId") == "ss-target"
+            assert paper.get("title") == "Target Paper"
+            assert paper.get("externalIds", {}).get("ArXiv") == TARGET_PAPER_ID
             return [
                 {"paperId": "C1", "title": "Citation With Missing Stars", "externalIds": {"ArXiv": "2502.00002"}}
             ]
@@ -3062,7 +2954,7 @@ async def test_export_arxiv_relations_to_csv_warms_target_paper_cache(tmp_path: 
     arxiv_client, semanticscholar_graph_client, discovery_client, github_client = _build_relation_export_clients()
     content_cache = RecordingContentCache()
     result = await export_arxiv_relations_to_csv(
-        "https://arxiv.org/abs/2603.23502",
+        TARGET_PAPER_URL,
         arxiv_client=arxiv_client,
         semanticscholar_graph_client=semanticscholar_graph_client,
         discovery_client=discovery_client,
@@ -3071,12 +2963,10 @@ async def test_export_arxiv_relations_to_csv_warms_target_paper_cache(tmp_path: 
         output_dir=tmp_path,
     )
 
-    reference_rows = list(
-        csv.DictReader(result.references.csv_path.open(newline="", encoding="utf-8"))
-    )
-    citation_rows = list(
-        csv.DictReader(result.citations.csv_path.open(newline="", encoding="utf-8"))
-    )
+    with result.references.csv_path.open(newline="", encoding="utf-8") as references_handle:
+        reference_rows = list(csv.DictReader(references_handle))
+    with result.citations.csv_path.open(newline="", encoding="utf-8") as citations_handle:
+        citation_rows = list(csv.DictReader(citations_handle))
     assert reference_rows == [
         {
             "Name": "Direct Reference",
@@ -3105,10 +2995,14 @@ async def test_export_arxiv_relations_to_csv_warms_target_paper_cache(tmp_path: 
             "About": "",
         }
     ]
-    assert sorted(p.name for p in tmp_path.iterdir()) == [
-        "arxiv-2603.23502-citations-20260326113045.csv",
-        "arxiv-2603.23502-references-20260326113045.csv",
-    ]
+    relation_csv_names = {
+        path.name
+        for path in tmp_path.glob(f"arxiv-{TARGET_PAPER_ID}-*.csv")
+    }
+    assert relation_csv_names == {
+        result.references.csv_path.name,
+        result.citations.csv_path.name,
+    }
     assert set(content_cache.calls) == {
         TARGET_PAPER_URL,
         "https://arxiv.org/abs/2501.00001",
@@ -3121,7 +3015,7 @@ async def test_export_arxiv_relations_to_csv_target_paper_warmup_failure_is_best
     arxiv_client, semanticscholar_graph_client, discovery_client, github_client = _build_relation_export_clients()
     failing_cache = FailingTargetContentCache()
     result = await export_arxiv_relations_to_csv(
-        "https://arxiv.org/abs/2603.23502",
+        TARGET_PAPER_URL,
         arxiv_client=arxiv_client,
         semanticscholar_graph_client=semanticscholar_graph_client,
         discovery_client=discovery_client,
@@ -3130,9 +3024,10 @@ async def test_export_arxiv_relations_to_csv_target_paper_warmup_failure_is_best
         output_dir=tmp_path,
     )
 
-    reference_rows = list(
-        csv.DictReader(result.references.csv_path.open(newline="", encoding="utf-8"))
-    )
+    with result.references.csv_path.open(newline="", encoding="utf-8") as references_handle:
+        reference_rows = list(csv.DictReader(references_handle))
+    with result.citations.csv_path.open(newline="", encoding="utf-8") as citations_handle:
+        citation_rows = list(csv.DictReader(citations_handle))
     assert reference_rows == [
         {
             "Name": "Direct Reference",
@@ -3151,8 +3046,16 @@ async def test_export_arxiv_relations_to_csv_target_paper_warmup_failure_is_best
             "About": "",
         },
     ]
-    assert result.references.csv_path.exists()
-    assert result.citations.csv_path.exists()
+    assert citation_rows == [
+        {
+            "Name": "Citation With Missing Stars",
+            "Url": "https://arxiv.org/abs/2502.00002",
+            "Github": "https://github.com/foo/citation",
+            "Stars": "",
+            "Created": "",
+            "About": "",
+        }
+    ]
     assert failing_cache.failed_targets == [TARGET_PAPER_URL]
 
 
