@@ -2799,6 +2799,7 @@ async def test_export_arxiv_relations_to_csv_warms_content_for_arxiv_rows_and_pr
     assert sorted(content_cache.calls) == [
         "https://arxiv.org/abs/2501.00001",
         "https://arxiv.org/abs/2502.00002",
+        TARGET_PAPER_URL,
     ]
     assert arxiv_client.html_title_searches == ["Retained DOI Reference"]
     assert arxiv_client.api_title_searches == ["Retained DOI Reference"]

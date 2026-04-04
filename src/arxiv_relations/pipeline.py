@@ -4,6 +4,7 @@ from enum import IntEnum
 from pathlib import Path
 
 import aiohttp
+from src.core.paper_export_sync import sync_paper_seed
 from src.shared.async_batch import iter_bounded_as_completed, resolve_worker_count
 from src.shared.arxiv import normalize_title_for_matching
 from src.shared.arxiv_url_resolution import resolve_arxiv_url
@@ -83,6 +84,55 @@ def _build_arxiv_doi_url(arxiv_url: str) -> str | None:
     if not arxiv_id:
         return None
     return f"https://doi.org/10.48550/arxiv.{arxiv_id}"
+
+
+async def _warm_target_paper_seed_best_effort(
+    seed: PaperSeed,
+    *,
+    discovery_client,
+    github_client,
+    arxiv_client=None,
+    semanticscholar_graph_client=None,
+    crossref_client=None,
+    datacite_client=None,
+    content_cache=None,
+    relation_resolution_cache=None,
+    arxiv_relation_no_arxiv_recheck_days: int = 30,
+    status_callback=None,
+) -> None:
+    if callable(status_callback):
+        status_callback(f"🔥 Warming target paper cache: {seed.url}")
+
+    try:
+        sync_result = await sync_paper_seed(
+            seed,
+            discovery_client=discovery_client,
+            github_client=github_client,
+            arxiv_client=arxiv_client,
+            semanticscholar_graph_client=semanticscholar_graph_client,
+            crossref_client=crossref_client,
+            datacite_client=datacite_client,
+            content_cache=content_cache,
+            relation_resolution_cache=relation_resolution_cache,
+            arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
+        )
+    except Exception:
+        if callable(status_callback):
+            status_callback(f"⚠️ Skipped target paper cache warmup: {seed.url}")
+        return
+
+    warmer = getattr(content_cache, "ensure_local_content_cache", None)
+    canonical_arxiv_url = sync_result.record.facts.canonical_arxiv_url or seed.canonical_arxiv_url
+    if callable(warmer) and canonical_arxiv_url and sync_result.record.github.reason is not None:
+        try:
+            await warmer(canonical_arxiv_url)
+        except Exception:
+            if callable(status_callback):
+                status_callback(f"⚠️ Skipped target paper cache warmup: {seed.url}")
+            return
+
+    if callable(status_callback):
+        status_callback(f"✅ Warmed target paper cache: {seed.url}")
 
 async def _resolve_target_semantic_scholar_paper(
     arxiv_url: str,
@@ -432,6 +482,7 @@ async def export_arxiv_relations_to_csv(
     progress_callback=None,
 ) -> ArxivRelationsExportResult:
     arxiv_url = normalize_single_arxiv_input(arxiv_input)
+    target_warmup_task: asyncio.Task[None] | None = None
     if callable(status_callback):
         status_callback(f"🎯 Resolving arXiv paper: {arxiv_url}")
 
@@ -441,103 +492,131 @@ async def export_arxiv_relations_to_csv(
     if callable(status_callback):
         status_callback(f"📄 Resolved title: {title}")
 
-    if semanticscholar_graph_client is None:
-        raise ValueError("Semantic Scholar Graph client is required for single-paper relation export")
+    target_seed = PaperSeed(
+        name=title,
+        url=arxiv_url,
+        canonical_arxiv_url=arxiv_url,
+        url_resolution_authoritative=True,
+    )
+    target_warmup_task = asyncio.create_task(
+        _warm_target_paper_seed_best_effort(
+            target_seed,
+            discovery_client=discovery_client,
+            github_client=github_client,
+            arxiv_client=arxiv_client,
+            semanticscholar_graph_client=semanticscholar_graph_client,
+            crossref_client=crossref_client,
+            datacite_client=datacite_client,
+            content_cache=content_cache,
+            relation_resolution_cache=relation_resolution_cache,
+            arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
+            status_callback=status_callback,
+        )
+    )
 
-    if callable(status_callback):
-        status_callback("🔎 Resolving Semantic Scholar target paper")
     try:
-        semantic_scholar_target_paper = await _resolve_target_semantic_scholar_paper(
-            arxiv_url,
-            title,
-            semanticscholar_graph_client,
+        if semanticscholar_graph_client is None:
+            raise ValueError("Semantic Scholar Graph client is required for single-paper relation export")
+
+        if callable(status_callback):
+            status_callback("🔎 Resolving Semantic Scholar target paper")
+        try:
+            semantic_scholar_target_paper = await _resolve_target_semantic_scholar_paper(
+                arxiv_url,
+                title,
+                semanticscholar_graph_client,
+            )
+        except (RuntimeError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            raise RuntimeError(f"Semantic Scholar target lookup failed: {exc}") from exc
+        if semantic_scholar_target_paper is None:
+            raise ValueError(f"No Semantic Scholar paper found for title: {title}")
+        if callable(status_callback):
+            status_callback("📄 Resolved Semantic Scholar target paper")
+
+        reference_candidates = await _fetch_primary_relation_candidates(
+            relation_label="references",
+            semanticscholar_graph_client=semanticscholar_graph_client,
+            semantic_scholar_target_paper=semantic_scholar_target_paper,
+            status_callback=status_callback,
         )
-    except (RuntimeError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
-        raise RuntimeError(f"Semantic Scholar target lookup failed: {exc}") from exc
-    if semantic_scholar_target_paper is None:
-        raise ValueError(f"No Semantic Scholar paper found for title: {title}")
-    if callable(status_callback):
-        status_callback("📄 Resolved Semantic Scholar target paper")
-
-    reference_candidates = await _fetch_primary_relation_candidates(
-        relation_label="references",
-        semanticscholar_graph_client=semanticscholar_graph_client,
-        semantic_scholar_target_paper=semantic_scholar_target_paper,
-        status_callback=status_callback,
-    )
-    citation_candidates = await _fetch_primary_relation_candidates(
-        relation_label="citations",
-        semanticscholar_graph_client=semanticscholar_graph_client,
-        semantic_scholar_target_paper=semantic_scholar_target_paper,
-        status_callback=status_callback,
-    )
-
-    if callable(status_callback):
-        status_callback("🔎 Normalizing referenced works to arXiv-backed seeds")
-    reference_seeds = await normalize_related_work_candidates_to_seeds(
-        reference_candidates,
-        arxiv_client=arxiv_client,
-        semanticscholar_graph_client=semanticscholar_graph_client,
-        crossref_client=crossref_client,
-        datacite_client=datacite_client,
-        discovery_client=discovery_client,
-        relation_resolution_cache=relation_resolution_cache,
-        arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
-        progress_callback=normalization_progress_callback,
-    )
-    if callable(status_callback):
-        status_callback(
-            f"🧭 Kept {len(reference_seeds)}/{len(reference_candidates)} referenced works after arXiv normalization"
+        citation_candidates = await _fetch_primary_relation_candidates(
+            relation_label="citations",
+            semanticscholar_graph_client=semanticscholar_graph_client,
+            semantic_scholar_target_paper=semantic_scholar_target_paper,
+            status_callback=status_callback,
         )
 
-    if callable(status_callback):
-        status_callback("🔎 Normalizing citation works to arXiv-backed seeds")
-    citation_seeds = await normalize_related_work_candidates_to_seeds(
-        citation_candidates,
-        arxiv_client=arxiv_client,
-        semanticscholar_graph_client=semanticscholar_graph_client,
-        crossref_client=crossref_client,
-        datacite_client=datacite_client,
-        discovery_client=discovery_client,
-        relation_resolution_cache=relation_resolution_cache,
-        arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
-        progress_callback=normalization_progress_callback,
-    )
-    if callable(status_callback):
-        status_callback(f"🧭 Kept {len(citation_seeds)}/{len(citation_candidates)} citation works after arXiv normalization")
+        if callable(status_callback):
+            status_callback("🔎 Normalizing referenced works to arXiv-backed seeds")
+        reference_seeds = await normalize_related_work_candidates_to_seeds(
+            reference_candidates,
+            arxiv_client=arxiv_client,
+            semanticscholar_graph_client=semanticscholar_graph_client,
+            crossref_client=crossref_client,
+            datacite_client=datacite_client,
+            discovery_client=discovery_client,
+            relation_resolution_cache=relation_resolution_cache,
+            arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
+            progress_callback=normalization_progress_callback,
+        )
+        if callable(status_callback):
+            status_callback(
+                f"🧭 Kept {len(reference_seeds)}/{len(reference_candidates)} referenced works after arXiv normalization"
+            )
 
-    references_csv_path, citations_csv_path = build_relations_csv_paths(arxiv_url, output_dir=output_dir)
+        if callable(status_callback):
+            status_callback("🔎 Normalizing citation works to arXiv-backed seeds")
+        citation_seeds = await normalize_related_work_candidates_to_seeds(
+            citation_candidates,
+            arxiv_client=arxiv_client,
+            semanticscholar_graph_client=semanticscholar_graph_client,
+            crossref_client=crossref_client,
+            datacite_client=datacite_client,
+            discovery_client=discovery_client,
+            relation_resolution_cache=relation_resolution_cache,
+            arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
+            progress_callback=normalization_progress_callback,
+        )
+        if callable(status_callback):
+            status_callback(
+                f"🧭 Kept {len(citation_seeds)}/{len(citation_candidates)} citation works after arXiv normalization"
+            )
 
-    references_result = await export_paper_seeds_to_csv(
-        reference_seeds,
-        references_csv_path,
-        discovery_client=discovery_client,
-        github_client=github_client,
-        arxiv_client=arxiv_client,
-        semanticscholar_graph_client=semanticscholar_graph_client,
-        crossref_client=crossref_client,
-        datacite_client=datacite_client,
-        content_cache=content_cache,
-        relation_resolution_cache=relation_resolution_cache,
-        arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
-        status_callback=status_callback,
-        progress_callback=progress_callback,
-    )
-    citations_result = await export_paper_seeds_to_csv(
-        citation_seeds,
-        citations_csv_path,
-        discovery_client=discovery_client,
-        github_client=github_client,
-        arxiv_client=arxiv_client,
-        semanticscholar_graph_client=semanticscholar_graph_client,
-        crossref_client=crossref_client,
-        datacite_client=datacite_client,
-        content_cache=content_cache,
-        relation_resolution_cache=relation_resolution_cache,
-        arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
-        status_callback=status_callback,
-        progress_callback=progress_callback,
-    )
+        references_csv_path, citations_csv_path = build_relations_csv_paths(arxiv_url, output_dir=output_dir)
+
+        references_result = await export_paper_seeds_to_csv(
+            reference_seeds,
+            references_csv_path,
+            discovery_client=discovery_client,
+            github_client=github_client,
+            arxiv_client=arxiv_client,
+            semanticscholar_graph_client=semanticscholar_graph_client,
+            crossref_client=crossref_client,
+            datacite_client=datacite_client,
+            content_cache=content_cache,
+            relation_resolution_cache=relation_resolution_cache,
+            arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
+            status_callback=status_callback,
+            progress_callback=progress_callback,
+        )
+        citations_result = await export_paper_seeds_to_csv(
+            citation_seeds,
+            citations_csv_path,
+            discovery_client=discovery_client,
+            github_client=github_client,
+            arxiv_client=arxiv_client,
+            semanticscholar_graph_client=semanticscholar_graph_client,
+            crossref_client=crossref_client,
+            datacite_client=datacite_client,
+            content_cache=content_cache,
+            relation_resolution_cache=relation_resolution_cache,
+            arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
+            status_callback=status_callback,
+            progress_callback=progress_callback,
+        )
+    finally:
+        if target_warmup_task is not None:
+            await target_warmup_task
 
     return ArxivRelationsExportResult(
         arxiv_url=arxiv_url,
