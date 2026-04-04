@@ -13,10 +13,14 @@ async def test_sync_record_with_policy_warms_content_cache_and_applies_authorita
 
     init_kwargs = {}
     sync_call = {}
+    ordering_events = []
+    warm_cache = AsyncMock(
+        side_effect=lambda _url: ordering_events.append("content_warmed")
+    )
     content_cache = type(
         "RecordingContentCache",
         (),
-        {"ensure_local_content_cache": AsyncMock()},
+        {"ensure_local_content_cache": warm_cache},
     )()
     discovery_client = object()
     github_client = object()
@@ -49,6 +53,7 @@ async def test_sync_record_with_policy_warms_content_cache_and_applies_authorita
             before_repo_metadata = kwargs.get("before_repo_metadata")
             if callable(before_repo_metadata):
                 await before_repo_metadata(synced_record)
+            ordering_events.append("repo_metadata_step")
             return synced_record
 
     monkeypatch.setattr(
@@ -81,6 +86,7 @@ async def test_sync_record_with_policy_warms_content_cache_and_applies_authorita
     )
     assert result.record.url.value == "https://arxiv.org/abs/2603.05078"
     assert result.record.url.source == "url_resolution"
+    assert ordering_events == ["content_warmed", "repo_metadata_step"]
 
 
 @pytest.mark.anyio
