@@ -6,7 +6,7 @@ from pathlib import Path
 from src.core.input_adapters import CsvRowInputAdapter
 from src.core.output_adapters import CsvUpdateAdapter
 from src.core.record_model import PropertyState
-from src.core.record_sync import RecordSyncService
+from src.core.record_sync_workflow import RecordSyncPolicy, sync_record_with_policy
 from src.shared.async_batch import iter_bounded_as_completed, resolve_worker_count
 from src.shared.csv_schema import (
     ABOUT_COLUMN,
@@ -16,7 +16,6 @@ from src.shared.csv_schema import (
     STARS_COLUMN,
     URL_COLUMN,
 )
-from src.shared.paper_identity import normalize_arxiv_url
 from src.shared.papers import PaperRecord
 
 
@@ -148,44 +147,28 @@ async def build_csv_row_outcome(
         )
         return index - 1, updated_row, outcome
 
-    record_sync_service = RecordSyncService(
+    workflow_result = await sync_record_with_policy(
+        record,
+        policy=RecordSyncPolicy(
+            allow_title_search=bool(url),
+            allow_github_discovery=not bool(existing_github),
+            trust_existing_github=bool(existing_github),
+            apply_normalized_url=not bool(existing_github),
+        ),
         discovery_client=discovery_client,
         github_client=github_client,
         arxiv_client=arxiv_client,
         semanticscholar_graph_client=semanticscholar_graph_client,
         crossref_client=crossref_client,
         datacite_client=datacite_client,
+        content_cache=content_cache,
         relation_resolution_cache=relation_resolution_cache,
         arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
     )
-    synced_record = await record_sync_service.sync(
-        record,
-        allow_title_search=bool(url),
-        allow_github_discovery=not bool(existing_github),
-        trust_existing_github=bool(existing_github),
-        before_repo_metadata=lambda synced_record: _warm_content_cache(
-            synced_record.facts.canonical_arxiv_url,
-            content_cache,
-        ),
-    )
-    if not existing_github and synced_record.facts.normalized_url is not None:
-        synced_record = synced_record.with_property(
-            "url",
-            PropertyState.resolved(
-                synced_record.facts.normalized_url,
-                source="url_resolution",
-            ),
-        )
+    synced_record = workflow_result.record
     updated_row = csv_update_adapter.apply(updated_row, synced_record)
 
-    reason = _first_reason(
-        synced_record.github,
-        synced_record.stars,
-        synced_record.created,
-        synced_record.about,
-    )
-    if reason is None:
-        reason = synced_record.facts.repo_metadata_error
+    reason = workflow_result.reason
 
     github_url_set = None
     source_label = None
@@ -257,27 +240,3 @@ def _write_csv_rows(csv_path: Path, fieldnames: list[str], rows: list[dict[str, 
 
 def _normalize_fieldnames(fieldnames: list[str]) -> list[str]:
     return CsvUpdateAdapter().normalize_fieldnames(list(fieldnames))
-
-
-async def _warm_content_cache(normalized_url: str | None, content_cache) -> None:
-    arxiv_url = normalize_arxiv_url(normalized_url or "")
-    if arxiv_url is None or content_cache is None:
-        return
-
-    warmer = getattr(content_cache, "ensure_local_content_cache", None)
-    if not callable(warmer):
-        return
-
-    try:
-        await warmer(arxiv_url)
-    except Exception:
-        return
-
-
-def _first_reason(*states) -> str | None:
-    for state in states:
-        if state.source == "csv":
-            continue
-        if state.reason is not None:
-            return state.reason
-    return None

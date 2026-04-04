@@ -9,7 +9,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 import src.csv_update.pipeline as csv_update_pipeline
-from src.core.record_model import PropertyState, Record, RecordContext
+from src.core.record_model import PropertyState
+from src.core.record_sync_workflow import RecordSyncPolicy
 from src.csv_update.pipeline import CsvRowOutcome, build_csv_row_outcome, update_csv_file
 from src.csv_update.runner import run_csv_mode
 from src.shared.paper_content import PaperContentCache
@@ -992,127 +993,165 @@ async def test_build_csv_row_outcome_resolves_repo_then_warms_content_then_fetch
 
 
 @pytest.mark.anyio
-async def test_build_csv_row_outcome_uses_csv_row_input_adapter(monkeypatch, tmp_path: Path):
-    adapter_calls = []
-    sync_calls = []
-    update_adapter_calls = []
-    init_kwargs = {}
+async def test_build_csv_row_outcome_routes_through_shared_sync_workflow(monkeypatch, tmp_path: Path):
+    workflow_calls = []
 
-    class FakeAdapter:
-        def to_record(self, index, row):
-            adapter_calls.append((index, dict(row)))
-            return Record.from_source(
-                name="Adapted Title",
-                url="https://arxiv.org/abs/2603.12345",
-                source="csv",
-            ).with_supporting_state(context=RecordContext(csv_row_index=index))
-
-    class FakeRecordSyncService:
+    class UnexpectedRecordSyncService:
         def __init__(self, **kwargs):
-            init_kwargs.update(kwargs)
+            raise AssertionError("build_csv_row_outcome should route through sync_record_with_policy")
 
-        async def sync(self, record, **kwargs):
-            before_repo_metadata = kwargs.get("before_repo_metadata")
-            sync_calls.append((record.name.value, record.url.value, kwargs))
+    async def fake_sync_record_with_policy(record, **kwargs):
+        workflow_calls.append((record, kwargs))
+        policy = kwargs["policy"]
+        if policy.trust_existing_github:
             synced_record = (
                 record.with_property(
-                    "github",
-                    PropertyState.resolved("https://github.com/foo/bar", source="github_api"),
+                    "url",
+                    PropertyState.resolved("https://arxiv.org/abs/2603.99999", source="url_resolution"),
                 )
                 .with_property(
                     "stars",
-                    PropertyState.resolved(7, source="github_api"),
+                    PropertyState.resolved(21, source="github_api"),
                 )
                 .with_property(
                     "created",
-                    PropertyState.resolved("2024-01-01T00:00:00Z", source="github_api"),
+                    PropertyState.resolved("2020-01-01T00:00:00Z", source="github_api"),
                 )
                 .with_property(
                     "about",
-                    PropertyState.resolved("repo", source="github_api"),
+                    PropertyState.resolved("existing repo", source="github_api"),
                 )
                 .with_supporting_state(
                     facts=replace(
                         record.facts,
-                        normalized_url="https://arxiv.org/abs/2603.12345",
-                        canonical_arxiv_url="https://arxiv.org/abs/2603.12345",
-                        github_source="discovered",
+                        github_source="existing",
                     )
                 )
             )
-            if callable(before_repo_metadata):
-                await before_repo_metadata(synced_record)
-            return synced_record
+            return SimpleNamespace(record=synced_record, reason="repo metadata warning")
 
-    class FakeCsvUpdateAdapter:
-        def apply(self, row, record):
-            update_adapter_calls.append((dict(row), record.github.value, record.stars.value))
-            updated = dict(row)
-            updated["Url"] = "https://arxiv.org/abs/2603.12345"
-            updated["Github"] = "https://github.com/foo/bar"
-            updated["Stars"] = "7"
-            updated["Created"] = "2024-01-01T00:00:00Z"
-            updated["About"] = "repo"
-            return updated
+        synced_record = (
+            record.with_property(
+                "url",
+                PropertyState.resolved("https://arxiv.org/abs/2603.12345", source="url_resolution"),
+            )
+            .with_property(
+                "github",
+                PropertyState.resolved("https://github.com/foo/bar", source="github_api"),
+            )
+            .with_property(
+                "stars",
+                PropertyState.resolved(7, source="github_api"),
+            )
+            .with_property(
+                "created",
+                PropertyState.resolved("2024-01-01T00:00:00Z", source="github_api"),
+            )
+            .with_property(
+                "about",
+                PropertyState.resolved("repo", source="github_api"),
+            )
+            .with_supporting_state(
+                facts=replace(
+                    record.facts,
+                    normalized_url="https://arxiv.org/abs/2603.12345",
+                    canonical_arxiv_url="https://arxiv.org/abs/2603.12345",
+                    github_source="discovered",
+                    url_resolution_authoritative=True,
+                )
+            )
+        )
+        return SimpleNamespace(record=synced_record, reason=None)
 
-    monkeypatch.setattr(csv_update_pipeline, "CsvRowInputAdapter", FakeAdapter)
-    monkeypatch.setattr(csv_update_pipeline, "RecordSyncService", FakeRecordSyncService, raising=False)
-    monkeypatch.setattr(csv_update_pipeline, "CsvUpdateAdapter", FakeCsvUpdateAdapter, raising=False)
+    monkeypatch.setattr(csv_update_pipeline, "RecordSyncService", UnexpectedRecordSyncService, raising=False)
+    monkeypatch.setattr(csv_update_pipeline, "sync_record_with_policy", fake_sync_record_with_policy, raising=False)
 
+    discovery_client = SimpleNamespace(name="discovery")
+    github_client = SimpleNamespace(name="github")
     content_cache = FakeContentCache()
 
-    _, updated_row, outcome = await build_csv_row_outcome(
+    _, discovered_row, discovered_outcome = await build_csv_row_outcome(
         3,
         {
             "Name": "Original Title",
-            "Url": "https://example.com/ignored",
+            "Url": "https://example.com/paper",
             "Github": "",
             "Stars": "",
+            "Created": "",
+            "About": "",
         },
-        discovery_client=SimpleNamespace(),
-        github_client=SimpleNamespace(),
+        discovery_client=discovery_client,
+        github_client=github_client,
+        content_cache=content_cache,
+        csv_dir=tmp_path,
+    )
+    _, existing_row, existing_outcome = await build_csv_row_outcome(
+        4,
+        {
+            "Name": "Existing Repo",
+            "Url": "https://example.com/keep-me",
+            "Github": "https://github.com/foo/existing",
+            "Stars": "5",
+            "Created": "",
+            "About": "",
+        },
+        discovery_client=discovery_client,
+        github_client=github_client,
         content_cache=content_cache,
         csv_dir=tmp_path,
     )
 
-    assert adapter_calls == [
-        (
-            3,
-            {
-                "Name": "Original Title",
-                "Url": "https://example.com/ignored",
-                "Github": "",
-                "Stars": "",
-            },
-        )
+    assert [call[0].context.csv_row_index for call in workflow_calls] == [3, 4]
+    assert [call[0].name.value for call in workflow_calls] == ["Original Title", "Existing Repo"]
+    assert [call[1]["policy"] for call in workflow_calls] == [
+        RecordSyncPolicy(
+            allow_title_search=True,
+            allow_github_discovery=True,
+            trust_existing_github=False,
+            apply_normalized_url=True,
+        ),
+        RecordSyncPolicy(
+            allow_title_search=True,
+            allow_github_discovery=False,
+            trust_existing_github=True,
+            apply_normalized_url=False,
+        ),
     ]
-    assert len(sync_calls) == 1
-    assert init_kwargs["discovery_client"] is not None
-    assert init_kwargs["github_client"] is not None
-    assert sync_calls[0][0] == "Adapted Title"
-    assert sync_calls[0][1] == "https://arxiv.org/abs/2603.12345"
-    assert sync_calls[0][2]["allow_title_search"] is True
-    assert sync_calls[0][2]["allow_github_discovery"] is True
-    assert sync_calls[0][2]["trust_existing_github"] is False
-    assert callable(sync_calls[0][2]["before_repo_metadata"])
-    assert update_adapter_calls == [
-        (
-            {
-                "Name": "Original Title",
-                "Url": "https://example.com/ignored",
-                "Github": "",
-                "Stars": "",
-            },
-            "https://github.com/foo/bar",
-            7,
-        )
-    ]
-    assert updated_row["Url"] == "https://arxiv.org/abs/2603.12345"
-    assert updated_row["Github"] == "https://github.com/foo/bar"
-    assert outcome.record.name == "Adapted Title"
-    assert outcome.source_label == "Discovered Github"
-    assert outcome.github_url_set == "https://github.com/foo/bar"
-    assert content_cache.calls == ["https://arxiv.org/abs/2603.12345"]
+    assert all(call[1]["discovery_client"] is discovery_client for call in workflow_calls)
+    assert all(call[1]["github_client"] is github_client for call in workflow_calls)
+    assert all(call[1]["content_cache"] is content_cache for call in workflow_calls)
+
+    assert discovered_row == {
+        "Name": "Original Title",
+        "Url": "https://arxiv.org/abs/2603.12345",
+        "Github": "https://github.com/foo/bar",
+        "Stars": "7",
+        "Created": "2024-01-01T00:00:00Z",
+        "About": "repo",
+    }
+    assert discovered_outcome.reason is None
+    assert discovered_outcome.record.name == "Original Title"
+    assert discovered_outcome.record.url == "https://arxiv.org/abs/2603.12345"
+    assert discovered_outcome.record.github == "https://github.com/foo/bar"
+    assert discovered_outcome.record.stars == 7
+    assert discovered_outcome.source_label == "Discovered Github"
+    assert discovered_outcome.github_url_set == "https://github.com/foo/bar"
+
+    assert existing_row == {
+        "Name": "Existing Repo",
+        "Url": "https://example.com/keep-me",
+        "Github": "https://github.com/foo/existing",
+        "Stars": "21",
+        "Created": "2020-01-01T00:00:00Z",
+        "About": "existing repo",
+    }
+    assert existing_outcome.reason == "repo metadata warning"
+    assert existing_outcome.record.name == "Existing Repo"
+    assert existing_outcome.record.url == "https://example.com/keep-me"
+    assert existing_outcome.record.github == "https://github.com/foo/existing"
+    assert existing_outcome.record.stars == "21"
+    assert existing_outcome.source_label == "existing Github"
+    assert existing_outcome.github_url_set is None
 
 
 @pytest.mark.anyio
