@@ -70,3 +70,9 @@ def test_readme_documents_the_runnable_pytest_command():
 
     assert "uv run pytest" not in readme
     assert "uv run python -m pytest -q" in readme
+
+
+def test_property_compatibility_facades_are_removed():
+    assert not Path("src/shared/property_model.py").exists()
+    assert not Path("src/shared/property_resolvers.py").exists()
+    assert not Path("src/shared/paper_enrichment.py").exists()

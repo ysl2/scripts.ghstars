@@ -161,3 +161,50 @@ def test_notion_page_input_adapter_joins_all_title_fragments():
     )
 
     assert record.name.value == "Paper A"
+
+
+def test_notion_page_input_adapter_reads_richer_page_properties_into_record():
+    record = NotionPageInputAdapter().to_record(
+        {
+            "id": "page-rich",
+            "properties": {
+                "Title": {
+                    "type": "title",
+                    "title": [
+                        {"plain_text": "Adapter"},
+                        {"plain_text": " "},
+                        {"plain_text": "Paper"},
+                    ],
+                },
+                "Paper URL": {
+                    "type": "formula",
+                    "formula": {
+                        "type": "string",
+                        "string": "https://arxiv.org/abs/2603.05078",
+                    },
+                },
+                "Github": {"type": "url", "url": "https://github.com/foo/bar"},
+                "Stars": {"type": "number", "number": 17},
+                "Created": {
+                    "type": "date",
+                    "date": {"start": "2024-03-01T00:00:00Z"},
+                },
+                "About": {
+                    "type": "rich_text",
+                    "rich_text": [
+                        {"plain_text": "Adapter"},
+                        {"plain_text": " summary"},
+                    ],
+                },
+            },
+        }
+    )
+
+    assert record.context.notion_page_id == "page-rich"
+    assert record.name.value == "Adapter Paper"
+    assert record.url.value == "https://arxiv.org/abs/2603.05078"
+    assert record.github.value == "https://github.com/foo/bar"
+    assert record.github.trusted is True
+    assert record.stars.value == 17
+    assert record.created.value == "2024-03-01T00:00:00Z"
+    assert record.about.value == "Adapter summary"

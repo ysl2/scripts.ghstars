@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 import types
 from unittest.mock import AsyncMock
 
@@ -9,14 +10,9 @@ from src.notion_sync.config import load_config_from_env
 from src.notion_sync.notion_client import NotionClient
 import src.notion_sync.pipeline as notion_pipeline
 from src.core.output_adapters import NotionUpdateAdapter
-from src.core.record_model import Record, RecordContext
+from src.core.record_model import PropertyState, Record, RecordContext
+from src.core.record_sync_workflow import RecordSyncPolicy
 from src.notion_sync.pipeline import (
-    build_page_enrichment_request,
-    classify_github_value,
-    get_current_stars_from_page,
-    get_github_url_from_page,
-    get_github_property_type,
-    get_page_title,
     process_page,
 )
 from src.notion_sync.runner import run_notion_mode
@@ -54,112 +50,165 @@ def test_load_config_accepts_env_values():
     }
 
 
-def test_page_helpers_read_title_github_and_stars():
-    page = {
-        "properties": {
-            "Name": {"type": "title", "title": [{"plain_text": "Test Paper"}]},
-            "Github": {"type": "url", "url": "https://github.com/foo/bar"},
-            "Stars": {"type": "number", "number": 17},
-        }
-    }
+def test_build_page_sync_decision_trusts_existing_github_and_disables_discovery():
+    decision_builder = getattr(notion_pipeline, "build_page_sync_decision", None)
+    assert decision_builder is not None
 
-    assert get_page_title(page) == "Test Paper"
-    assert get_github_url_from_page(page) == "https://github.com/foo/bar"
-    assert get_current_stars_from_page(page) == 17
-    assert get_github_property_type(page) == "url"
+    record = Record.from_source(
+        name="Adapter Title",
+        url="https://doi.org/10.1145/example",
+        github="https://github.com/foo/bar",
+        source="notion",
+        trusted_fields={"github"},
+    ).with_supporting_state(context=RecordContext(notion_page_id="page-1"))
 
+    decision = decision_builder(record)
 
-def test_page_helpers_join_all_title_fragments():
-    page = {
-        "properties": {
-            "Name": {
-                "type": "title",
-                "title": [
-                    {"plain_text": "Test"},
-                    {"plain_text": " "},
-                    {"plain_text": "Paper"},
-                ],
-            },
-        }
-    }
-
-    assert get_page_title(page) == "Test Paper"
+    assert decision.policy == RecordSyncPolicy(
+        allow_title_search=False,
+        allow_github_discovery=False,
+        trust_existing_github=True,
+        apply_normalized_url=False,
+    )
+    assert decision.update_github is False
 
 
-def test_page_helpers_do_not_read_legacy_rich_text_github_type():
-    page = {
-        "properties": {
-            "Name": {"type": "title", "title": [{"plain_text": "Test Paper"}]},
-            "Github": {
-                "type": "rich_text",
-                "rich_text": [{"text": {"content": "https://github.com/foo/bar"}}],
-            },
-        }
-    }
+def test_build_page_sync_decision_allows_discovery_for_missing_github():
+    decision_builder = getattr(notion_pipeline, "build_page_sync_decision", None)
+    assert decision_builder is not None
 
-    assert get_github_url_from_page(page) is None
-    assert get_github_property_type(page) is None
+    record = Record.from_source(
+        name="DOI Paper",
+        url="https://doi.org/10.1007/978-3-031-72933-1_9",
+        source="notion",
+    ).with_supporting_state(context=RecordContext(notion_page_id="page-2"))
 
+    decision = decision_builder(record)
 
-def test_classify_github_value_covers_expected_states():
-    assert classify_github_value(None) == "empty"
-    assert classify_github_value("   ") == "empty"
-    assert classify_github_value("WIP") == "other"
-    assert classify_github_value("https://github.com/foo/bar") == "valid_github"
-    assert classify_github_value("https://example.com/project") == "other"
+    assert decision.policy == RecordSyncPolicy(
+        allow_title_search=True,
+        allow_github_discovery=True,
+        trust_existing_github=False,
+        apply_normalized_url=False,
+    )
+    assert decision.update_github is True
 
 
-def test_build_page_enrichment_request_preserves_non_arxiv_raw_url_for_shared_normalization():
+@pytest.mark.anyio
+async def test_process_page_routes_through_shared_sync_workflow(monkeypatch):
+    workflow_calls = []
+
+    class UnexpectedRecordSyncService:
+        def __init__(self, **_kwargs):
+            raise AssertionError("process_page should route through sync_record_with_policy")
+
+    async def fake_sync_record_with_policy(record, *, policy, **kwargs):
+        workflow_calls.append((record, policy, kwargs))
+        synced_record = (
+            record.with_property(
+                "github",
+                PropertyState.resolved("https://github.com/foo/discovered", source="discovered"),
+            )
+            .with_property(
+                "stars",
+                PropertyState.resolved(21, source="github_api"),
+            )
+            .with_property(
+                "created",
+                PropertyState.resolved("2024-01-01T00:00:00Z", source="github_api"),
+            )
+            .with_property(
+                "about",
+                PropertyState.resolved("repo summary", source="github_api"),
+            )
+            .with_supporting_state(
+                facts=replace(
+                    record.facts,
+                    normalized_url="https://arxiv.org/abs/2603.05078",
+                    canonical_arxiv_url="https://arxiv.org/abs/2603.05078",
+                    github_source="discovered",
+                    url_resolution_authoritative=True,
+                )
+            )
+        )
+        return types.SimpleNamespace(record=synced_record, reason=None)
+
+    monkeypatch.setattr(
+        notion_pipeline,
+        "RecordSyncService",
+        UnexpectedRecordSyncService,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        notion_pipeline,
+        "sync_record_with_policy",
+        fake_sync_record_with_policy,
+        raising=False,
+    )
+
     page = {
         "id": "page-1",
         "url": "https://notion.so/page-1",
         "properties": {
-            "Name": {"type": "title", "title": [{"plain_text": "DOI Paper"}]},
+            "Name": {"type": "title", "title": [{"plain_text": "Test Paper"}]},
             "Github": {"type": "url", "url": None},
-            "URL": {"type": "url", "url": "https://doi.org/10.1007/978-3-031-72933-1_9"},
+            "Stars": {"type": "number", "number": 10},
+            "Created": {"type": "date", "date": {"start": None}},
+            "About": {"type": "rich_text", "rich_text": []},
+            "URL": {"type": "url", "url": "https://doi.org/10.1145/example"},
         },
     }
+    discovery_client = types.SimpleNamespace(resolve_github_url=AsyncMock())
+    github_client = types.SimpleNamespace(get_repo_metadata=AsyncMock())
+    notion_client = types.SimpleNamespace(update_page_properties=AsyncMock(return_value=None))
+    content_cache = types.SimpleNamespace(ensure_local_content_cache=AsyncMock())
+    results = {"updated": 0, "skipped": []}
+    lock = asyncio.Lock()
 
-    request, needs_github_update, reason = build_page_enrichment_request(page)
-
-    assert reason is None
-    assert needs_github_update is True
-    assert request is not None
-    assert request.raw_url == "https://doi.org/10.1007/978-3-031-72933-1_9"
-    assert request.allow_title_search is True
-
-
-def test_build_page_enrichment_request_uses_notion_input_adapter(monkeypatch):
-    adapter_calls = []
-
-    class FakeAdapter:
-        def to_record(self, page):
-            adapter_calls.append(page["id"])
-            return Record.from_source(
-                name="Adapter Title",
-                url="https://doi.org/10.1145/example",
-                github="https://github.com/foo/bar",
-                source="notion",
-                trusted_fields={"github"},
-            ).with_supporting_state(context=RecordContext(notion_page_id=page["id"]))
-
-    monkeypatch.setattr(notion_pipeline, "NotionPageInputAdapter", FakeAdapter)
-
-    request, needs_github_update, reason = build_page_enrichment_request(
-        {
-            "id": "page-1",
-            "url": "https://notion.so/page-1",
-            "properties": {},
-        }
+    await process_page(
+        page,
+        index=1,
+        total=1,
+        discovery_client=discovery_client,
+        github_client=github_client,
+        notion_client=notion_client,
+        results=results,
+        lock=lock,
+        content_cache=content_cache,
     )
 
-    assert adapter_calls == ["page-1"]
-    assert reason is None
-    assert needs_github_update is False
-    assert request is not None
-    assert request.title == "Adapter Title"
-    assert request.raw_url == "https://doi.org/10.1145/example"
-    assert request.existing_github_url == "https://github.com/foo/bar"
+    assert len(workflow_calls) == 1
+    record, policy, kwargs = workflow_calls[0]
+    assert record.context.notion_page_id == "page-1"
+    assert record.name.value == "Test Paper"
+    assert record.url.value == "https://doi.org/10.1145/example"
+    assert policy == RecordSyncPolicy(
+        allow_title_search=True,
+        allow_github_discovery=True,
+        trust_existing_github=False,
+        apply_normalized_url=False,
+    )
+    assert kwargs["discovery_client"] is discovery_client
+    assert kwargs["github_client"] is github_client
+    assert kwargs["content_cache"] is content_cache
+    notion_client.update_page_properties.assert_awaited_once_with(
+        "page-1",
+        properties={
+            "Stars": {"number": 21},
+            "About": {
+                "rich_text": [
+                    {
+                        "type": "text",
+                        "text": {"content": "repo summary"},
+                    }
+                ]
+            },
+            "Created": {"date": {"start": "2024-01-01T00:00:00Z"}},
+            "Github": {"url": "https://github.com/foo/discovered"},
+        },
+    )
+    assert results["updated"] == 1
+    assert results["skipped"] == []
 
 
 @pytest.mark.anyio
