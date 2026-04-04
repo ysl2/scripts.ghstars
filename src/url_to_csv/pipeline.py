@@ -1,7 +1,7 @@
 from pathlib import Path
 
+from src.core.paper_seed_normalization import normalize_paper_seed_to_arxiv
 from src.shared.async_batch import iter_bounded_as_completed, resolve_worker_count
-from src.shared.arxiv_url_resolution import resolve_arxiv_url
 from src.shared.paper_export import export_paper_seeds_to_csv
 from src.shared.paper_identity import extract_arxiv_id
 from src.shared.papers import PaperSeed
@@ -167,7 +167,7 @@ async def normalize_paper_seeds_to_arxiv(
 
     async def normalize_seed(item: tuple[int, PaperSeed]) -> tuple[int, PaperSeed | None, str | None]:
         index, seed = item
-        normalized, canonical_arxiv_url = await _normalize_seed_to_arxiv(
+        normalized = await normalize_paper_seed_to_arxiv(
             seed,
             discovery_client=discovery_client,
             arxiv_client=arxiv_client,
@@ -177,7 +177,7 @@ async def normalize_paper_seeds_to_arxiv(
             relation_resolution_cache=relation_resolution_cache,
             arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
         )
-        return index, normalized, canonical_arxiv_url
+        return index, normalized.normalized_seed, normalized.canonical_arxiv_url
 
     async for index, normalized_seed, canonical_arxiv_url in iter_bounded_as_completed(
         enumerate(seeds),
@@ -201,30 +201,3 @@ async def normalize_paper_seeds_to_arxiv(
         status_callback(f"🧭 Kept {len(output)}/{total} arXiv-backed papers")
 
     return output
-
-
-async def _normalize_seed_to_arxiv(
-    seed: PaperSeed,
-    *,
-    discovery_client=None,
-    arxiv_client=None,
-    semanticscholar_graph_client=None,
-    crossref_client=None,
-    datacite_client=None,
-    relation_resolution_cache=None,
-    arxiv_relation_no_arxiv_recheck_days: int = 30,
-) -> tuple[PaperSeed | None, str | None]:
-    resolution = await resolve_arxiv_url(
-        seed.name,
-        seed.url,
-        discovery_client=discovery_client,
-        arxiv_client=arxiv_client,
-        semanticscholar_graph_client=semanticscholar_graph_client,
-        crossref_client=crossref_client,
-        datacite_client=datacite_client,
-        relation_resolution_cache=relation_resolution_cache,
-        arxiv_relation_no_arxiv_recheck_days=arxiv_relation_no_arxiv_recheck_days,
-    )
-    if not resolution.canonical_arxiv_url:
-        return None, None
-    return PaperSeed(name=seed.name, url=resolution.resolved_url or resolution.canonical_arxiv_url), resolution.canonical_arxiv_url

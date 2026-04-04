@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from src.core.paper_seed_normalization import PaperSeedNormalizationResult
 from src.shared.paper_content import PaperContentCache
 from src.shared.settings import ABS_CACHE_SUBDIR, OVERVIEW_CACHE_SUBDIR
 from src.shared.papers import ConversionResult, PaperSeed
@@ -455,9 +456,17 @@ async def test_normalize_paper_seeds_to_arxiv_limits_started_tasks_to_worker_cou
         started.append(int(seed.name.split()[-1]))
         await release.wait()
         url = f"https://arxiv.org/abs/2501.0000{seed.name.split()[-1]}"
-        return PaperSeed(name=seed.name, url=url), url
+        return PaperSeedNormalizationResult(
+            normalized_seed=PaperSeed(
+                name=seed.name,
+                url=url,
+                canonical_arxiv_url=url,
+                url_resolution_authoritative=True,
+            ),
+            canonical_arxiv_url=url,
+        )
 
-    monkeypatch.setattr(url_pipeline, "_normalize_seed_to_arxiv", fake_normalize_seed_to_arxiv)
+    monkeypatch.setattr(url_pipeline, "normalize_paper_seed_to_arxiv", fake_normalize_seed_to_arxiv)
 
     seeds = [PaperSeed(name=f"Paper {index}", url=f"https://example.com/{index}") for index in range(1, 6)]
     client = SimpleNamespace(semaphore=asyncio.Semaphore(2))
@@ -516,6 +525,8 @@ async def test_normalize_paper_seeds_to_arxiv_rewrites_doi_via_semantic_scholar_
     )
 
     assert resolved == [PaperSeed(name="Published Paper", url="https://arxiv.org/abs/2501.12345")]
+    assert resolved[0].canonical_arxiv_url == "https://arxiv.org/abs/2501.12345"
+    assert resolved[0].url_resolution_authoritative is True
     semanticscholar_graph_client.find_arxiv_match_by_identifier.assert_awaited_once_with(
         "https://doi.org/10.1007/978-3-031-72933-1_9",
         title="Published Paper",
@@ -548,6 +559,8 @@ async def test_normalize_paper_seeds_to_arxiv_uses_datacite_after_semantic_schol
     )
 
     assert resolved == [PaperSeed(name="Published Paper", url="https://arxiv.org/abs/2501.54321")]
+    assert resolved[0].canonical_arxiv_url == "https://arxiv.org/abs/2501.54321"
+    assert resolved[0].url_resolution_authoritative is True
     semanticscholar_graph_client.find_arxiv_match_by_identifier.assert_awaited_once_with(
         "https://doi.org/10.1145/example",
         title="Published Paper",
