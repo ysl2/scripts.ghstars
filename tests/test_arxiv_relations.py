@@ -3130,6 +3130,130 @@ async def test_export_arxiv_relations_to_csv_target_paper_warmup_failure_is_supp
 
 
 @pytest.mark.anyio
+async def test_export_arxiv_relations_to_csv_target_paper_warmup_cancellation_propagates(
+    monkeypatch,
+    tmp_path: Path,
+):
+    arxiv_client, semanticscholar_graph_client, discovery_client, github_client = _build_relation_export_clients()
+
+    async def cancelled_warmup(*args, **kwargs):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(
+        "src.arxiv_relations.pipeline._warm_target_paper_seed_best_effort",
+        cancelled_warmup,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await export_arxiv_relations_to_csv(
+            TARGET_PAPER_URL,
+            arxiv_client=arxiv_client,
+            semanticscholar_graph_client=semanticscholar_graph_client,
+            discovery_client=discovery_client,
+            github_client=github_client,
+            content_cache=RecordingContentCache(),
+            output_dir=tmp_path,
+        )
+
+
+@pytest.mark.anyio
+async def test_export_arxiv_relations_to_csv_does_not_wait_for_target_warmup_when_main_flow_fails(
+    monkeypatch,
+    tmp_path: Path,
+):
+    arxiv_client, semanticscholar_graph_client, discovery_client, github_client = _build_relation_export_clients()
+    blocker = asyncio.Event()
+    warmup_tasks: list[asyncio.Task[None]] = []
+
+    async def blocked_warmup(*args, **kwargs):
+        warmup_tasks.append(asyncio.current_task())
+        await blocker.wait()
+
+    async def failing_fetch_references(paper: dict):
+        raise RuntimeError("Semantic Scholar references fetch failed: upstream exploded")
+
+    monkeypatch.setattr(
+        "src.arxiv_relations.pipeline._warm_target_paper_seed_best_effort",
+        blocked_warmup,
+    )
+    monkeypatch.setattr(semanticscholar_graph_client, "fetch_references", failing_fetch_references)
+
+    with pytest.raises(RuntimeError, match="Semantic Scholar references fetch failed: upstream exploded"):
+        await asyncio.wait_for(
+            export_arxiv_relations_to_csv(
+                TARGET_PAPER_URL,
+                arxiv_client=arxiv_client,
+                semanticscholar_graph_client=semanticscholar_graph_client,
+                discovery_client=discovery_client,
+                github_client=github_client,
+                content_cache=RecordingContentCache(),
+                output_dir=tmp_path,
+            ),
+            timeout=0.1,
+        )
+
+    for task in warmup_tasks:
+        task.cancel()
+    for task in warmup_tasks:
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+@pytest.mark.anyio
+async def test_export_arxiv_relations_to_csv_fails_fast_before_scheduling_target_warmup_without_semantic_scholar_client(
+    monkeypatch,
+):
+    started = False
+
+    async def unexpected_warmup(*args, **kwargs):
+        nonlocal started
+        started = True
+
+    class FakeArxivClient:
+        async def get_title(self, arxiv_identifier: str):
+            return "Target Paper", None
+
+    monkeypatch.setattr(
+        "src.arxiv_relations.pipeline._warm_target_paper_seed_best_effort",
+        unexpected_warmup,
+    )
+
+    with pytest.raises(ValueError, match="Semantic Scholar Graph client is required for single-paper relation export"):
+        await export_arxiv_relations_to_csv(
+            TARGET_PAPER_URL,
+            arxiv_client=FakeArxivClient(),
+            semanticscholar_graph_client=None,
+            discovery_client=object(),
+            github_client=object(),
+        )
+
+    await asyncio.sleep(0)
+    assert started is False
+
+
+@pytest.mark.anyio
+async def test_warm_target_paper_seed_best_effort_propagates_cancellation(monkeypatch):
+    import src.arxiv_relations.pipeline as pipeline
+
+    async def cancelled_sync(*args, **kwargs):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(pipeline, "sync_paper_seed", cancelled_sync)
+
+    with pytest.raises(asyncio.CancelledError):
+        await pipeline._warm_target_paper_seed_best_effort(
+            PaperSeed(
+                name="Target Paper",
+                url=TARGET_PAPER_URL,
+                canonical_arxiv_url=TARGET_PAPER_URL,
+                url_resolution_authoritative=True,
+            ),
+            discovery_client=object(),
+            github_client=object(),
+        )
+
+
+@pytest.mark.anyio
 async def test_export_arxiv_relations_to_csv_fails_when_arxiv_title_lookup_fails():
     from src.arxiv_relations.pipeline import export_arxiv_relations_to_csv
 
