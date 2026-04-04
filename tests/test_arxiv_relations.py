@@ -2754,11 +2754,11 @@ async def test_export_arxiv_relations_to_csv_warms_content_for_arxiv_rows_and_pr
     arxiv_client, semanticscholar_graph_client, discovery_client, github_client = _build_relation_export_clients()
     content_cache = RecordingContentCache()
     result = await export_arxiv_relations_to_csv(
-        "https://arxiv.org/abs/2603.23502",
+        TARGET_PAPER_URL,
         arxiv_client=arxiv_client,
-        semanticscholar_graph_client=FakeSemanticScholarGraphClient(),
-        discovery_client=FakeDiscoveryClient(),
-        github_client=FakeGitHubClient(),
+        semanticscholar_graph_client=semanticscholar_graph_client,
+        discovery_client=discovery_client,
+        github_client=github_client,
         content_cache=content_cache,
         output_dir=tmp_path,
     )
