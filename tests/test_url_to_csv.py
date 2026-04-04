@@ -506,6 +506,8 @@ async def test_normalize_paper_seeds_to_arxiv_preserves_existing_arxiv_urls_exac
     )
 
     assert resolved == [PaperSeed(name="Paper A", url="https://arxiv.org/pdf/2501.00001v2.pdf")]
+    assert resolved[0].canonical_arxiv_url == "https://arxiv.org/abs/2501.00001"
+    assert resolved[0].url_resolution_authoritative is True
 
 
 @pytest.mark.anyio
