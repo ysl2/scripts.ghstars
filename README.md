@@ -6,7 +6,7 @@ One CLI, five input shapes:
 - One existing `.csv` file path: update that CSV in place
 - One supported papers collection URL: fetch the full result set and write a CSV under `./output` in the current working directory
 - One supported GitHub repository-search URL: fetch the full repository result set and write a CSV under `./output` in the current working directory
-- One supported single-paper arXiv URL: export related references and citations into two CSV files under `./output` in the current working directory while best-effort warming reachable cache entries for the target paper via the shared single-paper sync path
+- One supported single-paper arXiv URL: export related references and citations into two CSV files under `./output` in the current working directory and also make a best-effort cache warmup pass for that target paper
 
 Internally, `uv run main.py [input]` now routes by input shape into a shared record-centric core:
 
