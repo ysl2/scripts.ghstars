@@ -6,7 +6,7 @@ One CLI, five input shapes:
 - One existing `.csv` file path: update that CSV in place
 - One supported papers collection URL: fetch the full result set and write a CSV under `./output` in the current working directory
 - One supported GitHub repository-search URL: fetch the full repository result set and write a CSV under `./output` in the current working directory
-- One supported single-paper arXiv URL: export related references and citations into two CSV files under `./output` in the current working directory
+- One supported single-paper arXiv URL: export related references and citations into two CSV files under `./output` in the current working directory and best-effort warms the cache for that target paper via the shared single-paper sync path
 
 Internally, `uv run main.py [input]` now routes by input shape into a shared record-centric core:
 
@@ -97,6 +97,7 @@ CSV update, collection URL export, Notion sync, and single-paper relation export
 - existing local content files are reused; only missing files are fetched
 - overview uses AlphaXiv's overview API; abs uses AlphaXiv's paper API
 - `ALPHAXIV_TOKEN` is optional for both repo discovery and content fetches; without it, the same anonymous AlphaXiv requests are used
+- In single-paper relation mode, the input target paper also runs through the shared single-paper sync path so its cache is warmed as a best-effort step, but that warming run does not emit additional references/citations CSV rows
 
 ### Cache maintenance
 
