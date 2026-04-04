@@ -3117,7 +3117,7 @@ async def test_export_arxiv_relations_to_csv_warms_target_paper_cache(tmp_path: 
 
 
 @pytest.mark.anyio
-async def test_export_arxiv_relations_to_csv_tolerates_target_warmup_failure(tmp_path: Path):
+async def test_export_arxiv_relations_to_csv_target_paper_warmup_failure_is_best_effort(tmp_path: Path):
     arxiv_client, semanticscholar_graph_client, discovery_client, github_client = _build_relation_export_clients()
     failing_cache = FailingTargetContentCache()
     result = await export_arxiv_relations_to_csv(
