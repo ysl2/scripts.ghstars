@@ -2935,6 +2935,222 @@ async def test_export_arxiv_relations_to_csv_warms_content_for_arxiv_rows_and_pr
     ]
 
 
+class RecordingContentCache:
+    def __init__(self):
+        self.calls: list[str] = []
+
+    async def ensure_local_content_cache(self, canonical_arxiv_url: str) -> None:
+        self.calls.append(canonical_arxiv_url)
+
+
+class FailingTargetContentCache(RecordingContentCache):
+    async def ensure_local_content_cache(self, canonical_arxiv_url: str) -> None:
+        if canonical_arxiv_url == "https://arxiv.org/abs/2603.23502":
+            raise RuntimeError("target warmup simulation")
+        await super().ensure_local_content_cache(canonical_arxiv_url)
+
+
+def _build_relation_export_clients():
+    class FakeArxivClient:
+        def __init__(self):
+            self.html_title_searches: list[str] = []
+            self.api_title_searches: list[str] = []
+
+        async def get_title(self, arxiv_identifier: str):
+            if arxiv_identifier == "https://arxiv.org/abs/2603.23502":
+                return "Target Paper", None
+            raise AssertionError(f"Unexpected arXiv title lookup: {arxiv_identifier}")
+
+        async def get_arxiv_id_by_title(self, title: str):
+            self.html_title_searches.append(title)
+            return None, None, "No arXiv ID found from title search"
+
+        async def get_arxiv_match_by_title_from_api(self, title: str):
+            self.api_title_searches.append(title)
+            return None, None, None, "No arXiv ID found from title search"
+
+    class FakeSemanticScholarGraphClient:
+        async def fetch_paper_by_identifier(self, identifier: str):
+            if identifier == "DOI:10.48550/arXiv.2603.23502":
+                return {
+                    "paperId": "ss-target",
+                    "title": "Target Paper",
+                    "externalIds": {"ArXiv": "2603.23502"},
+                }
+            return None
+
+        async def search_papers_by_title(self, title: str, *, limit: int = 5):
+            raise AssertionError("Semantic Scholar title fallback should not run when DOI lookup succeeds")
+
+        async def fetch_references(self, paper: dict):
+            assert paper == {"paperId": "ss-target", "title": "Target Paper", "externalIds": {"ArXiv": "2603.23502"}}
+            return [
+                {"paperId": "R1", "title": "Direct Reference", "externalIds": {"ArXiv": "2501.00001"}},
+                {"paperId": "R2", "title": "Retained DOI Reference", "externalIds": {"DOI": "10.1145/example"}},
+            ]
+
+        async def fetch_citations(self, paper: dict):
+            assert paper == {"paperId": "ss-target", "title": "Target Paper", "externalIds": {"ArXiv": "2603.23502"}}
+            return [
+                {"paperId": "C1", "title": "Citation With Missing Stars", "externalIds": {"ArXiv": "2502.00002"}}
+            ]
+
+        def build_related_work_candidate(self, work: dict):
+            mapping = {
+                "R1": RelatedWorkCandidate(
+                    title="Direct Reference",
+                    direct_arxiv_url="https://arxiv.org/abs/2501.00001",
+                    doi_url=None,
+                    landing_page_url="https://arxiv.org/abs/2501.00001",
+                    source_url="https://www.semanticscholar.org/paper/R1",
+                ),
+                "R2": RelatedWorkCandidate(
+                    title="Retained DOI Reference",
+                    direct_arxiv_url=None,
+                    doi_url="https://doi.org/10.1145/example",
+                    landing_page_url="https://publisher.example/reference",
+                    source_url="https://www.semanticscholar.org/paper/R2",
+                ),
+                "C1": RelatedWorkCandidate(
+                    title="Citation With Missing Stars",
+                    direct_arxiv_url="https://arxiv.org/abs/2502.00002",
+                    doi_url=None,
+                    landing_page_url="https://arxiv.org/abs/2502.00002",
+                    source_url="https://www.semanticscholar.org/paper/C1",
+                ),
+            }
+            return mapping[work["paperId"]]
+
+    class FakeDiscoveryClient:
+        huggingface_token = ""
+
+        async def resolve_github_url(self, seed):
+            mapping = {
+                "https://arxiv.org/abs/2501.00001": "https://github.com/foo/reference",
+                "https://arxiv.org/abs/2502.00002": "https://github.com/foo/citation",
+            }
+            return mapping.get(seed.url)
+
+    class FakeGitHubClient:
+        async def get_repo_metadata(self, owner, repo):
+            mapping = {
+                ("foo", "reference"): (
+                    SimpleNamespace(
+                        stars=12,
+                        created="2024-03-03T00:00:00Z",
+                        about="reference repo",
+                    ),
+                    None,
+                ),
+                ("foo", "citation"): (None, "GitHub API error (503)"),
+            }
+            return mapping[(owner, repo)]
+
+    return FakeArxivClient(), FakeSemanticScholarGraphClient(), FakeDiscoveryClient(), FakeGitHubClient()
+
+
+@pytest.mark.anyio
+async def test_export_arxiv_relations_to_csv_warms_target_paper_cache(tmp_path: Path):
+    arxiv_client, semanticscholar_graph_client, discovery_client, github_client = _build_relation_export_clients()
+    content_cache = RecordingContentCache()
+    result = await export_arxiv_relations_to_csv(
+        "https://arxiv.org/abs/2603.23502",
+        arxiv_client=arxiv_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
+        discovery_client=discovery_client,
+        github_client=github_client,
+        content_cache=content_cache,
+        output_dir=tmp_path,
+    )
+
+    reference_rows = list(
+        csv.DictReader(result.references.csv_path.open(newline="", encoding="utf-8"))
+    )
+    citation_rows = list(
+        csv.DictReader(result.citations.csv_path.open(newline="", encoding="utf-8"))
+    )
+    assert reference_rows == [
+        {
+            "Name": "Direct Reference",
+            "Url": "https://arxiv.org/abs/2501.00001",
+            "Github": "https://github.com/foo/reference",
+            "Stars": "12",
+            "Created": "2024-03-03T00:00:00Z",
+            "About": "reference repo",
+        },
+        {
+            "Name": "Retained DOI Reference",
+            "Url": "https://doi.org/10.1145/example",
+            "Github": "",
+            "Stars": "",
+            "Created": "",
+            "About": "",
+        },
+    ]
+    assert citation_rows == [
+        {
+            "Name": "Citation With Missing Stars",
+            "Url": "https://arxiv.org/abs/2502.00002",
+            "Github": "https://github.com/foo/citation",
+            "Stars": "",
+            "Created": "",
+            "About": "",
+        }
+    ]
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "arxiv-2603.23502-citations-20260326113045.csv",
+        "arxiv-2603.23502-references-20260326113045.csv",
+    ]
+    assert set(content_cache.calls) == {
+        "https://arxiv.org/abs/2603.23502",
+        "https://arxiv.org/abs/2501.00001",
+        "https://arxiv.org/abs/2502.00002",
+    }
+
+
+@pytest.mark.anyio
+async def test_export_arxiv_relations_to_csv_tolerates_target_warmup_failure(tmp_path: Path):
+    arxiv_client, semanticscholar_graph_client, discovery_client, github_client = _build_relation_export_clients()
+    failing_cache = FailingTargetContentCache()
+    result = await export_arxiv_relations_to_csv(
+        "https://arxiv.org/abs/2603.23502",
+        arxiv_client=arxiv_client,
+        semanticscholar_graph_client=semanticscholar_graph_client,
+        discovery_client=discovery_client,
+        github_client=github_client,
+        content_cache=failing_cache,
+        output_dir=tmp_path,
+    )
+
+    reference_rows = list(
+        csv.DictReader(result.references.csv_path.open(newline="", encoding="utf-8"))
+    )
+    assert reference_rows == [
+        {
+            "Name": "Direct Reference",
+            "Url": "https://arxiv.org/abs/2501.00001",
+            "Github": "https://github.com/foo/reference",
+            "Stars": "12",
+            "Created": "2024-03-03T00:00:00Z",
+            "About": "reference repo",
+        },
+        {
+            "Name": "Retained DOI Reference",
+            "Url": "https://doi.org/10.1145/example",
+            "Github": "",
+            "Stars": "",
+            "Created": "",
+            "About": "",
+        },
+    ]
+    assert result.references.csv_path.exists()
+    assert result.citations.csv_path.exists()
+    assert set(failing_cache.calls) == {
+        "https://arxiv.org/abs/2501.00001",
+        "https://arxiv.org/abs/2502.00002",
+    }
+
+
 @pytest.mark.anyio
 async def test_export_arxiv_relations_to_csv_fails_when_arxiv_title_lookup_fails():
     from src.arxiv_relations.pipeline import export_arxiv_relations_to_csv
