@@ -12,7 +12,7 @@ Internally, `uv run main.py [input]` now routes by input shape into a shared rec
 
 - `src/app.py` detects the input shape
 - input adapters turn source data into `Record` objects
-- shared sync services acquire `Github`, `Stars`, `Created`, and `About`
+- core sync workflows and services acquire `Github`, `Stars`, `Created`, and `About`
 - output adapters write those properties back to CSV or Notion
 - runtime exposes repository wrappers over durable cache-backed facts such as repo `Created`
 
@@ -86,9 +86,9 @@ DATABASE_ID=
 
 ## Usage
 
-### Shared enrichment behavior
+### Shared core sync behavior
 
-CSV update, collection URL export, Notion sync, and single-paper relation export reuse the same downstream enrichment path once a row has a canonical arXiv URL.
+CSV update, collection URL export, Notion sync, and single-paper relation export reuse the same downstream core sync path once a row has a canonical arXiv URL.
 
 - GitHub discovery checks `cache.db` first, then does one Hugging Face exact lookup on cache miss when discovery is allowed
 - when Hugging Face exact returns no repo, discovery does one AlphaXiv paper-page HTML lookup before giving up
@@ -301,7 +301,7 @@ URL mode behavior:
 - every URL export appends a run timestamp in `YYYYMMDDHHMMSS` form before `.csv`
 - CLI URL exports default to `./output` in the current working directory and create that directory automatically if needed
 - URL exports always write the standard columns: `Name`, `Url`, `Github`, `Stars`, `Created`, `About`
-- when shared enrichment reaches a valid GitHub repository, collection URL exports populate `Created` and `About` through shared repo-metadata resolution
+- when the shared core sync path reaches a valid GitHub repository, collection URL exports populate `Created` and `About` through shared repo-metadata resolution
 - standard arXiv `list/...` and `search/...` collection pages, including `/search/advanced`, are crawled across all pages, not just the first page
 - archive-style arXiv `list/<category>/YYYY-MM` pages reuse the same multi-page `list/...` crawling path
 - arXiv `new` pages include all visible sections, including new submissions, cross-lists, and replacements
@@ -396,7 +396,7 @@ Single-paper mode behavior:
 - cached positive matches store canonical arXiv `abs` URLs; cached negative matches are written only when all actually attempted resolver stages finish without transient/network failure and still find no accepted arXiv match, then retried after `ARXIV_RELATION_NO_ARXIV_RECHECK_DAYS`
 - referenced and citing works are deduplicated by final normalized URL before export
 - both CSVs use the standard columns: `Name`, `Url`, `Github`, `Stars`, `Created`, `About`
-- when shared enrichment reaches a valid GitHub repository, single-paper relation exports populate `Created` and `About` through shared repo-metadata resolution
+- when the shared core sync path reaches a valid GitHub repository, single-paper relation exports populate `Created` and `About` through shared repo-metadata resolution
 - shared GitHub discovery, repo-metadata enrichment, and local overview / abs cache warming are reused, so resolved and unresolved rows remain in the CSV even when no repo is found; in that case `Github` and `Stars` are left blank
 - the CLI reports success only after both CSV files are written; other arXiv or Semantic Scholar hard failures still return a nonzero exit code
 
