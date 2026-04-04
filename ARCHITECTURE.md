@@ -23,37 +23,46 @@ Responsibilities by layer:
 - `src/<mode>/pipeline.py`
   Implements input-family orchestration around adapters and sync services.
 - `src/core/*`
-  Holds the `Record` domain model, sync services, input adapters, output adapters, and repository wrappers.
+  Holds the `Record` domain model, sync services and workflows, core normalization workflows, input adapters, output adapters, and repository wrappers.
 - `src/shared/*`
-  Holds reusable normalization, discovery, caching, HTTP, export, and enrichment support code.
+  Holds reusable lower-level mechanics such as caches, HTTP, provider clients, normalization primitives, CSV I/O, and batch/export support code.
 
-This split is the core architectural rule of the repository: keep input-shape dispatch and runner wiring thin; keep property semantics in `src/core/*`; keep lower-level transport, normalization, and cache mechanics in `src/shared/*`.
+Boundary rules:
+
+- `src/core/*` is the only property/domain API.
+- `src/shared/*` holds lower-level mechanics such as caches, HTTP, provider clients, and normalization primitives.
+- compatibility wrappers formerly under `src/shared/property_*` and `src/shared/paper_enrichment.py` are removed.
+
+This split is the core architectural rule of the repository: keep input-shape dispatch and runner wiring thin; keep property and domain semantics in `src/core/*`; keep lower-level transport, normalization, and cache mechanics in `src/shared/*`.
 
 ## Record-Centric Core
 
-The `Record` model and its adapters are now the architectural center.
+The `Record` model, sync workflows, and paper-seed normalization helpers are now the architectural center.
 
 Key files:
 
 - `src/core/record_model.py`
 - `src/core/record_sync.py`
+- `src/core/record_sync_workflow.py`
+- `src/core/paper_seed_normalization.py`
 - `src/core/input_adapters.py`
 - `src/core/output_adapters.py`
+- `src/core/paper_export_sync.py`
 - `src/core/repositories.py`
-- compatibility shims in `src/shared/property_model.py`, `src/shared/property_resolvers.py`, and `src/shared/paper_enrichment.py`
 
 Responsibilities:
 
 - Treat `Name`, `Url`, `Github`, `Stars`, `Created`, and `About` as explicit `Record` properties.
 - Reuse one `Github URL -> repo metadata` path across fresh export, CSV update, and Notion sync.
-- Keep input adapters and output adapters thin, with shared acquisition and write-policy semantics owned by sync services.
+- Keep input adapters and output adapters thin, with shared acquisition, normalization, and write-policy semantics owned by core workflows and sync services.
+- Route mode pipelines through core-owned helpers such as `sync_record_with_policy()`, `sync_paper_record()`, and `normalize_paper_seed_to_arxiv()` instead of rebuilding parallel property/domain layers.
 - Expose durable-cache access through repository wrappers instead of scattering low-level store calls through pipelines and runtime.
 
 Important semantics:
 
 - Existing non-empty `Github` values are source-of-truth input.
 - Fresh paper-family exports use the shared six-column CSV shape `Name`, `Url`, `Github`, `Stars`, `Created`, `About`.
-- When shared enrichment reaches a valid GitHub repo, fresh exports populate `Stars` and, when available, `Created` / `About`.
+- When the core sync path reaches a valid GitHub repo, fresh exports populate `Stars` and, when available, `Created` / `About`.
 - CSV update always refreshes `Stars` and `About`, and only backfills `Created`.
 - Notion auto-provisions missing `Github`, `Stars`, `Created`, and `About` properties, but same-name wrong-type properties are hard failures.
 
@@ -109,14 +118,15 @@ Path:
 Purpose:
 
 - Fetch supported paper collections.
-- Normalize rows to arXiv-backed papers when possible.
+- Pre-filter rows to arXiv-backed papers through the core normalization workflow when possible.
 - Export a new CSV under `./output`.
 
 Special rule:
 
+- `url_to_csv` may call the core normalization workflow for pre-filtering, but does not own a separate normalization semantics layer.
 - Existing arXiv URLs are preserved as-is in the output row.
 - Canonical arXiv URLs are still used internally for identity, dedupe, and downstream cache lookups.
-- Once shared enrichment has a valid GitHub repo, fresh exports populate `Stars` and, when available, `Created` / `About`.
+- Once the core-owned fresh paper sync path has a valid GitHub repo, fresh exports populate `Stars` and, when available, `Created` / `About`.
 
 ### 4. GitHub repository search -> CSV
 
@@ -136,7 +146,7 @@ Purpose:
 
 Special rule:
 
-- This family is intentionally separate from paper normalization and paper enrichment.
+- This family is intentionally separate from paper normalization and the core paper-sync workflows used by paper-backed exports.
 - `Name` and `Url` stay empty by design for GitHub-search exports.
 - Fresh GitHub-search exports sort rows by `Created` descending before write.
 
@@ -213,11 +223,10 @@ Important semantics:
 - Existing non-empty `Github` values are source-of-truth and skip discovery.
 - Negative repo-discovery results are cached with a recheck TTL.
 
-### Shared enrichment and export
+### Shared export and content support
 
 Key files:
 
-- `src/shared/paper_enrichment.py`
 - `src/shared/paper_export.py`
 - `src/shared/csv_rows.py`
 - `src/shared/papers.py`
@@ -227,8 +236,7 @@ Key files:
 
 Responsibilities:
 
-- Apply shared paper processing once a row is in the common enrichment path.
-- Normalize URLs, acquire `Github`, resolve shared repo metadata, warm local content cache, and write CSV records.
+- Provide shared batch export, CSV writing, and content-cache support once core-owned workflows have normalized seeds or synced records.
 - Define the shared six-column CSV row contract reused by paper exports and GitHub-search exports.
 
 CSV contract:
@@ -239,8 +247,8 @@ CSV contract:
 
 Design intent:
 
-- `process_single_paper()` is the compatibility wrapper over the shared property-centric acquisition and metadata flow.
-- Mode pipelines should prefer threading data into shared enrichment instead of re-implementing URL normalization or GitHub discovery locally.
+- `src/shared/paper_export.py` consumes `src/core/paper_export_sync.py`; it does not define a separate property/domain API.
+- Mode pipelines may reuse shared export and content helpers, but URL normalization and record-sync semantics stay in `src/core/*`.
 
 ### Runtime and infrastructure
 
@@ -348,7 +356,7 @@ Preferred path:
 
 1. Add the adapter under `src/url_to_csv/`.
 2. Register it in `src/url_to_csv/sources.py`.
-3. Keep downstream enrichment in shared code.
+3. Keep downstream normalization and sync ownership in core code, with shared lower-level helpers reused underneath.
 
 Do not duplicate GitHub discovery or normalization logic inside the adapter.
 
@@ -358,7 +366,7 @@ Preferred path:
 
 1. Add the client under `src/shared/`.
 2. Integrate it into `src/shared/arxiv_url_resolution.py`.
-3. Thread the client through all affected runners and shared enrichment/export paths.
+3. Thread the client through all affected runners, core workflows, and shared export paths.
 
 If the source affects global normalization behavior, verify:
 
@@ -381,4 +389,4 @@ Do not add mode-specific GitHub discovery ladders unless the mode truly has diff
 
 If a change touches paper identity, URL normalization, repository discovery, or cache semantics, assume it is global until proven otherwise.
 
-The most common regression pattern in this repository is not broken local code. It is changing one path and forgetting that the same rule is reused by another mode through `src/shared/`.
+The most common regression pattern in this repository is not broken local code. It is changing one path and forgetting that the same rule is reused by another mode through the core-owned workflows in `src/core/*` plus the lower-level primitives in `src/shared/*`.
